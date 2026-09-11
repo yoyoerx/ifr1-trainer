@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "octavi-ifr-trainer"
+version = "0.7.0"
+description = "Lightweight IFR procedures trainer driven by the Octavi IFR-1 (GNS 530 / 430 sim)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "yoyoerx" }]
+keywords = ["aviation", "ifr", "gns530", "octavi", "flight-simulator", "training"]
+dependencies = [
+    "pygame-ce==2.5.3",
+]
+
+[project.urls]
+Repository = "https://github.com/yoyoerx/ifr1-trainer"
+
+[project.optional-dependencies]
+device = ["hidapi==0.15.0"]      # talk to a real IFR-1 over USB HID
+dev = ["pytest==8.3.4"]
+
+[project.scripts]
+octavi-trainer = "main:cli"
+
+[tool.setuptools]
+# flat layout: a handful of top-level modules plus two data packages
+py-modules = [
+    "main", "config", "ifr1", "navmath", "gpsnav", "gns530", "gns430",
+    "instruments", "sim_model", "radios", "autopilot", "render",
+    "xplane_feed", "gdl90_out", "foreflight_discovery", "wmm", "scoring",
+    "windsaloft", "wx_auto",
+]
+
+[tool.setuptools.packages.find]
+include = ["datasrc*", "navdata*"]
+
+[tool.setuptools.package-data]
+"*" = ["assets/fonts/*", "assets/instruments/**/*", "assets/wmm/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

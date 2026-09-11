@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Downloaded nav data / live weather / approach plates (fetched via
+# `python -m datasrc.faa|wx|dtpp`; not vendored, regenerate locally)
+/data/
+
+# local, machine-specific config (see config.py's search order)
+octavi.toml
+octavi.json
+
+# editors / OS cruft
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

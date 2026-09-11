@@ -1,0 +1,3 @@
+# Octavi IFR-1 trainer - runtime deps
+hidapi==0.15.0      # cython-hidapi: talks to the IFR-1 over USB HID (imports as `hid`)
+pygame-ce==2.5.3    # rendering (community edition; drop-in for pygame)
