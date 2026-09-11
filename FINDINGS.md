@@ -5,7 +5,9 @@ Pilot's Guide and Reference, 190-00181-00 Rev. H** (Dec 2009, Main SW 6.03).
 Modules audited: `gpsnav.py`, `gns530.py`, `instruments.py`, `render.py`,
 `main.py`.
 
-Date: 2026-09-10.
+Date: 2026-09-10. Re-validated against the actual Pilot's Guide PDF 2026-09-11
+(prior passes worked from a paraphrased summary of the manual's text, not the
+document itself).
 
 ---
 
@@ -20,6 +22,17 @@ and already tracked as parked work in `WORKING.md`.
 
 Items **F1–F11** below are fixed in this pass (code + tests). Items **D1–D9** are
 documented as deferred, with rationale.
+
+**2026-09-11 re-validation:** pulled the actual 288-page manual PDF
+(`static.garmin.com/pumac/GNS530_PilotsGuide.pdf`, Dec 2009 / Rev H — matches
+this document's own citation) and cross-checked every §3.3/§6.2/§10.4 quote
+verbatim. All of F1/F2/F3 hold as written. One real gap survived the original
+pass: §10.4's departure-side CDI terminal-scale arm (symmetric with the
+arrival-side one already implemented) was never coded — see the F2 addendum
+below for the fix. D4 and D5 were independently re-checked against the manual
+(non-fix leg types, DME/RF arcs, MAP/HOLD/FAF symbols, holding-pattern entry
+and flown circuit) and are, as the table already stated, genuinely complete —
+no further code was needed there.
 
 ---
 
@@ -45,6 +58,23 @@ an approach procedure is active, and ramps the live scale toward it at
 uses it when present and falls back to `GPS_FULL_SCALE_NM[phase]` otherwise
 (so existing callers/tests are unaffected). With `dt=None` the scale snaps
 (keeps non-loop callers deterministic).
+
+**Re-verified 2026-09-11** against the actual Pilot's Guide PDF (not just a
+paraphrase): §6.2 (p. ~89, "Non-Precision Approach Operations") and §10.4
+("Setup Page") both confirm the exact wording and the 30 nm / 2 nm arm
+distances above, word for word. §10.4 additionally states an arrival-side
+ramp is only half the picture: *"when leaving the departure airport the CDI
+scale is set to 1.0 nm and gradually ramps UP to 5 nm beyond 30 nm (from the
+departure airport)"* — a **departure-side terminal-scale arm, symmetric with
+the arrival-side one**, which the original F2 fix omitted (`_target_cdi_scale`
+only ever looked at distance-to-destination). **Fixed this pass:**
+`GpsNav._dist_to_departure()` (great-circle nm to `fpl.waypoints[0]`) added
+alongside `_dist_to_destination()`; `_target_cdi_scale` now arms terminal scale
+when *either* distance is `<= 30 nm`, not just the destination-side one.
+Covered by `test_cdi_scale_is_terminal_near_departure_airport`
+(`tests/test_gns530.py`); the two prior enroute-scale tests moved their sample
+point to genuinely clear both 30 nm arms (their old point was only ~6 nm from
+the departure fix, which is why they passed before the bug existed to catch).
 
 ### F3 — Graphic CDI had no numeric scale annotation
 §3.3: "full scale limits for this CDI are … indicated at both ends of the CDI."

@@ -52,6 +52,7 @@ DEFAULTS: dict[str, object] = {
     "altitude": 5000.0,
     "layout": "gps",
     "unit": "530",
+    "dual": False,         # run a second GNS unit (the other of 530/430) as FMS2
     "no_device": False,
     "manual": False,
     "xplane_feed": False,

@@ -139,13 +139,16 @@ class Scene:
     time_warp: int = 1               # simulation speed multiplier (keys 1/2/3/4 -> 1/5/10/20x)
 
     # -- steam-panel extras (layout="steam") --
-    layout: str = "gps"               # "gps" | "steam"
+    layout: str = "gps"               # "gps" | "steam" | "dual"
     sixpack: object = None            # instruments.SixPack
     nav1_head: object = None          # instruments.NavHead
     nav2_head: object = None
     nav1_hsi: bool = False            # draw NAV1 as an HSI instead of a plain CDI
     ap: object = None                 # autopilot.Autopilot
     radios: object = None             # radios.RadioStack
+
+    # -- second FMS unit (layout="dual") --
+    gns2: object = None                # gpsnav.GpsNav for FMS2, or None (single-unit)
 
 
 class Renderer:
@@ -180,10 +183,33 @@ class Renderer:
         self._annunciator_bar(sc)
         if sc.layout == "steam":
             self._steam_layout(sc)
+        elif sc.layout == "dual" and sc.gns2 is not None:
+            self._dual_layout(sc)
         else:
             self._gns_unit(sc)
             self._map(sc)
             self._hsi(sc)
+
+    # -- dual FMS layout (two stacked GNS units) ------------------------
+    def _dual_layout(self, sc: Scene) -> None:
+        """Two GNS units sharing the left column, stacked one over the other -
+        a real dual 530/430 stack. FMS1 (`sc.gns`, on top) drives the moving
+        map + HSI on the right exactly as the single-unit "gps" layout does;
+        FMS2 (`sc.gns2`, on the bottom) is a second, independent unit with its
+        own flight plan / cursor / nav state, reachable only by putting the
+        IFR-1's mode selector on FMS2 (or the keyboard's FMS-unit toggle)."""
+        import dataclasses
+        x0, y0, w = 8, 32, GNS_W - 16
+        gap = 8
+        total_h = WIN_H - 44
+        h1 = (total_h - gap) // 2
+        h2 = total_h - gap - h1
+        self._gns_unit(sc, box=(x0, y0, w, h1))
+        sc2 = dataclasses.replace(sc, gns=sc.gns2, nav=sc.gns2.nav,
+                                  variant=getattr(sc.gns2, "variant", None))
+        self._gns_unit(sc2, box=(x0, y0 + h1 + gap, w, h2))
+        self._map(sc)
+        self._hsi(sc)
 
     # -- steam-gauge layout ------------------------------------------
     def _steam_layout(self, sc: Scene) -> None:
@@ -286,15 +312,24 @@ class Renderer:
     def _variant(self, sc: Scene):
         return sc.variant or getattr(sc.gns, "variant", None) or VARIANT_530
 
-    def _gns_unit(self, sc: Scene):
+    def _gns_unit(self, sc: Scene, *, box: tuple | None = None):
+        """Draw one GNS unit (bezel + screen + below-bezel FPL strip) in
+        ``box`` = (x0, y0, w, h), or the full single-unit column when
+        ``box`` is omitted - the "gps" layout's original placement. ``sc``
+        supplies the unit's own gns/nav/panel/variant (a `dual` layout scene
+        is `dataclasses.replace`d per unit so the rest of this method and
+        everything it calls stays polymorphic over `sc` unchanged)."""
         var = self._variant(sc)
         rows = getattr(var, "screen_rows", 12)
         aspect = getattr(var, "bezel_aspect", _BEZEL_ASPECT)
         frac = getattr(var, "screen_frac", _SCREEN_FRAC)
 
-        x0, y0, w, h = 8, 32, GNS_W - 16, WIN_H - 44
+        x0, y0, w, h = box or (8, 32, GNS_W - 16, WIN_H - 44)
         bw = w
         bh = int(round(bw / aspect))
+        if bh > h:            # box is short (stacked dual layout) - fit by height instead
+            bh = h
+            bw = int(round(bh * aspect))
         bezel = _load_bezel((bw, bh), _bezel_svg(var))
 
         if bezel is not None:
@@ -1218,6 +1253,18 @@ def _needle(surf, cx, cy, ang_deg, length, color, width=2, back=0.0):
     pygame.draw.line(surf, color, (tx, ty), (hx, hy), width)
 
 
+def _windowed_text(surf, cx, cy, text, font, color, r):
+    """A small opaque "Kollsman window" style readout: on a round dial the
+    sweeping needle can pass behind any fixed point on the face, so a bare
+    label there is unreadable at the wrong moment. Drawn last (after the
+    needle), an opaque backing box keeps it legible regardless."""
+    img = font.render(text, True, color)
+    box = img.get_rect(center=(int(cx), int(cy))).inflate(6, 3)
+    pygame.draw.rect(surf, (8, 10, 12), box, border_radius=2)
+    pygame.draw.rect(surf, EDGE, box, width=1, border_radius=2)
+    r._t(text, cx, cy - img.get_height() // 2, font=font, color=color, center=True)
+
+
 def six_pack_gauge_radius(rect):
     """Radius of one six-pack cell's dial - shared so the NAV heads match."""
     return min(rect.w / 3, rect.h / 2) / 2 - 12
@@ -1249,7 +1296,7 @@ def draw_six_pack(surf, rect, sp, r, baro_inhg=29.92, hdg_bug=None, spd_bug=None
     _needle(surf, asx, asy, math.degrees(_as_ang(spd)), rad - 6, WHITE, 2, back=rad * 0.25)
     r.lcd(f"{spd:.0f}", asx, asy + rad * 0.34, color=CYAN, center=True)
     if spd_bug:
-        r._t(f"bug {spd_bug:.0f}", asx, asy - rad * 0.52, font=r.f_sm, color=CYAN, center=True)
+        _windowed_text(surf, asx, asy - rad * 0.52, f"bug {spd_bug:.0f}", r.f_sm, CYAN, r)
 
     # attitude indicator
     _attitude(surf, atx, aty, rad, getattr(sp, "pitch_deg", 0.0), getattr(sp, "bank_deg", 0.0))
@@ -1261,7 +1308,7 @@ def draw_six_pack(surf, rect, sp, r, baro_inhg=29.92, hdg_bug=None, spd_bug=None
     _needle(surf, alx, aly, (alt % 1000) / 1000 * 360, rad - 6, WHITE, 3, back=rad * 0.2)
     _needle(surf, alx, aly, (alt % 10000) / 10000 * 360, rad * 0.6, WHITE, 2, back=rad * 0.2)
     r.lcd(f"{alt:.0f}", alx, aly + rad * 0.34, color=CYAN, center=True)
-    r._t(f"{baro_inhg:.2f}", alx, aly - rad * 0.52, font=r.f_sm, color=AMBER, center=True)
+    _windowed_text(surf, alx, aly - rad * 0.52, f"{baro_inhg:.2f}", r.f_sm, AMBER, r)
 
     # turn coordinator: little wings banked by turn rate; slip ball
     _dial(surf, tcx, tcy, rad, ticks=4)
@@ -1273,13 +1320,15 @@ def draw_six_pack(surf, rect, sp, r, baro_inhg=29.92, hdg_bug=None, spd_bug=None
     pygame.draw.circle(surf, CYAN, (int(bx), int(tcy + rad * 0.55)), 4)
     r._t("2 MIN", tcx, tcy + rad * 0.62, font=r.f_sm, color=DIM, center=True)
 
-    # heading indicator: rotating card
+    # heading indicator: rotating card. Labels sit well inboard of the rim
+    # (rad - 24) so the fixed lubber-line index and the heading-bug marker,
+    # which both ride the rim itself, never print through a tick's number.
     _dial(surf, hdx, hdy, rad)
     hd = getattr(sp, "heading_deg", 0.0)
     for d in range(0, 360, 30):
         a = math.radians(d - hd)
         lab = "N" if d == 0 else "E" if d == 90 else "S" if d == 180 else "W" if d == 270 else str(d // 10)
-        lx = hdx + (rad - 16) * math.sin(a); ly = hdy - (rad - 16) * math.cos(a)
+        lx = hdx + (rad - 24) * math.sin(a); ly = hdy - (rad - 24) * math.cos(a)
         r._t(lab, lx, ly - 6, font=r.f_sm, color=TEXT, center=True)
     pygame.draw.polygon(surf, AMBER, [(hdx, hdy - rad + 2), (hdx - 5, hdy - rad + 12),
                                       (hdx + 5, hdy - rad + 12)])
@@ -1389,13 +1438,16 @@ def _vor_cdi_face(surf, cx, cy, rad, course_deg, deflection, valid, color,
     selected radial to the top under a fixed index, a centre CDI needle that
     swings left/right, a 5-dot scale, and a TO/FROM triangle."""
     _dial(surf, cx, cy, rad)
-    # rotating compass card - selected course to the top
+    # rotating compass card - selected course to the top. Card numbers are kept
+    # well inboard of the rim (rad - 22, not rad - 14) so they never collide
+    # with the fixed course index below, which rides the rim itself and would
+    # otherwise print right through whichever tick lands near the top.
     if r is not None:
         for d in range(0, 360, 30):
             a = math.radians(d - course_deg)
             lab = ("N" if d == 0 else "E" if d == 90 else "S" if d == 180
                    else "W" if d == 270 else str(d // 10))
-            lx = cx + (rad - 14) * math.sin(a); ly = cy - (rad - 14) * math.cos(a)
+            lx = cx + (rad - 22) * math.sin(a); ly = cy - (rad - 22) * math.cos(a)
             r._t(lab, lx, ly - 6, font=r.f_sm, color=TEXT, center=True)
     # fixed course index (top) + reciprocal stub (bottom)
     pygame.draw.polygon(surf, color, [(cx, cy - rad + 3), (cx - 6, cy - rad + 13),
@@ -1553,12 +1605,19 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
     key("VS", vert == "VS", False)
 
     # centre block: VS window + HDG bug (pulled in from the right edge so the
-    # wide panel does not look empty); annunciators + ALT SEL keep the far right
+    # wide panel does not look empty); annunciators + ALT SEL keep the far right.
+    # VS's label sits further back than HDG's (rcol - 150, not rcol - 96): the
+    # DSEG7 LCD font reserves a full digit-width slot for '-', so a descent
+    # rate right-aligns as 5 characters wide ("-1500") and the sign lands
+    # right on top of a closer label.
     rcol = min(rect.right - 12, rect.x + 560)
-    r._t("VS", rcol - 96, y + 2, font=r.f_sm, color=DIM)
+    r._t("VS", rcol - 150, y + 2, font=r.f_sm, color=DIM)
     r.lcd(f"{getattr(ap, 'vs_target', 0):.0f}", rcol, y, big=True,
           color=GPS_GREEN if vert in ("VS", "GS") else DIM, right=True)
-    r._t("HDG BUG", rcol - 96, y + 26, font=r.f_sm, color=DIM)
+    # "HDG" not "HDG BUG": the fuller label ran into the LCD digits it's
+    # labelling at this column width (rcol - 96 leaves only enough room for
+    # something "VS"-sized on the line above).
+    r._t("HDG", rcol - 96, y + 26, font=r.f_sm, color=DIM)
     r.lcd(f"{getattr(ap, 'heading_bug', 0):03.0f}", rcol, y + 25, color=CYAN, right=True)
 
     ann = []

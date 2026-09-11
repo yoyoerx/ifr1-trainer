@@ -10,6 +10,8 @@
     python main.py --time-warp 5          # start at 5x sim speed (keys 1-4 change it live)
     python main.py --gdl90 --gdl90-discover   # broadcast GDL90, then auto-switch to a
                                            # discovered ForeFlight tablet's unicast address
+    python main.py --dual                 # a 530 on FMS1 + a 430 on FMS2, stacked on screen
+    python main.py --unit 430 --dual      # a 430 on FMS1 + a 530 on FMS2
 
 Loop (~30 Hz): drain IFR-1 events -> route by mode (FMS -> GPS, COM/NAV -> radio
 tuning, XPDR -> squawk, AP row -> autopilot) -> guidance (autopilot | GPS follow
@@ -19,6 +21,11 @@ IFR-1 mode-selector routing (`route_event`):
   FMS1/FMS2  outer=page group (no wrap), inner=page, KNOB=CRSR, DCT/ENT/CLR/MNU;
              DCT opens the Select Direct-To page (knob types the ident); AP row
              becomes bezel keys: AP=CDI HDG=OBS NAV=MSG APR=FPL ALT=VNAV VS=PROC
+             With --dual, FMS1 and FMS2 drive two independent GNS units (their
+             own flight plan/cursor/nav state - both start on the same plan,
+             then diverge); without it, both positions fly the one unit.
+             (MSG's on-screen box/annunciator only ever reflects FMS1's queue;
+             FMS2's MSG key still acks its own queue, it just has no box yet.)
   COM1/COM2/NAV1/NAV2/XPDR  the KNOB press toggles a latched "shift" (a UI hint
              shows what it does; it clears when the mode selector moves):
     COM1  normal knob=MHz/kHz + SWAP flip;  shift: knob=heading bug
@@ -43,6 +50,8 @@ Keyboard (works alongside or instead of the IFR-1; "Shift+x" = hold Shift):
     S             suspend            V  CDI source (GPS/VLOC)
     B             OBS on/off         - =  OBS course -/+ 1 (Shift x10)
     M             messages
+    U             (--dual only) swap which unit the GNS-page keys above
+                  drive - FMS1 or FMS2; an annunciator shows "KBD FMS2"
   Radios / autopilot
     o O           NAV1 OBS -/+              k p   NAV2 OBS -/+
     H             NAV1 CDI<->HSI            F11   COM1 emergency 121.5
@@ -50,7 +59,7 @@ Keyboard (works alongside or instead of the IFR-1; "Shift+x" = hold Shift):
     F1 F2 F3 F4 F5 F6   HDG NAV APR REV ALT VS
     g             GPSS toggle                9 0   AP VS knob -/+
   View / session
-    L             layout (gps/steam)
+    L             layout (gps -> steam -> gps, or -> dual too with --dual)
     1 2 3 4       time warp 1x/5x/10x/20x (see TIME_WARP_LEVELS)
     ESC           quit
 """
@@ -105,6 +114,7 @@ class Config:
         self.gps_follow = not bool(c["manual"])
         self.layout = str(c["layout"])
         self.unit = str(c["unit"])
+        self.dual = bool(c.get("dual", False))
         self.headless = bool(c["headless"])
         self.time_warp = int(c.get("time_warp", 1)) if int(c.get("time_warp", 1)) in TIME_WARP_LEVELS else 1
 
@@ -162,9 +172,13 @@ def parse_args(argv=None) -> Config:
                    default=S, help="winds-aloft refresh interval in minutes (default: 60)")
     p.add_argument("--tas", default=S)
     p.add_argument("--altitude", default=S)
-    p.add_argument("--layout", default=S, choices=("gps", "steam"))
+    p.add_argument("--layout", default=S, choices=("gps", "steam", "dual"))
     p.add_argument("--unit", default=S, choices=("530", "430"),
-                   help="GPS unit to model (GNS 530 or GNS 430)")
+                   help="GPS unit to model (GNS 530 or GNS 430) - the FMS1 unit in --dual")
+    p.add_argument("--dual", action="store_true", default=S,
+                   help="run a second GNS unit (the other of 530/430) as FMS2, e.g. a real "
+                        "530/430 stack: --unit 530 --dual puts a 530 on FMS1, a 430 on FMS2. "
+                        "Implies --layout dual unless --layout is also given.")
     p.add_argument("--no-device", dest="no_device", action="store_true", default=S)
     p.add_argument("--manual", action="store_true", default=S,
                    help="start with GPS-follow off")
@@ -189,7 +203,10 @@ def parse_args(argv=None) -> Config:
     args = p.parse_args(argv)
     file_cfg = config_mod.load_config(getattr(args, "config", None))
     cli = {k: v for k, v in vars(args).items() if k != "config"}
-    return Config(config_mod.merge(cli, file_cfg))
+    merged = config_mod.merge(cli, file_cfg)
+    if merged.get("dual") and "layout" not in cli and "layout" not in file_cfg:
+        merged["layout"] = "dual"          # --dual's own default, unless --layout overrides it
+    return Config(merged)
 
 
 # --------------------------------------------------------------------------- #
@@ -261,6 +278,19 @@ class World:
             missing = self.gns.load_flight_plan(cfg.plan)
             if missing:
                 print(f"note: could not resolve {missing}")
+        # --dual: a second, independent GNS unit (the other of 530/430) driven
+        # by the IFR-1's FMS2 mode selector position - a real dual stack, e.g.
+        # a 530 on FMS1 and a 430 on FMS2. It starts on the same flight plan
+        # as FMS1 (as a freshly-crossfilled pair would in the real aircraft);
+        # from there the two fly and page independently. It gets its own
+        # `.update()` call each tick (see `tick()`) so its sequencing/CDI stay
+        # live even though only FMS1 drives the autopilot/instrument panel.
+        self.gns2 = None
+        if getattr(cfg, "dual", False):
+            unit2_cls = gns530_mod.Gns530 if unit_cls is gns430_mod.Gns430 else gns430_mod.Gns430
+            self.gns2 = unit2_cls(self.db, today=date.today())
+            if cfg.plan:
+                self.gns2.load_flight_plan(cfg.plan)
         self._appr_tuned = False
         self._vloc_reminded = False
         self._last_approach_freq = None
@@ -392,6 +422,8 @@ class World:
             self.radios.resolve(self.db, st.pos, st.altitude_ft)
             nav = self.gns.update(st.pos, st.track_deg, st.gs_kt, dt)
             self._auto_vloc(nav)
+            if self.gns2 is not None:          # FMS2: stays live, doesn't drive AP/instruments
+                self.gns2.update(st.pos, st.track_deg, st.gs_kt, dt)
             n1 = instr.nav_head(self.radios.nav1, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
             n2 = instr.nav_head(self.radios.nav2, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
             own_i = instr.Ownship(st.pos, st.track_deg, st.heading_deg, st.gs_kt,
@@ -406,6 +438,8 @@ class World:
         self.radios.resolve(self.db, st.pos, st.altitude_ft)
         nav = self.gns.update(st.pos, st.track_deg, st.gs_kt, dt)
         self._auto_vloc(nav)
+        if self.gns2 is not None:              # FMS2: stays live, doesn't drive AP/instruments
+            self.gns2.update(st.pos, st.track_deg, st.gs_kt, dt)
         n1 = instr.nav_head(self.radios.nav1, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
         n2 = instr.nav_head(self.radios.nav2, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
 
@@ -570,29 +604,48 @@ def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 
-def _fms_bezel(w: World, key: str) -> None:
+def _next_layout(current: str, *, dual: bool) -> str:
+    """`L` key: cycle gps -> steam -> gps, or gps -> steam -> dual -> gps
+    when a second FMS unit (`--dual`) is present. An unrecognised starting
+    value (e.g. `--layout dual` without `--dual`, so `dual` isn't offered
+    here) resets to the front of the cycle rather than raising."""
+    cycle = ("gps", "steam", "dual") if dual else ("gps", "steam")
+    if current not in cycle:
+        return cycle[0]
+    return cycle[(cycle.index(current) + 1) % len(cycle)]
+
+
+def _fms_bezel(w: World, key: str, gns=None) -> None:
+    g = gns if gns is not None else w.gns
     if key == "CDI":
-        w.gns.toggle_cdi_source()
+        g.toggle_cdi_source()
     elif key == "OBS":
         # on the real 530 this is one physical key (OBS/SUSP): while suspended
         # (at a MAP/manual leg, or mid-hold) it releases the suspend; only
         # otherwise does it toggle OBS. `toggle_obs`'s set_obs(on=True) path
         # itself clears `suspended`, so without this branch the same press
         # both un-suspends AND drops the GPS into OBS mode.
-        if w.gns.suspended or w.gns._hold_state is not None:
-            w.gns.toggle_suspend()
+        if g.suspended or g._hold_state is not None:
+            g.toggle_suspend()
         else:
-            w.gns.toggle_obs()
+            g.toggle_obs()
     elif key == "MSG":
-        w.show_msg = not w.show_msg
-        if not w.show_msg:
-            w.gns.ack_messages()
+        # in --dual the message box/annunciator only ever reflects FMS1's
+        # queue (see run()'s Scene build) - MSG on FMS2 still acks its own
+        # queue so it stops re-arriving, it just has no on-screen box of its
+        # own yet.
+        if g is w.gns:
+            w.show_msg = not w.show_msg
+            if not w.show_msg:
+                g.ack_messages()
+        else:
+            g.ack_messages()
     elif key == "FPL":
-        w.gns.cursor.go_to_flight_plan()
+        g.cursor.go_to_flight_plan()
     elif key == "PROC":
-        w.gns.begin_proc_select()
+        g.begin_proc_select()
     elif key == "VNAV":
-        w.gns.cursor.go_to_vnav()
+        g.cursor.go_to_vnav()
 
 
 def route_event(ev, w: World) -> None:
@@ -604,12 +657,17 @@ def route_event(ev, w: World) -> None:
     m = getattr(ev, "mode", None)
     long_press = set(getattr(ev, "long_press", ()))
 
+    # FMS2 drives the second unit in --dual (`w.gns2`); everywhere else - no
+    # --dual, or FMS1 - it's `w.gns`, so a single-unit setup behaves exactly
+    # as before (FMS1 and FMS2 both just fly the one box).
+    fms_gns = w.gns2 if (m == Mode.FMS2 and w.gns2 is not None) else w.gns
+
     # long-press events (F8/F9): CLR-hold -> Default NAV in FMS mode, COM
     # SWAP-hold -> the 121.500 emergency channel. Real long presses now drive
     # these directly; the keyboard `Home` / `F11` shortcuts remain as a
     # no-hardware fallback.
     if "CLR" in long_press and m in (Mode.FMS1, Mode.FMS2):
-        w.gns.cursor.go_to_default_nav()
+        fms_gns.cursor.go_to_default_nav()
     if "SWAP" in long_press and m in (Mode.COM1, Mode.COM2):
         (w.radios.com1 if m == Mode.COM1 else w.radios.com2).set_emergency()
 
@@ -623,15 +681,15 @@ def route_event(ev, w: World) -> None:
 
     if m in (Mode.FMS1, Mode.FMS2):
         # while the PROC selector is up it owns every key (like the DTO page)
-        if getattr(w.gns, "_proc_dialog", None) is None:
+        if getattr(fms_gns, "_proc_dialog", None) is None:
             for b in pressed & set(_FMS_BEZEL):    # AP row -> bezel keys
-                _fms_bezel(w, _FMS_BEZEL[b])
+                _fms_bezel(w, _FMS_BEZEL[b], fms_gns)
         # ENT on the Charts page fetches + opens a plate PDF - real file I/O,
         # so it's intercepted here rather than in gpsnav.py's pure state
         # machine (same split as the Weather page's data living in render.py).
-        if "ENT" in pressed and w.gns.cursor.page_name == "Charts":
-            _open_selected_chart(w)
-        w.gns.handle_event(ev)
+        if "ENT" in pressed and fms_gns.cursor.page_name == "Charts":
+            _open_selected_chart(w, fms_gns)
+        fms_gns.handle_event(ev)
         return
 
     # every non-FMS mode: AP-row buttons drive the autopilot
@@ -800,6 +858,10 @@ def run(cfg: Config) -> int:
         mname = w._last_mode.name if w._last_mode is not None else ""
         shift_hint = (f"SHIFT {_SHIFT_FN[mname]}"
                       if (w.shift_latched and mname in _SHIFT_FN) else "")
+        # keyboard-only "which FMS unit" indicator (the IFR-1 shows this for
+        # free via its physical FMS1/FMS2 selector position - see `mname`).
+        if ui.get("kbd_fms2") and w.gns2 is not None and not shift_hint:
+            shift_hint = "KBD FMS2"
         renderer.draw(Scene(
             own=fr.own, nav=fr.nav, panel=fr.panel, gns=w.gns, db=w.db, magvar=w.magvar,
             variant=w.gns.variant,
@@ -810,7 +872,7 @@ def run(cfg: Config) -> int:
             layout=ui["layout"], sixpack=fr.sixpack, nav1_head=fr.nav1, nav2_head=fr.nav2,
             nav1_hsi=ui["nav1_hsi"], ap=w.ap, radios=w.radios,
             ias_target=w.ias_target, ias_managed=w._ias_managed, t=w.t,
-            time_warp=warp,
+            time_warp=warp, gns2=w.gns2,
         ))
         pygame.display.flip()
 
@@ -861,19 +923,21 @@ def _apply_ff_discovery(gdl90, listener, target_ip: str | None,
     return target_ip
 
 
-def _open_selected_chart(w: World) -> None:
+def _open_selected_chart(w: World, gns=None) -> None:
     """ENT on the AUX Charts page: fetch (if not already cached) the
     currently-selected plate and hand it to the OS's default PDF viewer.
     Runs the actual fetch off the main thread - a slow download must not
     stall the ~30 Hz loop, same reasoning as `wx_auto.py`. Progress/errors
     surface as GNS messages rather than a return value since nothing is
-    waiting on this synchronously."""
-    idents = w.gns.wx_station_idents()
+    waiting on this synchronously. ``gns`` is the unit whose Charts page is
+    open (FMS1's `w.gns` by default; the routed FMS2 unit in --dual)."""
+    g = gns if gns is not None else w.gns
+    idents = g.wx_station_idents()
     if not idents:
         return
-    ai = max(0, min(len(idents) - 1, w.gns.chart_airport_sel))
+    ai = max(0, min(len(idents) - 1, g.chart_airport_sel))
     ident = idents[ai]
-    chart_sel = w.gns.chart_sel
+    chart_sel = g.chart_sel
 
     def worker() -> None:
         try:
@@ -883,20 +947,20 @@ def _open_selected_chart(w: World) -> None:
             cycle = current_cycle()
             records = dtpp.load_index(root, cycle)
             if records is None:
-                w.gns.messages.append("NO CHART INDEX - datasrc.dtpp update-index")
+                g.messages.append("NO CHART INDEX - datasrc.dtpp update-index")
                 return
             charts = dtpp.charts_for_airport(records, ident)
             if not charts:
-                w.gns.messages.append(f"NO CHARTS FOR {ident}")
+                g.messages.append(f"NO CHARTS FOR {ident}")
                 return
             chart = charts[max(0, min(len(charts) - 1, chart_sel))]
             path = dtpp.fetch_and_cache_chart(root, cycle, chart.pdf_name)
             dtpp.open_with_os_default(path)
-            w.gns.messages.append(f"OPENED {chart.chart_name}")
+            g.messages.append(f"OPENED {chart.chart_name}")
         except Exception as exc:                  # noqa: BLE001 - background, must not die
-            w.gns.messages.append(f"CHART OPEN FAILED: {exc}")
+            g.messages.append(f"CHART OPEN FAILED: {exc}")
 
-    w.gns.messages.append(f"OPENING CHART for {ident}...")
+    g.messages.append(f"OPENING CHART for {ident}...")
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -914,24 +978,36 @@ def _on_key(e, w: World, ui: dict) -> None:
     k = e.key
     shift = bool(e.mod & pygame.KMOD_SHIFT)
 
-    pdlg = getattr(w.gns, "_proc_dialog", None)
+    # The keyboard has no physical FMS1/FMS2 selector, so in --dual `U`
+    # toggles which unit every GNS-page key below drives (an annunciator
+    # shows "FMS2" while it's the active one - see run()'s shift_hint).
+    # `mode=Mode.FMS1` on the Event()s below is just which enum member
+    # `handle_event` requires be "some FMS mode"; it does not mean unit 1
+    # specifically - `g` is what actually selects the unit (see
+    # gpsnav.GpsNav.handle_event, which only checks FMS-vs-not).
+    if k == pygame.K_u and w.gns2 is not None:
+        ui["kbd_fms2"] = not ui.get("kbd_fms2", False)
+        return
+    g = w.gns2 if (ui.get("kbd_fms2") and w.gns2 is not None) else w.gns
+
+    pdlg = getattr(g, "_proc_dialog", None)
     if pdlg is not None:                      # PROC selector has the keyboard
         if k in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
-            w.gns.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
         elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            w.gns.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
         elif k in (pygame.K_UP, pygame.K_LEFT):
             pdlg.move(-1)
         elif k in (pygame.K_DOWN, pygame.K_RIGHT):
             pdlg.move(1)
         return
 
-    dlg = getattr(w.gns, "_dto_dialog", None)
+    dlg = getattr(g, "_dto_dialog", None)
     if dlg is not None:                       # Direct-To page has the keyboard
         if k == pygame.K_ESCAPE or k == pygame.K_BACKSPACE:
-            w.gns.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
         elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            w.gns.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
         elif k == pygame.K_LEFT:
             dlg.move_cursor(-1)
         elif k == pygame.K_RIGHT:
@@ -963,24 +1039,29 @@ def _on_key(e, w: World, ui: dict) -> None:
     elif k == pygame.K_n:
         w.gps_follow = not w.gps_follow
     elif k == pygame.K_l:
-        ui["layout"] = "steam" if ui["layout"] == "gps" else "gps"
+        ui["layout"] = _next_layout(ui["layout"], dual=w.gns2 is not None)
     elif k == pygame.K_h:
         ui["nav1_hsi"] = not ui["nav1_hsi"]
     elif k == pygame.K_s:
-        w.gns.toggle_suspend()
+        g.toggle_suspend()
     elif k == pygame.K_v:
-        w.gns.toggle_cdi_source()
+        g.toggle_cdi_source()
     elif k == pygame.K_b:
-        w.gns.toggle_obs()
+        g.toggle_obs()
     elif k in (pygame.K_MINUS, pygame.K_EQUALS):
         step = (10 if shift else 1) * (1 if k == pygame.K_EQUALS else -1)
-        w.gns.nudge_obs(step)
+        g.nudge_obs(step)
     elif k == pygame.K_m:
-        w.show_msg = not w.show_msg
-        if not w.show_msg:
-            w.gns.ack_messages()
+        # the on-screen MSG box only ever reflects FMS1's queue (see run()'s
+        # Scene build) - on FMS2 this just acks its queue, same as _fms_bezel.
+        if g is w.gns:
+            w.show_msg = not w.show_msg
+            if not w.show_msg:
+                g.ack_messages()
+        else:
+            g.ack_messages()
     elif k == pygame.K_HOME:
-        w.gns.cursor.go_to_default_nav()
+        g.cursor.go_to_default_nav()
     elif k == pygame.K_F11:
         w.radios.com1.set_emergency()
     elif k == pygame.K_a:
@@ -1010,21 +1091,21 @@ def _on_key(e, w: World, ui: dict) -> None:
     elif k == pygame.K_p:
         w.radios.nav2.turn_obs(1)
     elif k == pygame.K_TAB:
-        w.gns.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
+        g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
     elif k == pygame.K_d:
-        w.gns.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))   # opens the entry page
+        g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))   # opens the entry page
     elif k == pygame.K_r:
-        w.gns.begin_proc_select()                                     # PROC key
+        g.begin_proc_select()                                     # PROC key
     elif k == pygame.K_PAGEUP:
         # plain = small (inner) knob: page within the group, e.g. Default NAV -> Map;
         # +Shift = large (outer) knob: page GROUP, e.g. NAV -> WPT -> AUX -> NRST -
         # the only keyboard route to the WPT/AUX/NRST pages (incl. AUX > Weather)
         # without the IFR-1's physical outer knob.
-        w.gns.handle_event(Event(mode=Mode.FMS1, outer=1 if shift else 0,
-                                 inner=0 if shift else 1))
+        g.handle_event(Event(mode=Mode.FMS1, outer=1 if shift else 0,
+                             inner=0 if shift else 1))
     elif k == pygame.K_PAGEDOWN:
-        w.gns.handle_event(Event(mode=Mode.FMS1, outer=-1 if shift else 0,
-                                 inner=0 if shift else -1))
+        g.handle_event(Event(mode=Mode.FMS1, outer=-1 if shift else 0,
+                             inner=0 if shift else -1))
     elif pygame.K_1 <= k <= pygame.K_4:            # 1/2/3/4 -> TIME_WARP_LEVELS[0..3]
         ui["time_warp"] = TIME_WARP_LEVELS[k - pygame.K_1]
 

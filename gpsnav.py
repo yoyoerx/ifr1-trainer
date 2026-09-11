@@ -97,7 +97,9 @@ _CDI_ENROUTE_NM = 5.0
 _CDI_TERMINAL_NM = 1.0
 _CDI_APPROACH_NM = 0.30
 # arm terminal within this range of the destination; approach within this of the
-# active fix once an approach procedure is loaded.
+# active fix once an approach procedure is loaded. Sec.10.4 also arms terminal
+# scale within the same 30 nm of the *departure* airport (ramping 1.0 -> 5.0 nm
+# outbound), symmetric with the arrival-side ramp.
 _CDI_TERMINAL_ARM_NM = 30.0
 _CDI_APPROACH_ARM_NM = 2.0
 # the scale slews toward its target rather than stepping (sec.6.2 "gradual ...
@@ -1578,7 +1580,8 @@ class GpsNav:
         leg = self._active_leg()          # (from_pt, to_pt, from_id, to_id, is_dto) or None
         if leg is None:
             scale = self._step_cdi_scale(
-                self._target_cdi_scale(self._dist_to_destination(pos), None), dt)
+                self._target_cdi_scale(self._dist_to_destination(pos), None,
+                                        self._dist_to_departure(pos)), dt)
             self._nav = NavState(cdi_source=self.cdi_source,
                                  cdi_scale_nm=scale,
                                  annunciators=self._annunciators(False))
@@ -1588,7 +1591,8 @@ class GpsNav:
 
         dist = great_circle_nm(pos, b)
         scale = self._step_cdi_scale(
-            self._target_cdi_scale(self._dist_to_destination(pos), dist), dt)
+            self._target_cdi_scale(self._dist_to_destination(pos), dist,
+                                    self._dist_to_departure(pos)), dt)
 
         if self.obs_active:
             self._nav = self._obs_state(b, from_id, to_id, scale)
@@ -1729,7 +1733,8 @@ class GpsNav:
             return self.update(pos, self._track, self._gs, dt)   # new lap, or resumed leg
 
         scale = self._step_cdi_scale(
-            self._target_cdi_scale(self._dist_to_destination(pos), great_circle_nm(pos, fix)), dt)
+            self._target_cdi_scale(self._dist_to_destination(pos), great_circle_nm(pos, fix),
+                                    self._dist_to_departure(pos)), dt)
         to_wp = self.fpl.to_wp
         self._nav = NavState(
             valid=True, mode="HOLD", cdi_source=self.cdi_source,
@@ -1749,12 +1754,26 @@ class GpsNav:
             return great_circle_nm(pos, self.fpl.waypoints[-1].pos)
         return None
 
+    def _dist_to_departure(self, pos: Point) -> float | None:
+        """Great-circle nm to the first plan waypoint (the departure airport).
+
+        A stand-alone Direct-To (no flight plan) has no departure point.
+        """
+        if self.dto is not None and self.dto.fpl_index < 0:
+            return None
+        if self.fpl.waypoints:
+            return great_circle_nm(pos, self.fpl.waypoints[0].pos)
+        return None
+
     def _target_cdi_scale(self, dist_to_dest: float | None,
-                          dist_to_fix: float | None) -> float:
+                          dist_to_fix: float | None,
+                          dist_to_dep: float | None = None) -> float:
         if (self._approach_active and dist_to_fix is not None
                 and dist_to_fix <= _CDI_APPROACH_ARM_NM):
             return _CDI_APPROACH_NM
-        if dist_to_dest is not None and dist_to_dest <= _CDI_TERMINAL_ARM_NM:
+        near_dest = dist_to_dest is not None and dist_to_dest <= _CDI_TERMINAL_ARM_NM
+        near_dep = dist_to_dep is not None and dist_to_dep <= _CDI_TERMINAL_ARM_NM
+        if near_dest or near_dep:
             return _CDI_TERMINAL_NM
         return _CDI_ENROUTE_NM
 

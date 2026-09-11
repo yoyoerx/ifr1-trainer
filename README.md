@@ -13,13 +13,14 @@ not real-world navigation.
 
 See `WORKING.md` for the detailed task tracker and `ARCHITECTURE.md` for the map.
 `FINDINGS.md` records the GNS 530 validation against the Garmin Pilot's Guide.
-789 tests passing. The trainer runs:
+804 tests passing. The trainer runs:
 
 ```
 python main.py --plan "KBOS BOS PVD KJFK" --wind 300/25   # 530 + moving map
 python main.py --approach "KLNS I08"                      # CIFP approach: synth legs, SUSP at the MAP, ILS staged to VLOC standby
 python main.py --unit 430                                 # GNS 430 (shorter unit, 5-row screen)
 python main.py --layout steam                             # six-pack + CDIs + autopilot
+python main.py --dual                                     # a 530 on FMS1 + a 430 on FMS2, stacked
 python main.py --no-device                                # hand-fly, keyboard only
 python main.py --xplane-feed                              # take ownship position from X-Plane
 python main.py --gdl90 --gdl90-host 192.168.1.255         # feed a tablet EFB (ForeFlight etc.)
@@ -30,6 +31,16 @@ python main.py --gdl90 --gdl90-host 192.168.1.255         # feed a tablet EFB (F
 `Home` Default NAV, `D` opens the Select Direct-To page (arrows edit, Enter activates),
 `R` opens the PROC selector (approach / arrival / departure, arrows + Enter, CLR backs out),
 `,`/`.` trim the IAS set-point.
+
+With `--dual`, the IFR-1's FMS1/FMS2 mode-selector positions drive two
+independent GNS units - a real dual 530/430 stack - each with its own flight
+plan, cursor and nav state; both start on the same plan, then diverge as you
+page/fly them separately. `--unit` picks FMS1's unit, `--dual` puts the other
+one on FMS2 (`--unit 530 --dual` -> 530/430; `--unit 430 --dual` -> 430/530).
+Without the IFR-1, `U` toggles which unit the keyboard's GNS-page keys drive
+(an annunciator shows `KBD FMS2` while it's the second unit); `L` also cycles
+through a third layout, `dual`, that draws both units stacked on the left with
+the moving map + HSI (tied to FMS1) on the right.
 
 Any long flag can go in a config file instead (`octavi.toml` / `octavi.json` in
 the working dir or `~/.config/octavi-ifr-trainer/`, or `--config PATH`); the
@@ -72,10 +83,14 @@ domain) for ownship magnetic variation. Each origin + licence is logged in the
 - [x] `sim_model.py` - kinematic ownship: cmd hdg/alt/spd/vs or leg intercept
 - [x] `radios.py` - COM/NAV stack, per-nav OBS, localizer+runway pairing, XPDR
 - [x] `autopilot.py` - S-TEC Fifty Five X style AP (HDG/NAV/APR/REV, GPSS, VS/ALT/GS)
-- [x] `render.py` - "gps" layout (530 + map) and "steam" layout (six-pack + CDIs + AP)
+- [x] `render.py` - "gps" layout (530 + map), "steam" layout (six-pack + CDIs
+      + AP), and "dual" layout (two stacked GNS units + map, for `--dual`)
 - [x] `main.py` - ~30 Hz loop; IFR-1 mode selector routing (FMS AP-row -> bezel
       keys, knob-latched per-mode shift, AP-mode ALT/VS knobs); AP-row LEDs follow state
 - [x] GNS 430 variant - `gpsnav.py` core split, `--unit 430`, own faceplate SVG
+- [x] `--dual` - a second, independent GNS unit driven by the IFR-1's FMS2
+      selector position (a real 530/430 stack); `"dual"` layout stacks both
+      on screen, keyboard `U` swaps which unit the GNS-page keys drive
 - [x] `xplane_feed.py` - optional live ownship from X-Plane over UDP (`RREF`),
       seamless fallback to the scripted model
 - [x] `gdl90_out.py` - GDL90 broadcaster (`--gdl90`) for a tablet EFB
@@ -188,7 +203,7 @@ hardware at all). This is the full list, straight from `main._on_key`.
 | `↑` / `↓` | Target altitude +500 / −500 ft |
 | `,` / `.` | IAS set-point −5 / +5 kt |
 | `1` `2` `3` `4` | Time warp: 1x / 5x / 10x / 20x |
-| `L` | Toggle layout (gps ↔ steam) |
+| `L` | Cycle layout: gps → steam → gps (→ `dual` too, with `--dual`) |
 | `H` | NAV1 CDI ↔ HSI face |
 
 **GNS 530 pages & flight plan:**
@@ -207,6 +222,7 @@ hardware at all). This is the full list, straight from `main._on_key`.
 | `B` | OBS on/off |
 | `-` / `=` | OBS course −1 / +1 (hold `Shift` for ×10) |
 | `M` | Messages page |
+| `U` | *(`--dual` only)* Swap which unit — FMS1 or FMS2 — every key in this table drives; shows a `KBD FMS2` annunciator while it's the second unit |
 
 **Radios & autopilot:**
 

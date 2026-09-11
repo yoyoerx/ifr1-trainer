@@ -19,6 +19,7 @@ import pygame  # noqa: E402
 from navmath import Point, destination, initial_bearing  # noqa: E402
 from navdata.model import Airport, NavDatabase, VhfNavaid, Waypoint  # noqa: E402
 import gns530 as gns530_mod  # noqa: E402
+import gns430 as gns430_mod  # noqa: E402
 import instruments as instr  # noqa: E402
 import sim_model as simmod  # noqa: E402
 from autopilot import Autopilot  # noqa: E402
@@ -553,11 +554,12 @@ def test_steam_layout_draws_the_ias_setpoint_bug(db):
 # --------------------------------------------------------------------------- #
 # IFR-1 event routing
 # --------------------------------------------------------------------------- #
-def _bare_world(db):
+def _bare_world(db, *, gns2=None):
     w = main_mod.World.__new__(main_mod.World)
     w.ap = Autopilot()
     w.radios = RadioStack()
     w.gns = gns530_mod.Gns530(db)
+    w.gns2 = gns2               # None unless a test opts into --dual
     w.show_msg = False
     w.baro_inhg = 29.92
     w.shift_latched = False
@@ -978,3 +980,162 @@ def test_route_event_xpdr_digit_cursor_ident_and_mode(db):
     main_mod.route_event(Event(mode=Mode.XPDR, pressed=("KNOB",)), w)  # latch shift
     main_mod.route_event(Event(mode=Mode.XPDR, inner=1), w)           # shift -> mode
     assert w.radios.xpdr.mode != m0
+
+
+# --------------------------------------------------------------------------- #
+# dual FMS units (--dual: FMS1/FMS2 drive two independent GNS units)
+# --------------------------------------------------------------------------- #
+def _dual_world(db):
+    return _bare_world(db, gns2=gns430_mod.Gns430(db))
+
+
+def test_config_dual_defaults_off_and_layout_stays_gps():
+    c = main_mod.parse_args(["--no-device"])
+    assert c.dual is False
+    assert c.layout == "gps"
+
+
+def test_config_dual_defaults_layout_to_dual():
+    c = main_mod.parse_args(["--no-device", "--dual"])
+    assert c.dual is True
+    assert c.layout == "dual"
+
+
+def test_config_dual_explicit_layout_overrides_the_dual_default():
+    c = main_mod.parse_args(["--no-device", "--dual", "--layout", "steam"])
+    assert c.dual is True
+    assert c.layout == "steam"
+
+
+def test_config_dual_layout_from_file_is_not_overridden_by_dual(tmp_path, monkeypatch):
+    (tmp_path / "octavi.toml").write_text('layout = "steam"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    c = main_mod.parse_args(["--no-device", "--dual"])
+    assert c.layout == "steam"
+
+
+def test_world_dual_builds_the_other_unit_type(db):
+    w = main_mod.World.__new__(main_mod.World)   # just exercise the unit-selection logic
+    unit_cls = gns530_mod.Gns530
+    unit2_cls = gns530_mod.Gns530 if unit_cls is gns430_mod.Gns430 else gns430_mod.Gns430
+    assert unit2_cls is gns430_mod.Gns430          # --unit 530 --dual -> 430 on FMS2
+    unit_cls = gns430_mod.Gns430
+    unit2_cls = gns530_mod.Gns530 if unit_cls is gns430_mod.Gns430 else gns430_mod.Gns430
+    assert unit2_cls is gns530_mod.Gns530          # --unit 430 --dual -> 530 on FMS2
+
+
+def test_route_event_fms1_and_fms2_drive_independent_units(db):
+    from ifr1 import Event, Mode
+    w = _dual_world(db)
+    p1_before, p2_before = w.gns.cursor.page_name, w.gns2.cursor.page_name
+    main_mod.route_event(Event(mode=Mode.FMS1, inner=1), w)
+    assert w.gns.cursor.page_name != p1_before
+    assert w.gns2.cursor.page_name == p2_before        # FMS1 never touches FMS2
+
+    main_mod.route_event(Event(mode=Mode.FMS2, inner=1), w)
+    assert w.gns2.cursor.page_name != p2_before
+    # FMS1's own page (moved above) is untouched by the FMS2 press
+    assert w.gns.cursor.page_name != p1_before
+
+
+def test_route_event_fms2_bezel_keys_and_dto_hit_only_gns2(db):
+    from ifr1 import Event, Mode
+    w = _dual_world(db)
+    main_mod.route_event(Event(mode=Mode.FMS2, pressed=("AP",)), w)     # CDI bezel key
+    assert w.gns2.cdi_source == "VLOC"
+    assert w.gns.cdi_source == "GPS"
+
+    main_mod.route_event(Event(mode=Mode.FMS2, pressed=("DCT",)), w)
+    assert w.gns2._dto_dialog is not None
+    assert w.gns._dto_dialog is None
+
+
+def test_route_event_fms2_msg_key_acks_gns2_without_opening_the_shared_box(db):
+    from ifr1 import Event, Mode
+    w = _dual_world(db)
+    w.gns2.messages.append("TEST MSG")
+    main_mod.route_event(Event(mode=Mode.FMS2, pressed=("NAV",)), w)    # MSG bezel key
+    assert w.gns2.peek_messages() == []                # acked
+    assert w.show_msg is False                          # the on-screen box stays FMS1's
+
+
+def test_route_event_single_unit_fms2_still_drives_gns_when_not_dual(db):
+    """No --dual (`w.gns2 is None`): FMS1 and FMS2 both fall back to the one
+    unit, so a plain 530/430 session with the mode selector on FMS2 keeps
+    working exactly as before this feature existed."""
+    from ifr1 import Event, Mode
+    w = _bare_world(db)                                 # gns2=None
+    before = w.gns.cursor.page_name
+    main_mod.route_event(Event(mode=Mode.FMS2, inner=1), w)
+    assert w.gns.cursor.page_name != before
+
+
+def test_on_key_u_toggles_keyboard_fms_unit_only_when_dual(db):
+    w = _dual_world(db)
+    ui = {"layout": "dual", "map_range": 20.0, "nav1_hsi": False, "running": True,
+          "time_warp": 1}
+    main_mod._on_key(_key(pygame.K_u), w, ui)
+    assert ui["kbd_fms2"] is True
+    main_mod._on_key(_key(pygame.K_u), w, ui)
+    assert ui["kbd_fms2"] is False
+
+    w_single = _bare_world(db)                          # gns2=None: U is a no-op
+    ui2 = {"layout": "gps", "map_range": 20.0, "nav1_hsi": False, "running": True,
+           "time_warp": 1}
+    main_mod._on_key(_key(pygame.K_u), w_single, ui2)
+    assert "kbd_fms2" not in ui2
+
+
+def test_on_key_page_keys_follow_the_toggled_keyboard_fms_unit(db):
+    w = _dual_world(db)
+    ui = {"layout": "dual", "map_range": 20.0, "nav1_hsi": False, "running": True,
+          "time_warp": 1}
+    p1_before, p2_before = w.gns.cursor.page_name, w.gns2.cursor.page_name
+    main_mod._on_key(_key(pygame.K_PAGEUP), w, ui)       # still FMS1 by default
+    assert w.gns.cursor.page_name != p1_before
+    assert w.gns2.cursor.page_name == p2_before
+
+    main_mod._on_key(_key(pygame.K_u), w, ui)            # toggle keyboard to FMS2
+    p1_mid = w.gns.cursor.page_name
+    main_mod._on_key(_key(pygame.K_PAGEUP), w, ui)
+    assert w.gns2.cursor.page_name != p2_before
+    assert w.gns.cursor.page_name == p1_mid              # FMS1 untouched this time
+
+
+def test_next_layout_cycles_and_resets_from_unknown():
+    assert main_mod._next_layout("gps", dual=False) == "steam"
+    assert main_mod._next_layout("steam", dual=False) == "gps"
+    assert main_mod._next_layout("dual", dual=False) == "gps"      # not offered -> reset
+    assert main_mod._next_layout("gps", dual=True) == "steam"
+    assert main_mod._next_layout("steam", dual=True) == "dual"
+    assert main_mod._next_layout("dual", dual=True) == "gps"
+
+
+def test_dual_layout_draws_both_units(db):
+    w = _dual_world(db)
+    w.gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    w.gns2.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    nav1 = w.gns.update(Point(40.1, -74.0), 0.0, 120.0)
+    w.gns2.update(Point(40.1, -74.0), 0.0, 120.0)
+    own_i = instr.Ownship(Point(40.1, -74.0), 0.0, 0.0, 120.0, 5000.0, -13.0)
+    panel = instr.compute_panel(own_i, nav1)
+    sc = Scene(own=w.sim.state, nav=nav1, panel=panel, gns=w.gns, db=db,
+              magvar=-13.0, layout="dual", gns2=w.gns2)
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(sc)                              # must not raise
+    arr = pygame.surfarray.array2d(surf)
+    assert arr.any()                                     # something was actually drawn
+
+
+def test_dual_layout_without_a_second_unit_falls_back_to_single(db):
+    """`--layout dual` without `--dual` (gns2 stays None): render() must not
+    crash reaching for a unit that doesn't exist - it falls back to the
+    ordinary single-unit "gps" placement."""
+    w = _bare_world(db)                                   # gns2=None
+    nav = w.gns.update(Point(40.1, -74.0), 0.0, 120.0)
+    own_i = instr.Ownship(Point(40.1, -74.0), 0.0, 0.0, 120.0, 5000.0, -13.0)
+    panel = instr.compute_panel(own_i, nav)
+    sc = Scene(own=w.sim.state, nav=nav, panel=panel, gns=w.gns, db=db,
+              magvar=-13.0, layout="dual", gns2=None)
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(sc)                                # must not raise

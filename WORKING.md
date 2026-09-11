@@ -7,7 +7,7 @@ Last updated: 2026-09-11
 
 ---
 
-## Current status  (2026-09-11, 789 tests green)
+## Current status  (2026-09-11, 804 tests green)
 
 **M0–M16 all done.** The trainer runs end to end:
 
@@ -600,6 +600,73 @@ subscription. X-Plane's bundled data is stuck at AIRAC 2406.
 - Audio: Morse ident for tuned navaids, marker tones
 
 ## Done log
+- 2026-09-11  Steam-gauge layout overlap fixes + a `--dual` 530/430 version
+  (user: "the steam gauge page has some text in unusual places that is
+  overlapping... lets also get a version rolled with the dual 530/430 to
+  take advantage of the FMS1/FMS2 modes"). 804 tests (+14: render 14 new).
+  * **Overlap fixes** (found by actually rendering the layout to a PNG and
+    inspecting it, not just reading the drawing code):
+    - Altimeter baro-setting and airspeed speed-bug readouts sat inside the
+      needle's full sweep radius with no backing, so the needle regularly
+      crossed straight through the digits. New `_windowed_text()` helper
+      draws a small opaque "Kollsman window" box behind each, after the
+      needle, like an EFIS tape readout.
+    - Every rotating compass card (NAV1/NAV2 heads, the six-pack HDG dial)
+      had its tick-mark numbers at almost the same radius as the fixed
+      course-index/lubber-line pointer riding the rim, so a tick landing
+      near the top printed right through the pointer glyph (confirmed via
+      screenshot: the "24"/"3" labels visibly cut by the index triangle).
+      Pulled the labels further inboard (rad-14/-16 -> rad-22/-24) so they
+      clear the rim markers entirely.
+    - The AP panel's "HDG BUG" label ran directly into its own LCD digits
+      at that column width (fixed by shortening to "HDG", matching "VS"'s
+      already-working width) - and separately, the DSEG7 LCD font reserves
+      a full digit-width slot for '-', so a right-aligned negative VS
+      ("-1500") is 5 characters wide and its sign landed on top of the "VS"
+      label instead of the digits (confirmed by rendering the font glyph
+      directly: the dash sits far to the left of "1500", not adjacent to
+      it). Fixed by moving VS's label further back (rcol-150, matching the
+      IAS SET/ALT SEL row already at that offset) so the widest case clears.
+  * **`--dual`**: a second GNS unit (`World.gns2`, the other of 530/430)
+    ticked every frame (`.update()`, same as `gns` - keeps its cursor/nav
+    live even though only FMS1 drives the autopilot/instrument panel) and
+    routed independently: `route_event` picks `gns` vs `gns2` from the
+    event's `Mode.FMS1`/`FMS2`, so a plain (non-dual) run is unchanged
+    (both positions still fly the one unit, verified explicitly). New
+    `render._dual_layout` stacks two GNS boxes in the left column - `_gns_unit`
+    gained an optional `box=(x0,y0,w,h)` override (default unchanged, so the
+    "gps" layout's placement is byte-for-byte the same) and fits the bezel
+    image to the box by *height* as well as width, since a stacked half-height
+    box is shorter than the bezel's natural aspect gives at full width.
+    `--dual` defaults `--layout` to `"dual"` unless `--layout` is also given
+    (CLI or config file). Keyboard has no physical FMS1/FMS2 selector, so `U`
+    toggles which unit the GNS-page keys drive (`KBD FMS2` annunciator); `L`
+    now cycles gps -> steam -> dual when a second unit exists. MSG stays
+    scoped to FMS1's queue/box for now (FMS2's MSG key still acks its own
+    queue - just no on-screen box of its own yet - documented as a known
+    limitation, not silently dropped).
+- 2026-09-11  FINDINGS.md re-validation against the actual Pilot's Guide PDF
+  (user: "pull the pilots guide to verify the CDI scale transition. fix as
+  needed. then execute work to complete D4/D5 deferred items"). 790 tests
+  (+1: gns530 1 new).
+  * Fetched the real 288-page manual (`static.garmin.com/pumac/
+    GNS530_PilotsGuide.pdf`, Dec 2009 - matches FINDINGS.md's own "Rev. H"
+    citation) and cross-checked the F1/F2/F3 quotes verbatim rather than
+    trusting the earlier paraphrase. All held, with one real gap: sec.10.4
+    describes a departure-side terminal-scale arm symmetric with the
+    arrival-side one ("when leaving the departure airport the CDI scale is
+    set to 1.0 nm and gradually ramps UP to 5 nm beyond 30 nm"), which the
+    original F2 fix never coded - `_target_cdi_scale` only ever looked at
+    distance-to-destination. Fixed: `GpsNav._dist_to_departure()` added,
+    `_target_cdi_scale` now arms terminal scale within 30 nm of *either* end.
+    New test `test_cdi_scale_is_terminal_near_departure_airport`; the two
+    existing enroute-scale tests had their sample point moved because it was
+    only ~6 nm from the departure fix (so they passed before the bug existed
+    to catch, by accident rather than by covering the right case).
+  * D4 (non-fix leg synthesis + DME/RF arcs + MAP/HOLD/FAF symbols) and D5
+    (SUSP at the MAP + a holding pattern actually flown) were re-checked
+    against the manual and confirmed genuinely complete, as FINDINGS.md
+    already stated - no code changes were needed there.
 - 2026-09-11  d-TPP approach plates (user, after a design discussion: "it
   would be nice to have the listing by airport (option b) that hands off to
   the os (other option b)... As it stands now, I have to open airnav and

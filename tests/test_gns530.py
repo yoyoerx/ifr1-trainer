@@ -978,7 +978,10 @@ def test_nav_data_expiry_annunciation_and_message():
 # --------------------------------------------------------------------------- #
 def test_cdi_scale_is_five_nm_enroute(g):
     g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
-    ns = g.update(Point(40.1, -74.0), 0.0, 120.0)          # ~75 nm from DELT
+    # >30 nm from both ALFA (departure) and DELT (destination) - sec.10.4 arms
+    # terminal scale within 30 nm of *either* end, so a true enroute test must
+    # clear both arms.
+    ns = g.update(Point(40.75, -74.0), 0.0, 120.0)
     assert ns.cdi_scale_nm == pytest.approx(5.0)
 
 
@@ -986,6 +989,16 @@ def test_cdi_scale_tightens_to_terminal_near_destination(g):
     g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
     g.fpl.activate_leg(3)
     ns = g.update(Point(41.0, -73.5), 90.0, 120.0)          # ~23 nm from DELT
+    assert ns.cdi_scale_nm == pytest.approx(1.0)
+
+
+def test_cdi_scale_is_terminal_near_departure_airport(g):
+    """Sec.10.4: '...when leaving the departure airport the CDI scale is set
+    to 1.0 nm and gradually ramps UP to 5 nm beyond 30 nm (from the departure
+    airport)' - symmetric with the arrival-side ramp, and independent of
+    distance remaining to the destination."""
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
+    ns = g.update(Point(40.05, -74.0), 0.0, 120.0)          # ~3 nm from ALFA
     assert ns.cdi_scale_nm == pytest.approx(1.0)
 
 
@@ -1005,7 +1018,7 @@ def test_cdi_scale_tightens_to_approach_when_procedure_active(db):
 
 def test_cdi_scale_ramps_gradually_when_dt_given(g):
     g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
-    g.update(Point(40.1, -74.0), 0.0, 120.0)                # settle at 5.0 enroute
+    g.update(Point(40.75, -74.0), 0.0, 120.0)               # settle at 5.0 enroute
     assert g._cdi_scale == pytest.approx(5.0)
     g.fpl.activate_leg(3)
     ns = g.update(Point(41.0, -73.5), 90.0, 120.0, dt=1.0)  # terminal target now
