@@ -27,6 +27,7 @@ Magnetic display variation is applied downstream in ``instruments.py``.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -289,6 +290,12 @@ class PageCursor:
     page: int = 0
     cursor_on: bool = False
     field: int = 0
+    # last page shown in each OTHER group, keyed by group index - the real
+    # 530 is "sticky": leaving a group and coming back returns to whichever
+    # page you were last on there, it doesn't reset to page 1 every time.
+    # (dataclasses.field, fully qualified: this class's own `field` attribute
+    # above shadows the bare name by the time this line executes.)
+    _last_page: dict = dataclasses.field(default_factory=dict)
 
     @property
     def group_name(self) -> str:
@@ -306,8 +313,10 @@ class PageCursor:
         if self.cursor_on:
             self.field = max(0, self.field + (1 if delta > 0 else -1))
         else:
+            self._last_page[self.group] = self.page
             self.group = max(0, min(len(_GROUP_ORDER) - 1, self.group + delta))
-            self.page = 0
+            n = len(PAGE_GROUPS[self.group_name])
+            self.page = min(self._last_page.get(self.group, 0), n - 1)
 
     def on_inner(self, delta: int) -> None:
         """Small knob: page within the group (no wrap)."""
@@ -1093,11 +1102,15 @@ class GpsNav:
             if ed is None:
                 return
             buf = ed.get("buf")
-            if buf is None:                        # open an editor on the selected row
-                row = ed["row"]
-                seed = (self.fpl.waypoints[row].ident
-                        if row < len(self.fpl.waypoints) else "")
-                ed["buf"] = DirectToEntry.seeded(seed)
+            if buf is None:
+                # Pilot's Guide sec.5.1: "turn the large right knob to select
+                # the point to add the new waypoint - if an existing waypoint
+                # is highlighted, the new waypoint is placed directly in
+                # front of this waypoint." So the field always opens blank -
+                # entering an identifier here INSERTS, it never overwrites
+                # the highlighted waypoint (delete-then-CLR is how an
+                # existing one is actually changed).
+                ed["buf"] = DirectToEntry.seeded("")
                 return
             ident = buf.ident()
             ed["buf"] = None
@@ -1110,10 +1123,8 @@ class GpsNav:
                 return
             row = ed["row"]
             wp = PlanWaypoint.from_entry(entry)
-            if row < len(self.fpl.waypoints):
-                self.fpl.waypoints[row] = wp
-            else:
-                self.fpl.insert(len(self.fpl.waypoints), wp)
+            self.fpl.insert(row, wp)
+            ed["row"] = row + 1     # cursor follows onto the (now shifted-down) old row
         elif page in ("Airport", "Intersection", "NDB", "VOR"):
             entry = self.lookup(self.wpt_entry.ident())
             if entry is not None:                  # DCT-from-a-WPT-page shortcut
@@ -1423,6 +1434,10 @@ class GpsNav:
             self._dto_dialog.confirming = False    # back out of "Activate?" to editing
         elif self._dto_dialog is not None:
             self._dto_dialog = None
+        elif self.dto is not None:
+            # CLR with no dialog open and a Direct-To active cancels it and
+            # resumes the flight plan on the nearest leg (Pilot's Guide sec.4).
+            self.cancel_direct_to()
         elif self.cursor.cursor_on:
             self.cursor.toggle_cursor()
         else:                                   # nothing to cancel -> Default NAV
@@ -1610,8 +1625,12 @@ class GpsNav:
         course_change = abs(angle_diff(initial_bearing(b, nxt), dtk)) if nxt else 0.0
         # turn_anticipation_nm blows up (tan) as course_change -> 180 deg (a near
         # reversal, e.g. into a hold): cap it at a sane lead distance rather than
-        # cutting the corner tens of miles early.
-        anticip = min(turn_anticipation_nm(self._gs, course_change), 5.0) if nxt else 0.0
+        # cutting the corner tens of miles early. Also cap it to at most half the
+        # CURRENT leg's own length - an unusually short leg (e.g. two waypoints
+        # under a mile apart) must not anticipate a turn before ownship has had
+        # any chance to actually get established on the leg in the first place.
+        anticip = min(turn_anticipation_nm(self._gs, course_change), 5.0, leg_len * 0.5) \
+            if nxt else 0.0
         alert_dist = anticip + self._gs / 3600.0 * _WPT_ALERT_SEC
 
         # a MAP / hold / manual-termination fix: stop here (GNS 530 Pilot's Guide

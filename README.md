@@ -16,7 +16,7 @@ See `WORKING.md` for the detailed task tracker and `ARCHITECTURE.md` for the map
 804 tests passing. The trainer runs:
 
 ```
-python main.py --plan "KBOS BOS PVD KJFK" --wind 300/25   # 530 + moving map
+python main.py --plan "KBOS PVD KJFK" --wind 300/25       # 530 + moving map
 python main.py --approach "KLNS I08"                      # CIFP approach: synth legs, SUSP at the MAP, ILS staged to VLOC standby
 python main.py --unit 430                                 # GNS 430 (shorter unit, 5-row screen)
 python main.py --layout steam                             # six-pack + CDIs + autopilot
@@ -48,7 +48,7 @@ command line overrides it. Example:
 
 ```toml
 # octavi.toml
-plan = "KBOS BOS PVD KJFK"
+plan = "KBOS PVD KJFK"
 unit = "430"
 layout = "steam"
 xplane_feed = true

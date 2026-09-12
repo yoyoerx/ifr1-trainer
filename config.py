@@ -11,7 +11,7 @@ explicit command-line flags. The file is TOML (``octavi.toml``) or JSON
 Keys mirror the long CLI flags with dashes turned to underscores, e.g.::
 
     # octavi.toml
-    plan = "KBOS BOS PVD KJFK"
+    plan = "KBOS PVD KJFK"
     wind = "300/25"
     unit = "430"
     layout = "steam"

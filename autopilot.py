@@ -6,9 +6,16 @@ attitude reference), so the base engaged roll state is simply "wings level"
 
     HDG   NAV   APR   REV   ALT   VS        + a VS/ALT knob and TRIM arrows
 
-* NAV / APR *arm* and then *capture* when the course needle comes alive.
+* NAV / APR / REV steer an active intercept (up to a 45 deg cut) the instant
+  they're pressed - POH sec.4.2.2: "the turn will always begin between 100%
+  (full-scale) needle deflection and 20% of full-scale" - then *capture*
+  (tighten onto the centered needle) once alive. There is no wings-level
+  dead zone while "armed" waiting for the needle; `armed_lat` is only the
+  not-yet-captured annunciator flag.
 * **GPSS** (GPS roll steering) is a modifier on NAV/APR: when on, the AP flies
   the GPS's digital steering command instead of chasing the analog CDI.
+  POH sec.4.2.5: pressing NAV a second time (while already in NAV mode)
+  enters GPSS; a further press deletes it - NAV mode itself stays engaged.
 * **REV** is APR with reversed localizer sensing (back course) and no glideslope.
 * Vertical axis: **ALT** holds the present altitude, **VS** holds the knob-set
   vertical speed; **GS** captures from APR on an ILS. An altitude-selector
@@ -61,6 +68,17 @@ _CAPTURE_XTK_NM = 1.2
 _CAPTURE_DEFLECTION = 0.75
 _VS_KNOB_STEP = 100.0
 
+# A pure proportional xtk->intercept loop settles at a nonzero steady-state
+# offset in any crosswind: the intercept angle has to equal the wind
+# correction angle for the track to hold, and with intercept = -xtk * gain
+# that only happens once xtk itself sits at -WCA/gain (e.g. ~1.25 nm left of
+# course in a stiff crosswind at the default gain) - the AP visibly never
+# settles onto the magenta line. A slow integral trim on xtk removes that
+# offset over time, same as a real coupler's long-term trim: it accumulates
+# just enough extra correction to hold zero xtk once the transient settles.
+_XTK_I_GAIN = 0.5      # deg of trim per (nm . s) of accumulated xtk
+_XTK_I_MAX = 15.0      # deg - trim authority is modest, capture still leads
+
 
 def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
@@ -80,6 +98,7 @@ class Autopilot:
     vs_target: float = 0.0            # the VS window on the programmer
     alt_hold_ft: float | None = None  # captured on ALT engage
     trim: int = 0                     # -1 / 0 / +1 - TRIM annunciator arrow
+    _xtk_i: float = 0.0               # lateral integral trim (deg), see _XTK_I_GAIN
 
     # -- master (yoke AP/disconnect) --------------------------------
     def press_ap(self) -> None:
@@ -97,8 +116,17 @@ class Autopilot:
         self.armed_lat = self.armed_vert = None
         self.alt_hold_ft = None
         self.trim = 0
+        self._xtk_i = 0.0
 
     # -- programmer buttons ---------------------------------------
+    # NAV/APR/REV engage - and start actively intercepting - the moment
+    # they're pressed, exactly like the real S-TEC 55X: "the turn will
+    # always begin between 100% (full-scale) needle deflection and 20% of
+    # full-scale" (POH sec.4.2.2) - there is no wings-level dead zone while
+    # "armed" waiting for the needle to already be centered. `armed_lat`
+    # still tracks not-yet-captured (needle not yet alive/centered) purely
+    # for the annunciator - `_lateral_command` steers on `self.lateral`
+    # itself throughout, armed or captured.
     def press_hdg(self) -> None:
         self.engage()
         self.lateral = Lat.LVL if self.lateral is Lat.HDG else Lat.HDG
@@ -106,27 +134,40 @@ class Autopilot:
 
     def press_nav(self) -> None:
         self.engage()
-        if self.lateral is Lat.NAV or self.armed_lat is Lat.NAV:
-            self.lateral, self.armed_lat = Lat.LVL, None
-        else:
-            self.armed_lat, self.armed_vert = Lat.NAV, None
+        if self.lateral is Lat.NAV:
+            # POH sec.4.2.5: "push the NAV button twice" enters GPSS mode;
+            # "push the NAV button again" (a further press) deletes it -
+            # NAV mode itself stays engaged either way. To fully leave NAV,
+            # select HDG (or disconnect the AP), same as the real unit.
+            self.gpss = not self.gpss
+            return
+        self.lateral = Lat.NAV
+        self.armed_lat = Lat.NAV
+        self.armed_vert = None
+        self.gpss = False
+        self._xtk_i = 0.0
 
     def press_apr(self) -> None:
         self.engage()
-        if self.lateral is Lat.APR or self.armed_lat is Lat.APR:
+        if self.lateral is Lat.APR:
             self.armed_lat = self.armed_vert = None
             self.lateral = Lat.LVL
             if self.vertical is Vert.GS:
                 self.vertical = Vert.OFF
-        else:
-            self.armed_lat, self.armed_vert = Lat.APR, Vert.GS
+            return
+        self.lateral = Lat.APR
+        self.armed_lat = Lat.APR
+        self.armed_vert = Vert.GS
+        self._xtk_i = 0.0
 
     def press_rev(self) -> None:
         self.engage()
-        if self.lateral is Lat.REV or self.armed_lat is Lat.REV:
+        if self.lateral is Lat.REV:
             self.lateral, self.armed_lat = Lat.LVL, None
-        else:
-            self.armed_lat, self.armed_vert = Lat.REV, None
+            return
+        self.lateral = Lat.REV
+        self.armed_lat = Lat.REV
+        self._xtk_i = 0.0
 
     def press_alt(self) -> None:
         self.engage()
@@ -191,8 +232,10 @@ class Autopilot:
         if not self.engaged:
             return "AP OFF"
         lat = self.lateral.value
-        if self.armed_lat:
+        if self.armed_lat is not None and self.armed_lat is not self.lateral:
             lat += f"/{self.armed_lat.value}→"
+        elif self.armed_lat is not None:
+            lat += "→"          # engaged, still intercepting (needle not yet alive/centered)
         if self.gpss and self.lateral in (Lat.NAV, Lat.APR):
             lat += "+GPSS"
         vert = self.vertical.value if self.vertical is not Vert.OFF else "--"
@@ -207,6 +250,7 @@ class Autopilot:
         own,
         magvar: float,
         *,
+        dt: float = 1.0,
         vloc_course_deg: float | None = None,
         vloc_deflection: float | None = None,
         vloc_valid: bool = False,
@@ -223,7 +267,7 @@ class Autopilot:
         self._maybe_capture_lateral(nav_state, vloc_deflection, vloc_valid)
         self._maybe_capture_gs(gs_deflection, gs_valid)
 
-        cmd_heading = self._lateral_command(nav_state, own, magvar,
+        cmd_heading = self._lateral_command(nav_state, own, magvar, dt,
                                             vloc_course_deg, vloc_deflection, vloc_valid)
         cmd_alt, cmd_vs, clear_vs = self._vertical_command(alt, gs_kt, gs_deflection)
 
@@ -239,6 +283,10 @@ class Autopilot:
 
     # -- lateral --------------------------------------------
     def _maybe_capture_lateral(self, nav_state, vloc_deflection, vloc_valid) -> None:
+        """Clear `armed_lat` once the needle comes alive/centers - `self.lateral`
+        is already the engaged mode from the button press (see press_nav/apr/
+        rev), so this only retires the "still intercepting" annunciator flag,
+        it does not gate whether the AP steers."""
         if self.armed_lat not in (Lat.NAV, Lat.APR, Lat.REV):
             return
         if self.armed_lat is Lat.NAV:
@@ -248,9 +296,9 @@ class Autopilot:
             live = (vloc_valid and vloc_deflection is not None
                     and abs(vloc_deflection) <= _CAPTURE_DEFLECTION)
         if live:
-            self.lateral, self.armed_lat = self.armed_lat, None
+            self.armed_lat = None
 
-    def _lateral_command(self, nav_state, own, magvar,
+    def _lateral_command(self, nav_state, own, magvar, dt,
                          vloc_course_deg, vloc_deflection, vloc_valid) -> float:
         lat = self.lateral
         hdg = getattr(own, "heading_deg", 0.0)
@@ -261,7 +309,8 @@ class Autopilot:
         if lat is Lat.NAV and nav_state is not None and getattr(nav_state, "dtk", None) is not None:
             xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
             gain = _GPSS_GAIN if self.gpss else _NAV_GAIN
-            intercept = _clamp(-xtk * gain, -_MAX_INTERCEPT, _MAX_INTERCEPT)
+            self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
+            intercept = _clamp(-xtk * gain + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
             return norm360(nav_state.dtk + intercept)
 
         if lat in (Lat.APR, Lat.REV) and vloc_valid and vloc_course_deg is not None:
@@ -269,7 +318,8 @@ class Autopilot:
             if self.gpss and lat is Lat.APR and nav_state is not None \
                     and getattr(nav_state, "dtk", None) is not None:
                 xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
-                return norm360(nav_state.dtk + _clamp(-xtk * _GPSS_GAIN,
+                self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
+                return norm360(nav_state.dtk + _clamp(-xtk * _GPSS_GAIN + self._xtk_i,
                                                      -_MAX_INTERCEPT, _MAX_INTERCEPT))
             intercept = _clamp(dev * _VLOC_GAIN, -_MAX_INTERCEPT, _MAX_INTERCEPT)
             crs = vloc_course_deg + (180.0 if lat is Lat.REV else 0.0)

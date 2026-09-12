@@ -510,6 +510,22 @@ def test_direct_to_needs_a_position(db):
     assert g.direct_to("BRAVO") is False               # no position yet
 
 
+def test_clr_cancels_an_active_direct_to_and_resumes_the_nearest_leg(g):
+    """Pilot's Guide sec.4: cancelling a Direct-To resumes the flight plan on
+    whichever leg is nearest the present position. Previously ``CLR`` (via
+    ``handle_event``, the actual IFR-1 input path) did nothing here - the
+    Direct-To just stayed active forever, with no way to back out of it."""
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
+    g.update(ALFA, 0.0, 120.0)
+    assert g.direct_to("DELT")
+    g.update(Point(40.7, -74.0), 0.0, 120.0)           # off toward DELT, nowhere near it
+    assert g.dto is not None
+    g.handle_event(_fms(pressed=("CLR",)))
+    assert g.dto is None
+    ns = g.update(Point(40.7, -74.0), 0.0, 120.0)
+    assert ns.mode == "LEG"                            # back on the plan, not DTO
+
+
 # --------------------------------------------------------------------------- #
 # OBS mode
 # --------------------------------------------------------------------------- #
@@ -670,6 +686,18 @@ def test_knob_selects_group_page_and_toggles_cursor(g):
     assert not g.cursor.cursor_on
 
 
+def test_group_switch_remembers_the_page_it_was_on(g):
+    """The real 530 is sticky per group: leaving WPT/NDB for another group
+    and coming back returns to NDB, it doesn't reset to page 1."""
+    g.handle_event(Event(mode=Mode.FMS1, outer=1))      # -> WPT
+    g.handle_event(Event(mode=Mode.FMS1, inner=2))      # -> WPT / NDB
+    assert g.cursor.group_name == "WPT" and g.cursor.page == 2
+    g.handle_event(Event(mode=Mode.FMS1, outer=1))      # -> AUX
+    assert g.cursor.group_name == "AUX" and g.cursor.page == 0
+    g.handle_event(Event(mode=Mode.FMS1, outer=-1))     # back to WPT
+    assert g.cursor.group_name == "WPT" and g.cursor.page == 2
+
+
 def test_wpt_page_knob_types_an_identifier(g):
     g.cursor.group = list(PAGE_GROUPS).index("WPT")
     g.cursor.page = PAGE_GROUPS["WPT"].index("VOR")
@@ -682,18 +710,30 @@ def test_wpt_page_knob_types_an_identifier(g):
     assert g.lookup(g.wpt_entry.ident()).ident == "OOO"          # resolves the VOR
 
 
-def test_flight_plan_page_edits_add_and_delete(g):
+def test_flight_plan_page_ent_inserts_before_the_selected_row(g):
+    """Pilot's Guide sec.5.1: 'turn the large right knob to select the point
+    to add the new waypoint - if an existing waypoint is highlighted, the
+    new waypoint is placed directly in front of this waypoint.' ENT never
+    overwrites the highlighted waypoint - it always inserts ahead of it."""
     g.load_flight_plan(["ALFA", "BRAVO", "DELT"])
     g.update(Point(40.0, -74.0), 0.0, 120.0)
     g.cursor.group = list(PAGE_GROUPS).index("NAV")
     g.cursor.page = PAGE_GROUPS["NAV"].index("Flight Plan")
     g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))     # cursor on -> row edit
-    g.handle_event(Event(mode=Mode.FMS1, outer=2))               # select row 3 (BRAVO... -> DELT? clamp)
     g._fpl_edit["row"] = 2                                       # DELT
-    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))      # open editor on DELT
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))      # open a blank insert field
+    assert g._fpl_edit["buf"].ident() == ""                      # not pre-filled with DELT
     g._fpl_edit["buf"].chars[:] = list("CHAR  ")
     g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))      # apply
-    assert [w.ident for w in g.fpl.waypoints] == ["ALFA", "BRAVO", "CHAR"]
+    assert [w.ident for w in g.fpl.waypoints] == ["ALFA", "BRAVO", "CHAR", "DELT"]
+
+
+def test_flight_plan_page_clr_deletes_the_selected_waypoint(g):
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    g.update(Point(40.0, -74.0), 0.0, 120.0)
+    g.cursor.group = list(PAGE_GROUPS).index("NAV")
+    g.cursor.page = PAGE_GROUPS["NAV"].index("Flight Plan")
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
     g._fpl_edit["row"] = 1
     g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))      # delete BRAVO
     assert [w.ident for w in g.fpl.waypoints] == ["ALFA", "CHAR"]

@@ -375,8 +375,8 @@ class Renderer:
         self._cdi_strip(sc, pygame.Rect(scr.x, scr.bottom - cdi_h, scr.w, cdi_h))
         if bezel is None:
             self._bezel_labels(sc, x0, scr.bottom + 22, w)
-        elif getattr(var, "short", "530") == "530":
-            self._bezel_key_labels(x0, y0, bw, bh)      # legends are 530-specific
+        else:
+            self._bezel_key_labels(x0, y0, bw, bh, var)
         if getattr(sc.gns, "_proc_dialog", None) is not None:
             self._proc_page(sc, scr)
         elif getattr(sc.gns, "_dto_dialog", None) is not None:
@@ -483,18 +483,35 @@ class Renderer:
             self._t(m, box.x + 10, y, font=self.f_sm, color=TEXT)
             y += 16
 
-    def _bezel_key_labels(self, x0, y0, bw, bh):
+    def _bezel_key_labels(self, x0, y0, bw, bh, var):
         """Approximate legends over the faceplate SVG's button cutouts.
-        The IFR-1 is the real input; these are cosmetic orientation only."""
+        The IFR-1 is the real input; these are cosmetic orientation only.
+        Fractions are measured off the actual rendered faceplate art (not
+        guessed) for each variant's distinct button layout."""
         def lab(text, fx, fy):
             self._t(text, x0 + fx * bw, y0 + fy * bh, font=self.f_sm,
                     color=DIM, center=True)
-        for text, fx in zip(("CDI", "OBS", "MSG", "FPL", "PROC"),
-                            (0.24, 0.36, 0.48, 0.60, 0.72)):
-            lab(text, fx, 0.86)
-        for text, fy in zip(("RNG", "D>", "MENU", "CLR", "ENT"),
-                            (0.085, 0.195, 0.305, 0.415, 0.525)):
-            lab(text, 0.90, fy)
+        if getattr(var, "short", "530") == "530":
+            # bottom row: 6 softkey cutouts - CDI/OBS/MSG/FPL/PROC sit over
+            # the first 5, measured centers at fy ~0.844
+            for text, fx in zip(("CDI", "OBS", "MSG", "FPL", "PROC"),
+                                (0.239, 0.341, 0.447, 0.552, 0.657)):
+                lab(text, fx, 0.844)
+            # right column: 5 stacked cutouts, measured centers
+            for text, fy in zip(("RNG", "D>", "MENU", "CLR", "ENT"),
+                                (0.203, 0.359, 0.450, 0.539, 0.630)):
+                lab(text, 0.915, fy)
+        else:
+            # 430: the right-side cluster is one wide cutout over a 2x2
+            # grid - CDI spans the wide one, OBS/MSG and FPL/PROC pair up
+            # under it. No matching cutouts exist for RNG/D>/MENU/CLR/ENT
+            # on this faceplate art, so they're left unlabeled rather than
+            # guessed onto the wrong buttons.
+            lab("CDI", 0.898, 0.142)
+            lab("OBS", 0.844, 0.262)
+            lab("MSG", 0.953, 0.262)
+            lab("FPL", 0.844, 0.449)
+            lab("PROC", 0.953, 0.449)
 
     def _below_bezel(self, sc: Scene, r: pygame.Rect, rows: int = 12):
         """Compact strip under the (landscape) unit - flight plan + nav-data state.
@@ -596,7 +613,14 @@ class Renderer:
             col = MAGENTA if leg_to_here else (DIM if dto is not None else TEXT)
             marker = "->" if leg_to_here else ("[]" if i == sel else "  ")
             if i == sel and buf is not None:
-                self._t(f"{marker} {''.join(buf.chars)}", b.x, y, font=self.f_sm, color=AMBER)
+                prefix = f"{marker} "
+                r0 = self._t(f"{prefix}{''.join(buf.chars)}", b.x, y, font=self.f_sm, color=AMBER)
+                # underline the character the knob is actually on - same cue
+                # as the Direct-To entry page, so it's clear what typing next
+                # (or scrolling the knob) will change
+                cw = self.f_sm.size("0")[0]
+                ux = b.x + self.f_sm.size(prefix)[0] + buf.cursor * cw
+                pygame.draw.line(self.surf, AMBER, (ux, r0.bottom), (ux + cw, r0.bottom), 2)
             else:
                 self._t(f"{marker} {wp.ident:<7}", b.x, y, font=self.f_sm,
                         color=AMBER if i == sel else col)
@@ -1022,9 +1046,11 @@ class Renderer:
             pygame.draw.line(self.surf, col, (nx, r.y + 6), (nx, r.bottom - 6), 3)
             tf = getattr(cdi, "to_from", "")
             if tf in ("TO", "FROM"):
-                ax = cx + (18 if dfl < 0 else -18)      # tuck beside the needle
-                pts = ([(ax, cy - 9), (ax - 7, cy + 4), (ax + 7, cy + 4)] if tf == "TO"
-                       else [(ax, cy + 9), (ax - 7, cy - 4), (ax + 7, cy - 4)])
+                # Pilot's Guide sec.1: "the TO/FROM arrow in the CENTER of
+                # the scale" - a fixed mark at the scale's center, not one
+                # that dodges the needle, so on course the two overlap
+                pts = ([(cx, cy - 9), (cx - 7, cy + 4), (cx + 7, cy + 4)] if tf == "TO"
+                       else [(cx, cy + 9), (cx - 7, cy - 4), (cx + 7, cy - 4)])
                 pygame.draw.polygon(self.surf, col, pts)
                 self._t("TO" if tf == "TO" else "FR", r.right - 2, cy - 8,
                         font=self.f_sm, color=col, right=True)
@@ -1259,7 +1285,7 @@ def _windowed_text(surf, cx, cy, text, font, color, r):
     label there is unreadable at the wrong moment. Drawn last (after the
     needle), an opaque backing box keeps it legible regardless."""
     img = font.render(text, True, color)
-    box = img.get_rect(center=(int(cx), int(cy))).inflate(6, 3)
+    box = img.get_rect(center=(int(cx), int(cy))).inflate(8, 8)
     pygame.draw.rect(surf, (8, 10, 12), box, border_radius=2)
     pygame.draw.rect(surf, EDGE, box, width=1, border_radius=2)
     r._t(text, cx, cy - img.get_height() // 2, font=font, color=color, center=True)
@@ -1294,7 +1320,7 @@ def draw_six_pack(surf, rect, sp, r, baro_inhg=29.92, hdg_bug=None, spd_bug=None
                          (asx + (rad - 5) * math.sin(ba), asy - (rad - 5) * math.cos(ba)),
                          (asx + (rad + 3) * math.sin(ba), asy - (rad + 3) * math.cos(ba)), 3)
     _needle(surf, asx, asy, math.degrees(_as_ang(spd)), rad - 6, WHITE, 2, back=rad * 0.25)
-    r.lcd(f"{spd:.0f}", asx, asy + rad * 0.34, color=CYAN, center=True)
+    _windowed_text(surf, asx, asy + rad * 0.34, f"{spd:.0f}", r.f_lcd, CYAN, r)
     if spd_bug:
         _windowed_text(surf, asx, asy - rad * 0.52, f"bug {spd_bug:.0f}", r.f_sm, CYAN, r)
 
@@ -1307,11 +1333,19 @@ def draw_six_pack(surf, rect, sp, r, baro_inhg=29.92, hdg_bug=None, spd_bug=None
     alt = pa + (baro_inhg - 29.92) * 1000.0             # ~1000 ft / inHg
     _needle(surf, alx, aly, (alt % 1000) / 1000 * 360, rad - 6, WHITE, 3, back=rad * 0.2)
     _needle(surf, alx, aly, (alt % 10000) / 10000 * 360, rad * 0.6, WHITE, 2, back=rad * 0.2)
-    r.lcd(f"{alt:.0f}", alx, aly + rad * 0.34, color=CYAN, center=True)
+    _windowed_text(surf, alx, aly + rad * 0.34, f"{alt:.0f}", r.f_lcd, CYAN, r)
     _windowed_text(surf, alx, aly - rad * 0.52, f"{baro_inhg:.2f}", r.f_sm, AMBER, r)
 
-    # turn coordinator: little wings banked by turn rate; slip ball
+    # turn coordinator: little wings banked by turn rate; slip ball. The
+    # "2 MIN" doghouse reference marks sit at the wing angle (wa) a standard-
+    # rate turn (3 deg/s) produces in this same wa = f(turn_rate) mapping, so
+    # a pilot flying standard rate sees the wingtip align with the marks.
     _dial(surf, tcx, tcy, rad, ticks=4)
+    std_wa = math.radians(20.0)                        # wa at tr == 3 deg/s (standard rate)
+    for sgn in (-1, 1):
+        wx = tcx + sgn * math.cos(std_wa) * (rad - 8)
+        wy = tcy + math.sin(std_wa) * (rad - 8)
+        pygame.draw.line(surf, DIM, (wx - sgn * 5, wy - 4), (wx + sgn * 5, wy + 4), 2)
     tr = getattr(sp, "turn_rate_dps", 0.0)
     wa = math.radians(_clamp(tr / 3.0, -1.5, 1.5) * 20.0)
     dx, dy = math.cos(wa) * (rad - 8), math.sin(wa) * (rad - 8)
@@ -1340,13 +1374,19 @@ def draw_six_pack(surf, rect, sp, r, baro_inhg=29.92, hdg_bug=None, spd_bug=None
             (bx - px * 6 - math.sin(a) * 5, by - py * 6 + math.cos(a) * 5),
             (bx + px * 6 - math.sin(a) * 5, by + py * 6 + math.cos(a) * 5),
             (bx + px * 6, by + py * 6), (bx - px * 6, by - py * 6)])
-    r.lcd(f"{hd:03.0f}", hdx, hdy + rad * 0.3, color=WHITE, center=True)
+    # fixed ownship symbol - the card rotates under it, the little airplane
+    # (nose up, wings level) never moves, same as a real directional gyro.
+    pygame.draw.line(surf, WHITE, (hdx, hdy - rad * 0.22), (hdx, hdy + rad * 0.12), 2)
+    pygame.draw.line(surf, WHITE, (hdx - rad * 0.24, hdy), (hdx + rad * 0.24, hdy), 3)
+    pygame.draw.line(surf, WHITE, (hdx - rad * 0.09, hdy + rad * 0.14),
+                     (hdx + rad * 0.09, hdy + rad * 0.14), 2)
+    _windowed_text(surf, hdx, hdy + rad * 0.3, f"{hd:03.0f}", r.f_lcd, WHITE, r)
 
     # VSI: 0 at 9 o'clock (270 deg), +/-2000 fpm over +/-160 deg
     _dial(surf, vsx, vsy, rad)
     vs = _clamp(getattr(sp, "vsi_fpm", 0.0), -2000, 2000)
     _needle(surf, vsx, vsy, 270 + vs / 2000 * 160, rad - 6, WHITE, 2, back=rad * 0.2)
-    r.lcd(f"{vs:.0f}", vsx, vsy + rad * 0.34, color=CYAN, center=True)
+    _windowed_text(surf, vsx, vsy + rad * 0.34, f"{vs:.0f}", r.f_lcd, CYAN, r)
 
     for (lx, ly), lab in zip(centers, labels):
         r._t(lab, lx, ly - rad - 12, font=r.f_sm, color=DIM, center=True)
@@ -1461,12 +1501,14 @@ def _vor_cdi_face(surf, cx, cy, rad, course_deg, deflection, valid, color,
         nx = cx + _clamp(deflection, -1, 1) * rad * 0.56
         pygame.draw.line(surf, color, (nx, cy - rad * 0.60), (nx, cy + rad * 0.60), 4)
         if not is_loc and to_from in ("TO", "FROM"):
+            # Pilot's Guide sec.1: "the TO/FROM arrow in the CENTER of the
+            # scale" - a fixed mark at the scale's own center (cx), not
+            # offset to one side, so on course it overlaps the needle
+            # instead of permanently sitting apart from it
             up = to_from == "TO"
             ty = cy - rad * 0.34 if up else cy + rad * 0.34
-            pts = ([(cx + rad * 0.30, ty - 9), (cx + rad * 0.30 - 8, ty + 5),
-                    (cx + rad * 0.30 + 8, ty + 5)] if up else
-                   [(cx + rad * 0.30, ty + 9), (cx + rad * 0.30 - 8, ty - 5),
-                    (cx + rad * 0.30 + 8, ty - 5)])
+            pts = ([(cx, ty - 9), (cx - 8, ty + 5), (cx + 8, ty + 5)] if up else
+                   [(cx, ty + 9), (cx - 8, ty - 5), (cx + 8, ty - 5)])
             pygame.draw.polygon(surf, color, pts)
     elif r is not None:                              # OFF / NAV flag
         pygame.draw.rect(surf, (66, 40, 40), (int(cx - 18), int(cy - 9), 36, 18))
@@ -1565,19 +1607,29 @@ def draw_hsi_head(surf, rect, nh, panel, label, r, radius=None, t=0.0):
 
 def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
     """An S-TEC Fifty Five X style programmer: RDY lamp, HDG/NAV/APR/REV/ALT/VS
-    button row, a VS window, GPSS / GS / TRIM annunciators. ``ias_bug`` (kt) is
-    the trainer's pseudo speed-manager set-point, shown when the pilot has set it."""
-    _panel_box(surf, rect, "", r)
+    button row, a VS window, GPSS / GS / TRIM annunciators - in its own box,
+    matching the real unit's faceplate. The heading bug (lives on the DG/HSI,
+    not the 55X), the altitude preselect (a separate Altitude Selector/Alerter
+    accessory box on the real aircraft), and ``ias_bug`` (the trainer's own
+    invented pseudo speed-manager set-point, not a real 55X feature at all)
+    are avionics/instrument info, not part of the AP programmer - they get
+    their own box to the right rather than crowding onto the 55X's face."""
+    info_w = min(190, rect.w * 0.24)
+    ap_rect = pygame.Rect(rect.x, rect.y, rect.w - info_w - 8, rect.h)
+    info_rect = pygame.Rect(ap_rect.right + 8, rect.y, info_w, rect.h)
+
+    _panel_box(surf, ap_rect, "", r)
+    _panel_box(surf, info_rect, "", r)
     if ap is None:
-        r._t("no autopilot", rect.centerx, rect.centery, font=r.f_sm, color=DIM, center=True)
+        r._t("no autopilot", ap_rect.centerx, ap_rect.centery, font=r.f_sm,
+             color=DIM, center=True)
         return
-    on = getattr(ap, "engaged", False)
-    y = rect.y + 8
+    y = ap_rect.y + 8
 
     # RDY lamp
     ready = getattr(ap, "ready", False)
-    r._t("S-TEC 55X", rect.x + 10, y, font=r.f_sm, color=DIM)
-    rl = pygame.Rect(rect.x + 10, y + 16, 42, 18)
+    r._t("S-TEC 55X", ap_rect.x + 10, y, font=r.f_sm, color=DIM)
+    rl = pygame.Rect(ap_rect.x + 10, y + 16, 42, 18)
     pygame.draw.rect(surf, GPS_GREEN if ready else (40, 44, 48), rl, border_radius=3)
     r._t("RDY", rl.centerx, rl.y + 2, font=r.f_sm,
          color=(0, 0, 0) if ready else DIM, center=True)
@@ -1596,7 +1648,7 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
              color=c if (lit or armed) else DIM, center=True)
         bx[0] = box.right + 5
 
-    bx = [rect.x + 92]
+    bx = [ap_rect.x + 92]
     key("HDG", lat == "HDG", alat == "HDG")
     key("NAV", lat == "NAV", alat == "NAV")
     key("APR", lat == "APR", alat == "APR")
@@ -1604,21 +1656,17 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
     key("ALT", vert == "ALT", False)
     key("VS", vert == "VS", False)
 
-    # centre block: VS window + HDG bug (pulled in from the right edge so the
-    # wide panel does not look empty); annunciators + ALT SEL keep the far right.
-    # VS's label sits further back than HDG's (rcol - 150, not rcol - 96): the
-    # DSEG7 LCD font reserves a full digit-width slot for '-', so a descent
-    # rate right-aligns as 5 characters wide ("-1500") and the sign lands
-    # right on top of a closer label.
-    rcol = min(rect.right - 12, rect.x + 560)
-    r._t("VS", rcol - 150, y + 2, font=r.f_sm, color=DIM)
-    r.lcd(f"{getattr(ap, 'vs_target', 0):.0f}", rcol, y, big=True,
+    # VS window, right after the mode-button row (not pinned to the box's
+    # far right edge - the box is wide, and anchoring the readout that far
+    # away just leaves a dead gap between the buttons and the numbers). The
+    # digit slot is reserved wide enough for the DSEG7 LCD font's widest
+    # case ("-1500", 5 glyphs incl. its full-width '-' slot) so the label
+    # stays a fixed, small gap clear of the digits at any VS value.
+    vlab = bx[0] + 14
+    vcol = vlab + 16 + 8 + 95           # label width + gap + max digit width
+    r._t("VS", vlab, y + 2, font=r.f_sm, color=DIM)
+    r.lcd(f"{getattr(ap, 'vs_target', 0):.0f}", vcol, y, big=True,
           color=GPS_GREEN if vert in ("VS", "GS") else DIM, right=True)
-    # "HDG" not "HDG BUG": the fuller label ran into the LCD digits it's
-    # labelling at this column width (rcol - 96 leaves only enough room for
-    # something "VS"-sized on the line above).
-    r._t("HDG", rcol - 96, y + 26, font=r.f_sm, color=DIM)
-    r.lcd(f"{getattr(ap, 'heading_bug', 0):03.0f}", rcol, y + 25, color=CYAN, right=True)
 
     ann = []
     if getattr(ap, "gpss", False) and lat in ("NAV", "APR"):
@@ -1630,15 +1678,22 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
     tr = getattr(ap, "trim", 0)
     if tr:
         ann.append((f"TRIM {'UP' if tr > 0 else 'DN'}", AMBER))
-    ax = rect.x + 92
+    ax = ap_rect.x + 92
     for text, col in ann:
         rr = r._t(text, ax, y + 36, font=r.f_sm, color=col)
         ax = rr.right + 10
-    r._t(f"ALT SEL {getattr(ap, 'alt_preselect', 0):.0f}", rcol, y + 44,
-         font=r.f_sm, color=DIM, right=True)
+
+    # -- info box: not part of the 55X itself --------------------------
+    iy = info_rect.y + 6
+    pitch = 17
+    icol = info_rect.right - 10
+    r._t("HDG BUG", info_rect.x + 10, iy, font=r.f_sm, color=DIM)
+    r.lcd(f"{getattr(ap, 'heading_bug', 0):03.0f}", icol, iy - 1, color=CYAN, right=True)
+    r._t("ALT SEL", info_rect.x + 10, iy + pitch, font=r.f_sm, color=DIM)
+    r.lcd(f"{getattr(ap, 'alt_preselect', 0):.0f}", icol, iy + pitch - 1, color=TEXT, right=True)
     if ias_bug:
-        r._t(f"IAS SET {ias_bug:.0f}", rcol - 150, y + 44, font=r.f_sm,
-             color=CYAN, right=True)
+        r._t("IAS SET", info_rect.x + 10, iy + pitch * 2, font=r.f_sm, color=DIM)
+        r.lcd(f"{ias_bug:.0f}", icol, iy + pitch * 2 - 1, color=CYAN, right=True)
 
 
 def draw_radio_strip(surf, rect, radios, gns, r, *, selector_mode="", shift_mode="", t=0.0):

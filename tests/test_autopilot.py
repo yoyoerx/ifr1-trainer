@@ -57,21 +57,53 @@ def test_hdg_button_engages_and_flies_the_bug_true():
 # --------------------------------------------------------------------------- #
 # NAV / GPSS
 # --------------------------------------------------------------------------- #
-def test_nav_arms_then_captures():
+def test_nav_engages_and_intercepts_immediately():
+    """S-TEC 55X POH sec.4.2.2: 'the turn will always begin between 100%
+    (full-scale) needle deflection and 20% of full-scale' - NAV steers an
+    active intercept from the moment it's pressed, not after waiting for
+    the needle to already be centered (no wings-level dead zone)."""
     ap = Autopilot()
     ap.press_nav()
-    assert ap.armed_lat is Lat.NAV and ap.lateral is Lat.LVL
-    ap.update(Nav(dtk=360.0, xtk=6.0), Own(), 0.0)
-    assert ap.lateral is Lat.LVL                       # still armed, needle not alive
+    assert ap.lateral is Lat.NAV and ap.armed_lat is Lat.NAV   # engaged, not yet captured
+    cmd = ap.update(Nav(dtk=360.0, xtk=6.0), Own(heading=90.0), 0.0)
+    assert cmd.heading != pytest.approx(90.0)                  # actively cutting toward course
+    assert ap.armed_lat is Lat.NAV                              # needle still not alive
     ap.update(Nav(dtk=360.0, xtk=0.5), Own(), 0.0)
-    assert ap.lateral is Lat.NAV and ap.armed_lat is None
+    assert ap.lateral is Lat.NAV and ap.armed_lat is None       # captured
 
 
-def test_nav_press_again_cancels():
+def test_nav_trims_out_steady_crosswind_offset():
+    """A pure proportional xtk loop settles at a nonzero cross-track offset
+    under any steady crosswind (the intercept angle has to equal the wind
+    correction angle to hold track, which only happens once xtk itself is
+    offset by -WCA/gain) - the AP would visibly never settle onto the
+    course. The integral trim should walk xtk back toward zero over time
+    even against a constant simulated drift that keeps pushing it off."""
+    from navmath import angle_diff
     ap = Autopilot()
     ap.press_nav()
+    xtk = 0.0
+    drift_per_s = 0.1                    # a stand-in constant crosswind drift
+    for _ in range(900):                 # ample time for the trim to wind in
+        cmd = ap.update(Nav(dtk=180.0, xtk=xtk), Own(), 0.0, dt=1.0)
+        intercept = angle_diff(cmd.heading, 180.0)   # + = cutting toward the right
+        # toy plant: flying right of track (+intercept) drifts xtk further
+        # right over time; the simulated crosswind adds a constant push
+        xtk += intercept * 0.02 + drift_per_s
+    assert abs(xtk) < 0.3
+
+
+def test_nav_press_again_engages_gpss():
+    """S-TEC 55X POH sec.4.2.5: 'To enter the GPSS Mode, push the NAV button
+    twice... To delete the GPSS function, push the NAV button again' - NAV
+    mode itself stays engaged through both presses."""
+    ap = Autopilot()
     ap.press_nav()
-    assert ap.armed_lat is None and ap.lateral is Lat.LVL
+    assert not ap.gpss
+    ap.press_nav()
+    assert ap.lateral is Lat.NAV and ap.gpss
+    ap.press_nav()
+    assert ap.lateral is Lat.NAV and not ap.gpss
 
 
 def test_gpss_tightens_nav_tracking():

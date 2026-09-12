@@ -1,6 +1,6 @@
 """main.py - wire the trainer together and run the loop.
 
-    python main.py --plan "KBOS BOS PVD KJFK" --wind 300/25
+    python main.py --plan "KBOS PVD KJFK" --wind 300/25
     python main.py --no-device            # keyboard-fly (no IFR-1 needed)
     python main.py --layout steam         # start on the steam-gauge panel
     python main.py --xplane-feed          # take live ownship position from a running X-Plane
@@ -31,6 +31,9 @@ IFR-1 mode-selector routing (`route_event`):
     COM1  normal knob=MHz/kHz + SWAP flip;  shift: knob=heading bug
     COM2  normal knob=MHz/kHz + SWAP flip;  shift: knob=altimeter setting
     NAV1/2 normal knob=MHz/kHz + SWAP flip; shift: knob turns the OBS/CRS card
+          (NAV1's CRS knob is also the "external OBS selector" the Pilot's
+           Guide refers to - with CDI source GPS and OBS mode on, it sets
+           the GPS's own OBS course too, not just NAV1's VOR/ILS course)
     XPDR  normal inner=digit value, outer=digit select (underlined);
           SWAP=IDENT pulse;  shift: knob=transponder mode
   AP         outer=ALT select (100 ft), inner=VS (100 fpm); AP-row buttons=modes
@@ -54,6 +57,8 @@ Keyboard (works alongside or instead of the IFR-1; "Shift+x" = hold Shift):
                   drive - FMS1 or FMS2; an annunciator shows "KBD FMS2"
   Radios / autopilot
     o O           NAV1 OBS -/+              k p   NAV2 OBS -/+
+                  (also sets the GPS's OBS course when CDI source=GPS and
+                   OBS mode is on - see the NAV1 shift note above)
     H             NAV1 CDI<->HSI            F11   COM1 emergency 121.5
     A             AP master
     F1 F2 F3 F4 F5 F6   HDG NAV APR REV ALT VS
@@ -216,7 +221,14 @@ def _initial_position(db, gns):
     wps = gns.fpl.waypoints
     if len(wps) >= 2:
         brg = initial_bearing(wps[0].pos, wps[1].pos)
-        return destination(wps[0].pos, brg, 2.0), brg
+        # 2.0 nm out along the departure bearing - but never past the first
+        # waypoint itself. A short first leg (e.g. an airport with a VOR of
+        # the same name sitting under a mile away, like KBOS -> BOS) would
+        # otherwise place ownship beyond the leg's own endpoint, so the GPS
+        # sequences past it before the sim has even taken its first step.
+        leg_nm = great_circle_nm(wps[0].pos, wps[1].pos)
+        off_nm = min(2.0, leg_nm * 0.5)
+        return destination(wps[0].pos, brg, off_nm), brg
     if wps:
         return wps[0].pos, 0.0
     apt = db.airport("KBOS") or next(iter(db.airports.values()), None)
@@ -445,7 +457,7 @@ class World:
 
         if self.ap.engaged:
             cmd = self.ap.update(
-                nav, st, self.magvar,
+                nav, st, self.magvar, dt=dt,
                 vloc_course_deg=self.radios.nav1.course_deg,
                 vloc_deflection=n1.deflection, vloc_valid=n1.valid,
                 gs_deflection=n1.gs_deflection, gs_valid=n1.gs_valid,
@@ -724,6 +736,14 @@ def route_event(ev, w: World) -> None:
                 radio.turn_obs(outer * 10)
             if inner:
                 radio.turn_obs(inner)
+            # Pilot's Guide: "When OBS mode is selected, the pilot may set
+            # the desired course... using the Select OBS Course pop-up
+            # window, OR AN EXTERNAL OBS SELECTOR ON THE HSI OR CDI" - this
+            # knob (NAV1's CRS selector) is that external selector, so it
+            # also drives the GPS's own OBS course whenever GPS-source OBS
+            # is active (NAV2's knob only ever sets its own VOR/ILS course).
+            if m == Mode.NAV1 and w.gns.obs_active and w.gns.cdi_source == "GPS":
+                w.gns.set_obs(radio.obs_deg)
         else:
             if outer:
                 radio.tune(mhz=outer)
@@ -1018,6 +1038,38 @@ def _on_key(e, w: World, ui: dict) -> None:
             dlg.scroll_char(-1)
         return
 
+    fed = getattr(g, "_fpl_edit", None)
+    fbuf = fed.get("buf") if fed else None
+    if fbuf is not None:                      # editing a waypoint identifier on the FPL page
+        if k == pygame.K_ESCAPE or k == pygame.K_BACKSPACE:
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+        elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+        elif k == pygame.K_LEFT:
+            fbuf.move_cursor(-1)
+        elif k == pygame.K_RIGHT:
+            fbuf.move_cursor(1)
+        elif k == pygame.K_UP:
+            fbuf.scroll_char(1)
+        elif k == pygame.K_DOWN:
+            fbuf.scroll_char(-1)
+        return
+    if fed is not None:                       # FPL page, CRSR on, no row open yet: Up/Down pick the row
+        if k == pygame.K_UP:
+            g.handle_event(Event(mode=Mode.FMS1, outer=-1))
+            return
+        elif k == pygame.K_DOWN:
+            g.handle_event(Event(mode=Mode.FMS1, outer=1))
+            return
+        elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+            return
+        elif k == pygame.K_BACKSPACE:
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+            return
+        # anything else (TAB to drop CRSR, ESC to quit, ...) falls through
+        # to the normal keymap below
+
     if k == pygame.K_ESCAPE:
         ui["running"] = False
     elif k == pygame.K_LEFT:
@@ -1086,6 +1138,8 @@ def _on_key(e, w: World, ui: dict) -> None:
         w.ap.turn_vs_knob(1)
     elif k == pygame.K_o:
         w.radios.nav1.turn_obs(1 if shift else -1)
+        if w.gns.obs_active and w.gns.cdi_source == "GPS":     # see the NAV1/CRS branch above
+            w.gns.set_obs(w.radios.nav1.obs_deg)
     elif k == pygame.K_k:
         w.radios.nav2.turn_obs(-1)
     elif k == pygame.K_p:
