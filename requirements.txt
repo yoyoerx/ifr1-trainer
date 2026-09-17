@@ -1,3 +1,5 @@
 # Octavi IFR-1 trainer - runtime deps
 hidapi==0.15.0      # cython-hidapi: talks to the IFR-1 over USB HID (imports as `hid`)
 pygame-ce==2.5.3    # rendering (community edition; drop-in for pygame)
+pypdfium2==5.13.0   # PDF->image rasterization for the "stack" layout's PLATE tab
+                    # (pure wheel, MIT-licensed - no system poppler needed)

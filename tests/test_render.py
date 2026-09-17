@@ -1201,10 +1201,12 @@ def test_on_key_page_keys_follow_the_toggled_keyboard_fms_unit(db):
 
 def test_next_layout_cycles_and_resets_from_unknown():
     assert main_mod._next_layout("gps", dual=False) == "steam"
-    assert main_mod._next_layout("steam", dual=False) == "gps"
+    assert main_mod._next_layout("steam", dual=False) == "stack"
+    assert main_mod._next_layout("stack", dual=False) == "gps"
     assert main_mod._next_layout("dual", dual=False) == "gps"      # not offered -> reset
     assert main_mod._next_layout("gps", dual=True) == "steam"
-    assert main_mod._next_layout("steam", dual=True) == "dual"
+    assert main_mod._next_layout("steam", dual=True) == "stack"
+    assert main_mod._next_layout("stack", dual=True) == "dual"
     assert main_mod._next_layout("dual", dual=True) == "gps"
 
 
@@ -1236,3 +1238,96 @@ def test_dual_layout_without_a_second_unit_falls_back_to_single(db):
               magvar=-13.0, layout="dual", gns2=None)
     surf = pygame.display.get_surface()
     Renderer(surf).draw(sc)                                # must not raise
+
+
+# --------------------------------------------------------------------------- #
+# "stack" layout - single-page IFR panel (see WORKING.md/ARCHITECTURE.md sec.8)
+# --------------------------------------------------------------------------- #
+def _stack_scene(w, db, *, gns2=None, stack_tab="WX"):
+    nav = w.gns.update(Point(40.1, -74.0), 0.0, 120.0)
+    own_i = instr.Ownship(Point(40.1, -74.0), 0.0, 0.0, 120.0, 5000.0, -13.0)
+    panel = instr.compute_panel(own_i, nav)
+    sp = instr.six_pack(own_i, -13.0)
+    n1 = instr.nav_head(w.radios.nav1, own_i.pos, own_i.altitude_ft, own_i.gs_kt, -13.0)
+    n2 = instr.nav_head(w.radios.nav2, own_i.pos, own_i.altitude_ft, own_i.gs_kt, -13.0)
+    return Scene(own=w.sim.state, nav=nav, panel=panel, gns=w.gns, db=db, magvar=-13.0,
+                layout="stack", gns2=gns2, sixpack=sp, nav1_head=n1, nav2_head=n2,
+                ap=w.ap, radios=w.radios, ias_target=w.ias_target,
+                ias_managed=w._ias_managed, stack_tab=stack_tab,
+                wind_from_deg=w.sim.wind_from, wind_kt=w.sim.wind_kt)
+
+
+def test_stack_layout_draws_all_columns_single_unit(db):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    sc = _stack_scene(w, db)
+    r = Renderer(surf)
+    r.draw(sc)                                             # must not raise
+    arr = pygame.surfarray.array2d(surf)
+    assert arr.any()
+    # tab bar + AP bug boxes registered their click rects
+    assert {"tab:WX", "tab:MAP", "tab:PLATE", "tab:SETTINGS"} <= r._stack_hit.keys()
+    assert "bug:hdg:+" in r._stack_hit and "bug:alt:-" in r._stack_hit
+
+
+def test_stack_layout_draws_with_a_second_unit(db):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _dual_world(db)
+    sc = _stack_scene(w, db, gns2=w.gns2)
+    Renderer(surf).draw(sc)                                # must not raise
+
+
+@pytest.mark.parametrize("tab", ["WX", "MAP", "PLATE", "SETTINGS"])
+def test_stack_layout_draws_every_tab(db, tab):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    sc = _stack_scene(w, db, stack_tab=tab)
+    Renderer(surf).draw(sc)                                # must not raise, any tab selected
+
+
+def _click(x, y):
+    return pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(x, y))
+
+
+def test_stack_click_switches_tabs(db):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, db, stack_tab="WX"))
+    ui = {"layout": "stack", "stack_tab": "WX"}
+    plate_rect = r._stack_hit["tab:PLATE"]
+    main_mod._on_stack_click(_click(*plate_rect.center), w, ui, r)
+    assert ui["stack_tab"] == "PLATE"
+
+
+def test_stack_click_adjusts_heading_bug_and_alt_preselect(db):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, db))
+    ui = {"layout": "stack", "stack_tab": "WX"}
+    hdg0 = w.ap.heading_bug
+    alt0 = w.ap.alt_preselect
+    main_mod._on_stack_click(_click(*r._stack_hit["bug:hdg:+"].center), w, ui, r)
+    main_mod._on_stack_click(_click(*r._stack_hit["bug:alt:-"].center), w, ui, r)
+    assert w.ap.heading_bug == pytest.approx((hdg0 + 5) % 360)
+    assert w.ap.alt_preselect == alt0 - 100.0
+
+
+def test_stack_click_adjusts_wind_and_time_warp(db):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, db, stack_tab="SETTINGS"))
+    ui = {"layout": "stack", "stack_tab": "SETTINGS", "time_warp": 1}
+    wind0 = w.sim.wind_kt
+    main_mod._on_stack_click(_click(*r._stack_hit["wind_kt:+"].center), w, ui, r)
+    assert w.sim.wind_kt == wind0 + 5
+    main_mod._on_stack_click(_click(*r._stack_hit["warp:10"].center), w, ui, r)
+    assert ui["time_warp"] == 10

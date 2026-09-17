@@ -13,6 +13,7 @@ authors = [{ name = "yoyoerx" }]
 keywords = ["aviation", "ifr", "gns530", "octavi", "flight-simulator", "training"]
 dependencies = [
     "pygame-ce==2.5.3",
+    "pypdfium2==5.13.0",   # PDF->image rasterization, "stack" layout's PLATE tab only
 ]
 
 [project.urls]

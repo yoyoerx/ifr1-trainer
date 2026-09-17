@@ -64,7 +64,7 @@ Keyboard (works alongside or instead of the IFR-1; "Shift+x" = hold Shift):
     F1 F2 F3 F4 F5 F6   HDG NAV APR REV ALT VS
     g             GPSS toggle                9 0   AP VS knob -/+
   View / session
-    L             layout (gps -> steam -> gps, or -> dual too with --dual)
+    L             layout (gps -> steam -> stack -> gps, or -> dual too with --dual)
     1 2 3 4       time warp 1x/5x/10x/20x (see TIME_WARP_LEVELS)
     ESC           quit
 """
@@ -177,7 +177,7 @@ def parse_args(argv=None) -> Config:
                    default=S, help="winds-aloft refresh interval in minutes (default: 60)")
     p.add_argument("--tas", default=S)
     p.add_argument("--altitude", default=S)
-    p.add_argument("--layout", default=S, choices=("gps", "steam", "dual"))
+    p.add_argument("--layout", default=S, choices=("gps", "steam", "stack", "dual"))
     p.add_argument("--unit", default=S, choices=("530", "430"),
                    help="GPS unit to model (GNS 530 or GNS 430) - the FMS1 unit in --dual")
     p.add_argument("--dual", action="store_true", default=S,
@@ -617,11 +617,12 @@ def _clamp(v, lo, hi):
 
 
 def _next_layout(current: str, *, dual: bool) -> str:
-    """`L` key: cycle gps -> steam -> gps, or gps -> steam -> dual -> gps
-    when a second FMS unit (`--dual`) is present. An unrecognised starting
-    value (e.g. `--layout dual` without `--dual`, so `dual` isn't offered
-    here) resets to the front of the cycle rather than raising."""
-    cycle = ("gps", "steam", "dual") if dual else ("gps", "steam")
+    """`L` key: cycle gps -> steam -> stack -> gps, or gps -> steam -> stack
+    -> dual -> gps when a second FMS unit (`--dual`) is present. An
+    unrecognised starting value (e.g. `--layout dual` without `--dual`, so
+    `dual` isn't offered here) resets to the front of the cycle rather than
+    raising."""
+    cycle = ("gps", "steam", "stack", "dual") if dual else ("gps", "steam", "stack")
     if current not in cycle:
         return cycle[0]
     return cycle[(cycle.index(current) + 1) % len(cycle)]
@@ -814,18 +815,22 @@ def run(cfg: Config) -> int:
         except Exception as exc:               # noqa: BLE001 - device is optional
             print(f"IFR-1 not opened ({exc}); keyboard control only.")
 
+    from render import STACK_W, STACK_H, WIN_W, WIN_H
+
     pygame.init()
-    screen = pygame.display.set_mode((1000, 640))
+    screen = pygame.display.set_mode(
+        (STACK_W, STACK_H) if cfg.layout == "stack" else (WIN_W, WIN_H))
     pygame.display.set_caption("Octavi IFR-1 trainer")
     renderer = Renderer(screen)
     clock = pygame.time.Clock()
 
     ui = {"layout": cfg.layout, "map_range": 20.0, "nav1_hsi": False, "running": True,
-          "time_warp": cfg.time_warp}
+          "time_warp": cfg.time_warp, "stack_tab": "WX"}
     frames = 0
     nearby: list = []
     last_pos = None
     last_leds = -1
+    last_layout = ui["layout"]
 
     while ui["running"]:
         dt = min(clock.tick(30) / 1000.0, 0.1)
@@ -835,6 +840,18 @@ def run(cfg: Config) -> int:
                 ui["running"] = False
             elif e.type == pygame.KEYDOWN:
                 _on_key(e, w, ui)
+            elif e.type == pygame.MOUSEBUTTONDOWN and ui["layout"] == "stack":
+                _on_stack_click(e, w, ui, renderer)
+
+        # `stack` is the only layout that needs meaningfully more screen than
+        # the other three comfortably share (1000x640) - resize only on an
+        # actual layout change, not every frame, so a manual window resize by
+        # the user isn't fought every tick.
+        if ui["layout"] != last_layout:
+            screen = pygame.display.set_mode(
+                (STACK_W, STACK_H) if ui["layout"] == "stack" else (WIN_W, WIN_H))
+            renderer.surf = screen
+            last_layout = ui["layout"]
 
         if device is not None:
             for ev in device.poll():
@@ -893,6 +910,7 @@ def run(cfg: Config) -> int:
             nav1_hsi=ui["nav1_hsi"], ap=w.ap, radios=w.radios,
             ias_target=w.ias_target, ias_managed=w._ias_managed, t=w.t,
             time_warp=warp, gns2=w.gns2,
+            stack_tab=ui["stack_tab"], wind_from_deg=w.sim.wind_from, wind_kt=w.sim.wind_kt,
         ))
         pygame.display.flip()
 
@@ -982,6 +1000,113 @@ def _open_selected_chart(w: World, gns=None) -> None:
 
     g.messages.append(f"OPENING CHART for {ident}...")
     threading.Thread(target=worker, daemon=True).start()
+
+
+def _open_stack_plate(w: World, renderer, gns=None) -> None:
+    """PLATE tab (``stack`` layout only): fetch (if not already cached) the
+    same AUX>Charts selection and rasterize page 1 inline with `pypdfium2`,
+    instead of `_open_selected_chart`'s hand-off to the OS's PDF viewer -
+    the "stack" layout's one real PDF behavior change (see WORKING.md).
+    Runs off the main thread, same reasoning as `_open_selected_chart`;
+    writes into ``renderer._plate_cache``/``_plate_loading``/``_plate_error``,
+    which `Renderer._draw_stack_plate` only ever reads."""
+    g = gns if gns is not None else w.gns
+    idents = g.wx_station_idents()
+    if not idents:
+        return
+    ai = max(0, min(len(idents) - 1, g.chart_airport_sel))
+    ident = idents[ai]
+    chart_sel = g.chart_sel
+
+    def worker() -> None:
+        pdf_name = None
+        try:
+            from datasrc import dtpp
+            from datasrc.airac import current_cycle
+            root = dtpp.default_data_root()
+            cycle = current_cycle()
+            records = dtpp.load_index(root, cycle)
+            if records is None:
+                g.messages.append("NO CHART INDEX - datasrc.dtpp update-index")
+                return
+            charts = dtpp.charts_for_airport(records, ident)
+            if not charts:
+                g.messages.append(f"NO CHARTS FOR {ident}")
+                return
+            chart = charts[max(0, min(len(charts) - 1, chart_sel))]
+            pdf_name = chart.pdf_name
+            renderer._plate_loading.add(pdf_name)
+            path = dtpp.fetch_and_cache_chart(root, cycle, pdf_name)
+
+            import pygame
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(str(path))
+            try:
+                page = pdf[0]
+                bitmap = page.render(scale=150 / 72, rev_byteorder=True)
+                try:
+                    fmt = "RGBA" if bitmap.n_channels == 4 else "RGB"
+                    # .copy() (not .convert(), which touches the display) -
+                    # this runs off the main thread and only needs its own
+                    # backing buffer, not a display-format conversion
+                    surf = pygame.image.frombuffer(
+                        bytes(bitmap.buffer), (bitmap.width, bitmap.height), fmt).copy()
+                finally:
+                    bitmap.close()
+            finally:
+                pdf.close()
+            renderer._plate_cache[pdf_name] = surf
+            renderer._plate_error.pop(pdf_name, None)
+        except Exception as exc:                  # noqa: BLE001 - background, must not die
+            if pdf_name:
+                renderer._plate_error[pdf_name] = str(exc)
+            g.messages.append(f"PLATE LOAD FAILED: {exc}")
+        finally:
+            if pdf_name:
+                renderer._plate_loading.discard(pdf_name)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _on_stack_click(e, w: World, ui: dict, renderer) -> None:
+    """MOUSEBUTTONDOWN routing for the `stack` layout - the only layout with
+    any mouse surface. `Renderer._stack_layout` rebuilds `renderer._stack_hit`
+    (rect name -> pygame.Rect) every frame; this just hit-tests the click
+    against it and applies whichever control was hit."""
+    if e.button != 1:
+        return
+    pos = e.pos
+    for name, rect in renderer._stack_hit.items():
+        if not rect.collidepoint(pos):
+            continue
+        if name.startswith("tab:"):
+            ui["stack_tab"] = name.split(":", 1)[1]
+        elif name.startswith("warp:"):
+            ui["time_warp"] = int(name.split(":", 1)[1])
+        elif name == "wind_dir:+":
+            w.sim.set_wind(w.sim.wind_from + 10, w.sim.wind_kt)
+        elif name == "wind_dir:-":
+            w.sim.set_wind(w.sim.wind_from - 10, w.sim.wind_kt)
+        elif name == "wind_kt:+":
+            w.sim.set_wind(w.sim.wind_from, max(0.0, w.sim.wind_kt + 5))
+        elif name == "wind_kt:-":
+            w.sim.set_wind(w.sim.wind_from, max(0.0, w.sim.wind_kt - 5))
+        elif name == "bug:hdg:+":
+            w.ap.turn_heading_bug(5)
+        elif name == "bug:hdg:-":
+            w.ap.turn_heading_bug(-5)
+        elif name == "bug:ias:+":
+            w.set_ias_target(w.ias_target + _IAS_STEP_KT)
+        elif name == "bug:ias:-":
+            w.set_ias_target(w.ias_target - _IAS_STEP_KT)
+        elif name == "bug:alt:+":
+            w.ap.set_preselect(w.ap.alt_preselect + 100.0)
+        elif name == "bug:alt:-":
+            w.ap.set_preselect(w.ap.alt_preselect - 100.0)
+        elif name == "plate:load":
+            g = w.gns2 if (ui.get("kbd_fms2") and w.gns2 is not None) else w.gns
+            _open_stack_plate(w, renderer, gns=g)
+        return
 
 
 def _nearby(db, pos, rng):

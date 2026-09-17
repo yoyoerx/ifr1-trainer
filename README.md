@@ -13,13 +13,14 @@ not real-world navigation.
 
 See `WORKING.md` for the detailed task tracker and `ARCHITECTURE.md` for the map.
 `FINDINGS.md` records the GNS 530 validation against the Garmin Pilot's Guide.
-825 tests passing. The trainer runs:
+834 tests passing. The trainer runs:
 
 ```
 python main.py --plan "KBOS PVD KJFK" --wind 300/25       # 530 + moving map
 python main.py --approach "KLNS I08"                      # CIFP approach: synth legs, SUSP at the MAP, ILS staged to VLOC standby
 python main.py --unit 430                                 # GNS 430 (shorter unit, 5-row screen)
 python main.py --layout steam                             # six-pack + CDIs + autopilot
+python main.py --layout stack                             # one-page IFR panel, mouse-driven (see below)
 python main.py --dual                                     # a 530 on FMS1 + a 430 on FMS2, stacked
 python main.py --no-device                                # hand-fly, keyboard only
 python main.py --xplane-feed                              # take ownship position from X-Plane
@@ -39,8 +40,21 @@ page/fly them separately. `--unit` picks FMS1's unit, `--dual` puts the other
 one on FMS2 (`--unit 530 --dual` -> 530/430; `--unit 430 --dual` -> 430/530).
 Without the IFR-1, `U` toggles which unit the keyboard's GNS-page keys drive
 (an annunciator shows `KBD FMS2` while it's the second unit); `L` also cycles
-through a third layout, `dual`, that draws both units stacked on the left with
-the moving map + HSI (tied to FMS1) on the right.
+through a fourth layout, `dual`, that draws both units stacked on the left
+with the moving map + HSI (tied to FMS1) on the right.
+
+**`--layout stack`** puts everything relevant to instrument flight on one
+page: GNS 530 + GNS 430 (flat vector skin, COM/NAV frequencies annunciated
+inline, same bezel-key/knob input as the other layouts) + transponder + the
+S-TEC 55X programmer in a right-hand column; NAV1/NAV2 as round
+Bendix/King-style CDI+GS+OBS heads plus a standalone heading indicator in the
+middle; and a tabbed WX/MAP/PLATE/SETTINGS reference panel with clickable
+HDG/IAS/ALT autopilot-bug boxes on the left. It's the only layout with mouse
+support - click a tab to switch it, click a bug box's `+`/`-` to edit it. The
+PLATE tab rasterizes the selected AUX>Charts plate inline (`pypdfium2`)
+instead of handing the PDF to the OS viewer; SETTINGS exposes wind and
+time-warp for changing in flight. The window resizes larger while `stack` is
+active and back down when you leave it.
 
 Any long flag can go in a config file instead (`octavi.toml` / `octavi.json` in
 the working dir or `~/.config/octavi-ifr-trainer/`, or `--config PATH`); the
@@ -84,7 +98,8 @@ domain) for ownship magnetic variation. Each origin + licence is logged in the
 - [x] `radios.py` - COM/NAV stack, per-nav OBS, localizer+runway pairing, XPDR
 - [x] `autopilot.py` - S-TEC Fifty Five X style AP (HDG/NAV/APR/REV, GPSS, VS/ALT/GS)
 - [x] `render.py` - "gps" layout (530 + map), "steam" layout (six-pack + CDIs
-      + AP), and "dual" layout (two stacked GNS units + map, for `--dual`)
+      + AP), "dual" layout (two stacked GNS units + map, for `--dual`), and
+      "stack" layout (one-page IFR panel, mouse-driven - see above)
 - [x] `main.py` - ~30 Hz loop; IFR-1 mode selector routing (FMS AP-row -> bezel
       keys, knob-latched per-mode shift, AP-mode ALT/VS knobs); AP-row LEDs follow state
 - [x] GNS 430 variant - `gpsnav.py` core split, `--unit 430`, own faceplate SVG
@@ -203,7 +218,7 @@ hardware at all). This is the full list, straight from `main._on_key`.
 | `↑` / `↓` | Target altitude +500 / −500 ft |
 | `,` / `.` | IAS set-point −5 / +5 kt |
 | `1` `2` `3` `4` | Time warp: 1x / 5x / 10x / 20x |
-| `L` | Cycle layout: gps → steam → gps (→ `dual` too, with `--dual`) |
+| `L` | Cycle layout: gps → steam → stack → gps (→ `dual` too, with `--dual`) |
 | `H` | NAV1 CDI ↔ HSI face |
 
 **GNS 530 pages & flight plan:**

@@ -172,6 +172,13 @@ WIN_W, WIN_H = 1000, 640
 GNS_W = 430                    # left column: the 530 unit
 MAP_MARGIN = 12
 
+# "stack" layout: everything relevant to instrument flight on one page (see
+# WORKING.md's "Active project" section and ARCHITECTURE.md sec.8) - a taller,
+# wider window than the other layouts comfortably need. main.py resizes the
+# window to this only while `stack` is the active layout.
+STACK_W, STACK_H = 1360, 860
+_STACK_TABS = ("WX", "MAP", "PLATE", "SETTINGS")
+
 
 @dataclass
 class Scene:
@@ -207,8 +214,13 @@ class Scene:
     ap: object = None                 # autopilot.Autopilot
     radios: object = None             # radios.RadioStack
 
-    # -- second FMS unit (layout="dual") --
+    # -- second FMS unit (layout="dual" and "stack") --
     gns2: object = None                # gpsnav.GpsNav for FMS2, or None (single-unit)
+
+    # -- stack-panel extras (layout="stack") --
+    stack_tab: str = "WX"             # which left-column tab is showing
+    wind_from_deg: float = 0.0        # World.wind_from, for the SETTINGS tab
+    wind_kt: float = 0.0              # World.wind_kt, for the SETTINGS tab
 
 
 class Renderer:
@@ -231,6 +243,17 @@ class Renderer:
         # lifetime, not re-parsed every frame. None = not tried yet; [] = tried
         # and nothing cached (or a parse error).
         self._dtpp_index: list | None = None
+        # "stack" layout: rects a MOUSEBUTTONDOWN can hit, rebuilt every frame
+        # `_stack_layout` runs - main.py's mouse handler reads this dict right
+        # after `draw()` to route a click (tab / AP-bug +- / etc.) back into
+        # `ui`/`w`. Not populated by any other layout.
+        self._stack_hit: dict[str, pygame.Rect] = {}
+        # PLATE tab: rasterized approach-plate pages, keyed by pdf path ->
+        # pygame.Surface. Populated off-thread by main._open_stack_plate;
+        # `_draw_stack_plate` only ever reads this cache, never fetches.
+        self._plate_cache: dict[str, pygame.Surface] = {}
+        self._plate_loading: set[str] = set()
+        self._plate_error: dict[str, str] = {}
 
     def lcd(self, value, x, y, *, color=GPS_GREEN, big=False, right=False, center=False):
         """Digital readout in the LCD font. `value` must be digits / '.' / ':' / '-'."""
@@ -243,6 +266,8 @@ class Renderer:
         self._annunciator_bar(sc)
         if sc.layout == "steam":
             self._steam_layout(sc)
+        elif sc.layout == "stack":
+            self._stack_layout(sc)
         elif sc.layout == "dual" and sc.gns2 is not None:
             self._dual_layout(sc)
         else:
@@ -270,6 +295,228 @@ class Renderer:
         self._gns_unit(sc2, box=(x0, y0 + h1 + gap, w, h2))
         self._map(sc)
         self._hsi(sc)
+
+    # -- "stack" layout: everything relevant to IFR flight, one page -------
+    def _stack_layout(self, sc: Scene) -> None:
+        """Three columns (see WORKING.md's "Active project" section /
+        ARCHITECTURE.md sec.8 for the full design record):
+
+        - **left**: a tabbed WX/MAP/PLATE/SETTINGS reference panel, plus the
+          HDG/IAS/ALT autopilot-bug boxes underneath it
+        - **middle**: NAV1/NAV2 as round Bendix/King-style CDI+GS+OBS heads,
+          plus a standalone heading indicator with a bug
+        - **right**: GNS 530 + GNS 430 (flat vector skin, COM/NAV frequency
+          annunciated), the radio/transponder strip, and the S-TEC 55X AP
+          programmer, one continuous column
+
+        The only layout with any mouse surface: rebuilds `self._stack_hit`
+        (rect name -> pygame.Rect) every call for `main.py`'s
+        MOUSEBUTTONDOWN handler to hit-test against."""
+        import dataclasses
+        self._stack_hit.clear()
+        W, H = self.surf.get_size()
+        gap = 8
+        top = 30
+        bottom_margin = 8
+        left_w = 340
+        right_w = 360
+        mid_x = left_w + gap * 2
+        mid_w = W - left_w - right_w - gap * 4
+
+        # -- right column: the avionics stack ---------------------------
+        rx = W - right_w - gap
+        avail = H - top - bottom_margin
+        radio_h, ap_h = 84, 90
+        n_gns = 2 if sc.gns2 is not None else 1
+        gns_h = (avail - radio_h - ap_h - gap * (n_gns + 1)) // n_gns
+        radios = sc.radios
+        self._gns_unit(sc, box=(rx, top, right_w, gns_h), no_bezel=True,
+                       freq=(radios.com1, radios.nav1, "1") if radios else None)
+        y = top + gns_h + gap
+        if sc.gns2 is not None:
+            sc2 = dataclasses.replace(sc, gns=sc.gns2, nav=sc.gns2.nav,
+                                      variant=getattr(sc.gns2, "variant", None))
+            self._gns_unit(sc2, box=(rx, y, right_w, gns_h), no_bezel=True,
+                           freq=(radios.com2, radios.nav2, "2") if radios else None)
+            y += gns_h + gap
+        self._stack_xpdr(sc, pygame.Rect(rx, y, right_w, radio_h))
+        y += radio_h + gap
+        draw_ap_panel(self.surf, pygame.Rect(rx, y, right_w, ap_h), sc.ap, sc.magvar, self,
+                     ias_bug=(sc.ias_target if getattr(sc, "ias_managed", False) else None))
+
+        # -- middle column: instrument cluster ---------------------------
+        inst_h = (avail - gap * 2) // 3
+        n1 = pygame.Rect(mid_x, top, mid_w, inst_h)
+        n2 = pygame.Rect(mid_x, n1.bottom + gap, mid_w, inst_h)
+        hd = pygame.Rect(mid_x, n2.bottom + gap, mid_w, avail - inst_h * 2 - gap * 2)
+        scene_t = getattr(sc, "t", 0.0)
+        draw_nav_head(self.surf, n1, sc.nav1_head, "NAV1", self, t=scene_t)
+        draw_nav_head(self.surf, n2, sc.nav2_head, "NAV2", self, t=scene_t)
+        draw_hdg_indicator(self.surf, hd, sc.sixpack, self,
+                           hdg_bug=getattr(sc.ap, "heading_bug", None) if sc.ap else None)
+
+        # -- left column: tabbed reference panel + AP-bug boxes ----------
+        tab_h = 26
+        bug_h = 74
+        tabs_rect = pygame.Rect(gap, top, left_w, tab_h)
+        content_rect = pygame.Rect(gap, top + tab_h + 4, left_w,
+                                   avail - tab_h - 4 - bug_h - gap)
+        bugs_rect = pygame.Rect(gap, content_rect.bottom + gap, left_w, bug_h)
+        self._stack_tabs(sc, tabs_rect)
+        self._stack_tab_content(sc, content_rect)
+        self._stack_ap_bugs(sc, bugs_rect)
+
+    def _stack_xpdr(self, sc: Scene, rect: pygame.Rect) -> None:
+        """A compact transponder box - just the squawk/mode, restyled to sit
+        directly under the GNS pair as one continuous column (see
+        WORKING.md). COM/NAV frequencies are annunciated on the GNS screens
+        themselves in this layout (`_gns_unit`'s ``freq`` arg), not repeated
+        here."""
+        _panel_box(self.surf, rect, "XPDR", self)
+        radios = sc.radios
+        if radios is None:
+            return
+        xpdr = radios.xpdr
+        selector_mode = getattr(sc, "selector_mode", "")
+        xpdr_sel = selector_mode == "XPDR"
+        self.lcd(xpdr.squawk, rect.x + 12, rect.y + 22, big=True, color=AMBER)
+        self._t(xpdr.mode + ("  ID" if getattr(xpdr, "identing", False) else ""),
+               rect.right - 10, rect.y + 22, font=self.f_md, color=AMBER, right=True)
+        src = getattr(getattr(sc.gns, "cdi_source", None), "value", None) or \
+            getattr(sc.gns, "cdi_source", "GPS")
+        self._t(f"CDI SRC: {src}", rect.right - 10, rect.bottom - 18,
+               font=self.f_sm, color=DIM, right=True)
+
+    def _stack_tabs(self, sc: Scene, rect: pygame.Rect) -> None:
+        cw = rect.w / len(_STACK_TABS)
+        for i, name in enumerate(_STACK_TABS):
+            tr = pygame.Rect(int(rect.x + i * cw), rect.y, int(cw) - 4, rect.h)
+            on = name == sc.stack_tab
+            pygame.draw.rect(self.surf, (36, 60, 48) if on else PANEL, tr, border_radius=4)
+            pygame.draw.rect(self.surf, GPS_GREEN if on else EDGE, tr, width=1, border_radius=4)
+            self._t(name, tr.centerx, tr.centery - 7, font=self.f_sm,
+                   color=GPS_GREEN if on else DIM, center=True)
+            self._stack_hit[f"tab:{name}"] = tr
+
+    def _stack_tab_content(self, sc: Scene, rect: pygame.Rect) -> None:
+        pygame.draw.rect(self.surf, (4, 8, 6), rect)
+        pygame.draw.rect(self.surf, EDGE, rect, width=1)
+        inner = rect.inflate(-16, -12)
+        tab = sc.stack_tab
+        if tab == "WX":
+            self._draw_aux_weather(sc, inner)
+        elif tab == "MAP":
+            self._map(sc, rect=rect.inflate(-4, -4))
+        elif tab == "PLATE":
+            self._draw_stack_plate(sc, inner)
+        elif tab == "SETTINGS":
+            self._draw_stack_settings(sc, inner)
+
+    def _draw_stack_plate(self, sc: Scene, rect: pygame.Rect) -> None:
+        """Renders the selected AUX>Charts plate inline (rasterized by
+        `pypdfium2`) instead of handing it to the OS's PDF viewer - the
+        "stack" layout's own real behavior change. The fetch+rasterize runs
+        off-thread (`main._open_stack_plate`, same pattern as
+        `main._open_selected_chart`); this only ever reads
+        `self._plate_cache`/`self._plate_loading`/`self._plate_error`, which
+        that worker populates - never blocking I/O in a draw call."""
+        gns = sc.gns
+        idents = gns.wx_station_idents() if hasattr(gns, "wx_station_idents") else []
+        if not idents:
+            self._t("no flight-plan airports", rect.x, rect.y, font=self.f_sm, color=DIM)
+            return
+        ai = max(0, min(len(idents) - 1, getattr(gns, "chart_airport_sel", 0)))
+        ident = idents[ai]
+        charts = self._dtpp_charts_for(ident)
+        if not charts:
+            self._t(f"no charts cached for {ident}", rect.x, rect.y, font=self.f_sm, color=DIM)
+            self._t("datasrc.dtpp update-index", rect.x, rect.y + 16,
+                   font=self.f_sm, color=DIM)
+            return
+        ci = max(0, min(len(charts) - 1, getattr(gns, "chart_sel", 0)))
+        chart = charts[ci]
+        self._t(f"{ident}  {chart.chart_name}", rect.x, rect.y, font=self.f_sm, color=CYAN)
+        y = rect.y + 18
+        key = chart.pdf_name
+        img = self._plate_cache.get(key)
+        if img is not None:
+            avail = pygame.Rect(rect.x, y, rect.w, rect.bottom - y)
+            scale = min(avail.w / img.get_width(), avail.h / img.get_height(), 1.0)
+            sz = (max(1, int(img.get_width() * scale)), max(1, int(img.get_height() * scale)))
+            shown = pygame.transform.smoothscale(img, sz) if scale != 1.0 else img
+            self.surf.blit(shown, (avail.x, avail.y))
+        elif key in self._plate_error:
+            self._t(f"plate failed: {self._plate_error[key]}", rect.x, y,
+                   font=self.f_sm, color=RED)
+        elif key in self._plate_loading:
+            self._t("loading plate...", rect.x, y, font=self.f_sm, color=DIM)
+        else:
+            self._stack_hit["plate:load"] = pygame.Rect(rect.x, y, rect.w, 22)
+            self._t("click to load plate", rect.x, y, font=self.f_sm, color=AMBER)
+
+    def _draw_stack_settings(self, sc: Scene, rect: pygame.Rect) -> None:
+        """Application-level settings a pilot would plausibly want to change
+        *in flight* rather than only via a CLI flag at launch (see
+        WORKING.md) - wind + time-warp today; the general home for any more
+        of these going forward. Not the GNS's own CDI/Alarms Setup page,
+        which stays on the GNS (AUX>Setup) where it already works."""
+        y = rect.y
+        self._t("WIND", rect.x, y, font=self.f_sm, color=DIM)
+        y += 16
+        row = pygame.Rect(rect.x, y, rect.w, 22)
+        self._t(f"FROM {sc.wind_from_deg:03.0f} deg", row.x, row.y, font=self.f_md, color=TEXT)
+        self._stack_step_buttons(row, "wind_dir", y)
+        y += 26
+        row = pygame.Rect(rect.x, y, rect.w, 22)
+        self._t(f"SPEED {sc.wind_kt:.0f} kt", row.x, row.y, font=self.f_md, color=TEXT)
+        self._stack_step_buttons(row, "wind_kt", y)
+        y += 34
+
+        self._t("TIME WARP", rect.x, y, font=self.f_sm, color=DIM)
+        y += 16
+        cw = rect.w / 4
+        for i, lvl in enumerate((1, 5, 10, 20)):
+            tr = pygame.Rect(int(rect.x + i * cw), y, int(cw) - 4, 24)
+            on = getattr(sc, "time_warp", 1) == lvl
+            pygame.draw.rect(self.surf, (36, 60, 48) if on else PANEL, tr, border_radius=4)
+            pygame.draw.rect(self.surf, GPS_GREEN if on else EDGE, tr, width=1, border_radius=4)
+            self._t(f"{lvl}x", tr.centerx, tr.centery - 7, font=self.f_sm,
+                   color=GPS_GREEN if on else DIM, center=True)
+            self._stack_hit[f"warp:{lvl}"] = tr
+
+    def _stack_step_buttons(self, row: pygame.Rect, key: str, y: int) -> None:
+        """A pair of small -/+ buttons right-aligned in ``row``, registered
+        into ``self._stack_hit`` as ``f"{key}:-"``/``f"{key}:+"``."""
+        bw = 26
+        plus = pygame.Rect(row.right - bw, y, bw, 22)
+        minus = pygame.Rect(row.right - bw * 2 - 4, y, bw, 22)
+        for rct, txt, name in ((minus, "-", f"{key}:-"), (plus, "+", f"{key}:+")):
+            pygame.draw.rect(self.surf, PANEL, rct, border_radius=4)
+            pygame.draw.rect(self.surf, EDGE, rct, width=1, border_radius=4)
+            self._t(txt, rct.centerx, rct.y + 3, font=self.f_sm, color=TEXT, center=True)
+            self._stack_hit[name] = rct
+
+    def _stack_ap_bugs(self, sc: Scene, rect: pygame.Rect) -> None:
+        """HDG/IAS/ALT autopilot target bugs - shown *and* directly editable
+        here (click +/-), not read-only readouts (see WORKING.md)."""
+        cw = rect.w / 3
+        specs = [
+            ("HDG", f"{getattr(sc.ap, 'heading_bug', 0):03.0f}", "hdg"),
+            ("IAS", f"{sc.ias_target:.0f}" if getattr(sc, "ias_managed", False) else "---", "ias"),
+            ("ALT", f"{getattr(sc.ap, 'alt_preselect', 0):.0f}", "alt"),
+        ]
+        for i, (label, val, key) in enumerate(specs):
+            br = pygame.Rect(int(rect.x + i * cw), rect.y, int(cw) - 6, rect.h)
+            _panel_box(self.surf, br, label, self)
+            self.lcd(val, br.centerx, br.centery - 2, color=CYAN, center=True)
+            bw = 28
+            minus = pygame.Rect(br.x + 6, br.bottom - 26, bw, 20)
+            plus = pygame.Rect(br.right - bw - 6, br.bottom - 26, bw, 20)
+            for rct, txt, sign in ((minus, "-", f"bug:{key}:-"), (plus, "+", f"bug:{key}:+")):
+                pygame.draw.rect(self.surf, PANEL, rct, border_radius=4)
+                pygame.draw.rect(self.surf, EDGE, rct, width=1, border_radius=4)
+                self._t(txt, rct.centerx, rct.y + 2, font=self.f_sm, color=TEXT, center=True)
+                self._stack_hit[sign] = rct
 
     # -- steam-gauge layout ------------------------------------------
     def _steam_layout(self, sc: Scene) -> None:
@@ -372,13 +619,25 @@ class Renderer:
     def _variant(self, sc: Scene):
         return sc.variant or getattr(sc.gns, "variant", None) or VARIANT_530
 
-    def _gns_unit(self, sc: Scene, *, box: tuple | None = None):
+    def _gns_unit(self, sc: Scene, *, box: tuple | None = None, no_bezel: bool = False,
+                  freq: tuple | None = None):
         """Draw one GNS unit (bezel + screen + below-bezel FPL strip) in
         ``box`` = (x0, y0, w, h), or the full single-unit column when
         ``box`` is omitted - the "gps" layout's original placement. ``sc``
         supplies the unit's own gns/nav/panel/variant (a `dual` layout scene
         is `dataclasses.replace`d per unit so the rest of this method and
-        everything it calls stays polymorphic over `sc` unchanged)."""
+        everything it calls stays polymorphic over `sc` unchanged).
+
+        ``no_bezel=True`` (the "stack" layout only) skips the photorealistic
+        SVG faceplate entirely and always falls back to the flat vector-panel
+        style below, so the unit reads as one visual family with the
+        transponder/AP boxes next to it rather than a cut-out photo.
+
+        ``freq=(com, nav, label)`` (the "stack" layout only) annunciates one
+        COM/NAV active+standby pair inline at the top of the screen, the way
+        the real GNS 530/430 always does and this trainer otherwise never
+        has - ``com``/``nav`` are `radios.ComRadio`/`NavReceiver`, ``label``
+        a short tag ("1"/"2") for which pair this unit is wired to."""
         var = self._variant(sc)
         rows = getattr(var, "screen_rows", 12)
         aspect = getattr(var, "bezel_aspect", _BEZEL_ASPECT)
@@ -390,7 +649,7 @@ class Renderer:
         if bh > h:            # box is short (stacked dual layout) - fit by height instead
             bh = h
             bw = int(round(bh * aspect))
-        bezel = _load_bezel((bw, bh), _bezel_svg(var))
+        bezel = None if no_bezel else _load_bezel((bw, bh), _bezel_svg(var))
 
         if bezel is not None:
             pygame.draw.rect(self.surf, (12, 14, 17), (x0, y0, w, h))
@@ -412,8 +671,18 @@ class Renderer:
         if getattr(sc.gns.cursor, "cursor_on", False):
             self._t("CRSR", scr.right - 8, scr.y + 6, font=self.f_sm, color=AMBER, right=True)
 
+        hdr_h = 20
+        if freq is not None:
+            com, nav, label = freq
+            self._t(f"C{label} {com.active_mhz:.3f} [{com.standby_mhz:.3f}]",
+                    scr.x + 8, scr.y + hdr_h, font=self.f_sm, color=GPS_GREEN)
+            self._t(f"N{label} {nav.active_mhz:.2f} [{nav.standby_mhz:.2f}]",
+                    scr.right - 8, scr.y + hdr_h, font=self.f_sm, color=CYAN, right=True)
+            hdr_h += 14
+
         cdi_h = 40
-        body = pygame.Rect(scr.x + 8, scr.y + 28, scr.w - 16, scr.h - 36 - cdi_h)
+        body = pygame.Rect(scr.x + 8, scr.y + hdr_h + 8, scr.w - 16,
+                           scr.h - (hdr_h + 16) - cdi_h)
         if page == "NAV" and sub == "Map":
             self._map(sc, rect=body)
         elif page == "NAV" and sub == "Flight Plan":
@@ -1425,6 +1694,52 @@ def six_pack_gauge_radius(rect):
     return min(rect.w / 3, rect.h / 2) / 2 - 12
 
 
+def _hdg_card(surf, hdx, hdy, rad, hd, hdg_bug, r):
+    """The directional-gyro card itself: dial + rotating labels, the fixed
+    lubber-line index, an optional heading-bug marker, the fixed ownship
+    symbol, and the digital heading readout. Shared by `draw_six_pack`'s
+    HDG cell and the "stack" layout's standalone `draw_hdg_indicator` so
+    there is exactly one heading-card drawing (labels sit well inboard of
+    the rim, at ``rad - 24``, so the lubber line and bug - which both ride
+    the rim - never print through a tick's number)."""
+    _dial(surf, hdx, hdy, rad)
+    for d in range(0, 360, 30):
+        a = math.radians(d - hd)
+        lab = "N" if d == 0 else "E" if d == 90 else "S" if d == 180 else "W" if d == 270 else str(d // 10)
+        lx = hdx + (rad - 24) * math.sin(a); ly = hdy - (rad - 24) * math.cos(a)
+        r._t(lab, lx, ly - 6, font=r.f_sm, color=TEXT, center=True)
+    pygame.draw.polygon(surf, AMBER, [(hdx, hdy - rad + 2), (hdx - 5, hdy - rad + 12),
+                                      (hdx + 5, hdy - rad + 12)])
+    if hdg_bug is not None:                     # selected-heading bug on the card
+        a = math.radians(hdg_bug - hd)
+        bx = hdx + (rad - 3) * math.sin(a); by = hdy - (rad - 3) * math.cos(a)
+        px, py = math.cos(a), math.sin(a)      # tangent to the card
+        pygame.draw.polygon(surf, CYAN, [
+            (bx - px * 6 - math.sin(a) * 5, by - py * 6 + math.cos(a) * 5),
+            (bx + px * 6 - math.sin(a) * 5, by + py * 6 + math.cos(a) * 5),
+            (bx + px * 6, by + py * 6), (bx - px * 6, by - py * 6)])
+    # fixed ownship symbol - the card rotates under it, the little airplane
+    # (nose up, wings level) never moves, same as a real directional gyro.
+    pygame.draw.line(surf, WHITE, (hdx, hdy - rad * 0.22), (hdx, hdy + rad * 0.12), 2)
+    pygame.draw.line(surf, WHITE, (hdx - rad * 0.24, hdy), (hdx + rad * 0.24, hdy), 3)
+    pygame.draw.line(surf, WHITE, (hdx - rad * 0.09, hdy + rad * 0.14),
+                     (hdx + rad * 0.09, hdy + rad * 0.14), 2)
+    _windowed_text(surf, hdx, hdy + rad * 0.3, f"{hd:03.0f}", r.f_lcd, WHITE, r)
+
+
+def draw_hdg_indicator(surf, rect, sp, r, hdg_bug=None):
+    """Standalone directional-gyro/heading-indicator instrument - the
+    "stack" layout's middle column, below NAV1/NAV2 (see WORKING.md). Same
+    card as one cell of `draw_six_pack`, in its own titled box."""
+    _panel_box(surf, rect, "HDG", r)
+    if sp is None:
+        r._t("no data", rect.centerx, rect.centery, font=r.f_sm, color=DIM, center=True)
+        return
+    rad = min(rect.w, rect.h - 20) / 2 - 10
+    cx, cy = rect.centerx, rect.centery + 8
+    _hdg_card(surf, cx, cy, rad, getattr(sp, "heading_deg", 0.0), hdg_bug, r)
+
+
 def draw_six_pack(surf, rect, sp, r, baro_inhg=29.92, hdg_bug=None, spd_bug=None):
     _panel_box(surf, rect, "", r)
     cols, rows = 3, 2
@@ -1483,33 +1798,7 @@ def draw_six_pack(surf, rect, sp, r, baro_inhg=29.92, hdg_bug=None, spd_bug=None
     pygame.draw.circle(surf, CYAN, (int(bx), int(tcy + rad * 0.55)), 4)
     r._t("2 MIN", tcx, tcy + rad * 0.62, font=r.f_sm, color=DIM, center=True)
 
-    # heading indicator: rotating card. Labels sit well inboard of the rim
-    # (rad - 24) so the fixed lubber-line index and the heading-bug marker,
-    # which both ride the rim itself, never print through a tick's number.
-    _dial(surf, hdx, hdy, rad)
-    hd = getattr(sp, "heading_deg", 0.0)
-    for d in range(0, 360, 30):
-        a = math.radians(d - hd)
-        lab = "N" if d == 0 else "E" if d == 90 else "S" if d == 180 else "W" if d == 270 else str(d // 10)
-        lx = hdx + (rad - 24) * math.sin(a); ly = hdy - (rad - 24) * math.cos(a)
-        r._t(lab, lx, ly - 6, font=r.f_sm, color=TEXT, center=True)
-    pygame.draw.polygon(surf, AMBER, [(hdx, hdy - rad + 2), (hdx - 5, hdy - rad + 12),
-                                      (hdx + 5, hdy - rad + 12)])
-    if hdg_bug is not None:                     # selected-heading bug on the card
-        a = math.radians(hdg_bug - hd)
-        bx = hdx + (rad - 3) * math.sin(a); by = hdy - (rad - 3) * math.cos(a)
-        px, py = math.cos(a), math.sin(a)      # tangent to the card
-        pygame.draw.polygon(surf, CYAN, [
-            (bx - px * 6 - math.sin(a) * 5, by - py * 6 + math.cos(a) * 5),
-            (bx + px * 6 - math.sin(a) * 5, by + py * 6 + math.cos(a) * 5),
-            (bx + px * 6, by + py * 6), (bx - px * 6, by - py * 6)])
-    # fixed ownship symbol - the card rotates under it, the little airplane
-    # (nose up, wings level) never moves, same as a real directional gyro.
-    pygame.draw.line(surf, WHITE, (hdx, hdy - rad * 0.22), (hdx, hdy + rad * 0.12), 2)
-    pygame.draw.line(surf, WHITE, (hdx - rad * 0.24, hdy), (hdx + rad * 0.24, hdy), 3)
-    pygame.draw.line(surf, WHITE, (hdx - rad * 0.09, hdy + rad * 0.14),
-                     (hdx + rad * 0.09, hdy + rad * 0.14), 2)
-    _windowed_text(surf, hdx, hdy + rad * 0.3, f"{hd:03.0f}", r.f_lcd, WHITE, r)
+    _hdg_card(surf, hdx, hdy, rad, getattr(sp, "heading_deg", 0.0), hdg_bug, r)
 
     # VSI: 0 at 9 o'clock (270 deg), +/-2000 fpm over +/-160 deg
     _dial(surf, vsx, vsy, rad)
