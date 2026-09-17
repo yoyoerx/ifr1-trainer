@@ -4,7 +4,7 @@ Living structural map of **octavi-ifr-trainer**. Update this whenever a module i
 added, its responsibility shifts, or a cross-cutting convention changes. Keep it
 short — it is a map, not a manual.
 
-Last updated: 2026-09-11
+Last updated: 2026-09-17
 
 ---
 
@@ -215,3 +215,52 @@ be replaced cleanly.
 
 pygame-ce 2.5.3 loads SVG natively (`pygame.image.load_sized_svg`), so a raster
 or vector face set drops in through `_load_bezel` / a sibling loader.
+
+---
+
+## 8. Planned — `stack` layout (design only, not yet built)
+
+**Not implemented yet** — task-tracked in `WORKING.md`'s "Active project"
+section; this is the design record so a fresh instance of Claude Code (or a
+human) can pick up implementation without re-deriving it. Once real, fold
+this into the sections above (module map, key decisions, conventions) the
+same way every other layout is documented, rather than leaving it here.
+
+**What it is:** a fourth layout (`--layout stack`, mockup in
+`docs/mockups/stack-layout-mockup.png`) putting everything relevant to
+instrument flight on one screen, instead of paging between GNS pages and
+separate reference material. Three columns:
+
+- **Left** — a tabbed reference panel, independent of the GNS units
+  (WX = METAR/TAF, MAP = the existing moving map, PLATE = the selected
+  approach plate rendered **inline** as a rasterized PDF, SETTINGS =
+  in-flight-adjustable trainer options starting with wind/winds-aloft and
+  time-warp) — plus HDG/IAS/ALT autopilot-bug boxes underneath it, directly
+  clickable/scrollable to edit.
+- **Middle** — NAV1 and NAV2 as Bendix/King-style round CDI heads (needle +
+  glideslope diamond + rotating OBS card, reusing the existing round-VOR-head
+  code the `steam` layout already draws), plus a standalone heading indicator
+  with a heading bug.
+- **Right** — GNS 530 + GNS 430 + transponder + S-TEC 55X autopilot, stacked
+  as one visually continuous column. The GNS units drop the photorealistic
+  faceplate SVG bezel here in favor of clean vector panels matching the
+  transponder/AP's existing style, and (a real faithfulness fix, not just a
+  `stack` cosmetic — decide at implementation time whether it should actually
+  apply to every layout) gain inline COM/NAV active+standby frequency
+  annunciation the way the real unit's screen shows it. Full GNS page
+  navigation (Default NAV/Flight Plan/DTO/PROC/MSG/etc.) is unchanged — same
+  bezel-key routing as `gps`/`dual` today, just restyled.
+
+**New capabilities this requires, both scoped to `stack` only:**
+- **Mouse input.** Nothing in the trainer handles a mouse today (keyboard +
+  IFR-1 only) — `stack` is the first layout to need `pygame.MOUSEBUTTONDOWN`
+  handling in `main.run()`'s event loop, for tab switching, SETTINGS fields,
+  and the AP bug boxes.
+- **PDF rasterization**, via a new dependency: **`pypdfium2`** (small,
+  MIT-licensed, pure-wheel — the dev machine has no system `poppler`, so a
+  `pdftoppm`-shelling approach isn't an option). Used only by the PLATE tab;
+  `datasrc/dtpp.py`'s existing fetch/cache is unchanged, this only adds a
+  render step in place of the OS PDF-viewer hand-off.
+
+**Window size:** `stack`'s content doesn't fit the current 1000×640 window;
+it resizes when this layout is selected, `gps`/`steam`/`dual` unaffected.
