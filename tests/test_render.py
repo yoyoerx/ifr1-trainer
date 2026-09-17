@@ -16,7 +16,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pygame  # noqa: E402
 
-from navmath import Point, destination, initial_bearing  # noqa: E402
+from navmath import Point, destination, great_circle_nm, initial_bearing  # noqa: E402
 from navdata.model import Airport, NavDatabase, VhfNavaid, Waypoint  # noqa: E402
 import gns530 as gns530_mod  # noqa: E402
 import gns430 as gns430_mod  # noqa: E402
@@ -24,8 +24,9 @@ import instruments as instr  # noqa: E402
 import sim_model as simmod  # noqa: E402
 from autopilot import Autopilot  # noqa: E402
 from radios import RadioStack  # noqa: E402
-from render import Renderer, Scene  # noqa: E402
+from render import Renderer, Scene, _hold_track_points, _pt_symbol_points  # noqa: E402
 import main as main_mod  # noqa: E402
+from gpsnav import PlanWaypoint  # noqa: E402
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -95,6 +96,68 @@ def test_draw_handles_no_active_leg(db):
     nav, panel, st = main_mod.step_once(g, sim, 0.1, autopilot=True, magvar=0.0)
     Renderer(pygame.display.get_surface()).draw(
         Scene(own=st, nav=nav, panel=panel, gns=g, db=db))
+
+
+def test_hold_track_points_form_a_closed_racetrack():
+    """The map's hold symbol - a real racetrack, not a bare ring (playtest
+    round 3): starts/ends at the fix, and the outbound leg's far end and its
+    parallel inbound-leg counterpart both sit ``leg_nm`` out / ~2x the turn
+    radius apart, on the turn side. ``arc_steps=1`` collapses each turn to
+    its two endpoints (no intermediate arc points) for a simple 5-point shape."""
+    fix = Point(40.0, -74.0)
+    pts = _hold_track_points(fix, inbound_true=0.0, turn="R", leg_nm=4.0, arc_steps=1)
+    fix2, far, far_off, near_off, fix3 = pts
+    assert fix2 == fix and fix3 == fix
+    # both ~4 nm from the fix (along the racetrack's long axis)
+    assert great_circle_nm(fix, far) == pytest.approx(4.0, abs=0.05)
+    # far_off is offset both along (4 nm) and across (2 nm) from the fix
+    assert great_circle_nm(fix, far_off) == pytest.approx((4.0 ** 2 + 2.0 ** 2) ** 0.5, abs=0.1)
+    # turning right *at the fix* to reverse from inbound (000) to outbound
+    # (180) sweeps through east (000 -> 090 -> 180), so a right-turn hold's
+    # parallel leg sits east of the inbound course, offset by ~2x the
+    # stylized turn radius
+    assert far_off.lon > far.lon
+    assert near_off.lon > fix.lon
+    assert great_circle_nm(far, far_off) == pytest.approx(2.0, abs=0.1)
+
+
+def test_hold_track_points_mirror_for_left_turns():
+    fix = Point(40.0, -74.0)
+    r_pts = _hold_track_points(fix, inbound_true=0.0, turn="R", leg_nm=4.0, arc_steps=1)
+    l_pts = _hold_track_points(fix, inbound_true=0.0, turn="L", leg_nm=4.0, arc_steps=1)
+    far_off_r, far_off_l = r_pts[2], l_pts[2]
+    # R turns offset the parallel leg east, L turns offset it west
+    assert far_off_r.lon > fix.lon
+    assert far_off_l.lon < fix.lon
+
+
+def test_pt_symbol_points_point_along_inbound_course():
+    """The procedure-turn chevron (playtest round 3: "PT not drawn on the
+    map") has its vertex at the fix and both arms trailing behind it -
+    toward the outbound (reciprocal) course, not out ahead of it."""
+    tip = Point(40.0, -74.0)
+    left, vertex, right = _pt_symbol_points(tip, inbound_true=0.0)
+    assert vertex == tip
+    # inbound 0 (north) -> arms trail south (higher latitude = further north)
+    assert left.lat < tip.lat and right.lat < tip.lat
+    assert left.lon < tip.lon < right.lon           # symmetric either side
+
+
+def test_map_draws_a_hold_racetrack_and_a_pt_chevron(db):
+    g = gns530_mod.Gns530(db)
+    hold_fix = PlanWaypoint("DALAC", Point(40.6, -74.0), "wpt", hold=True,
+                             hold_inbound_true=0.0, hold_turn="R", hold_leg_nm=3.0)
+    pt_fix = PlanWaypoint("PT", Point(40.8, -74.0), "wpt", synthetic=True,
+                           hold_inbound_true=90.0, hold_turn="L")
+    g.load_flight_plan(["ALFA", "BRAVO"])
+    g.fpl.insert(1, hold_fix)
+    g.fpl.insert(2, pt_fix)
+    a, b = db.find("ALFA")[0].pos, db.find("BRAVO")[0].pos
+    sim = simmod.SimModel(pos=a, heading_deg=initial_bearing(a, b), tas_kt=130.0)
+    nav, panel, st = main_mod.step_once(g, sim, 0.1, autopilot=True, magvar=0.0)
+    sc = Scene(own=st, nav=nav, panel=panel, gns=g, db=db, map_range_nm=40.0)
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(sc)          # must not raise
 
 
 def test_bundled_fonts_present_and_lcd_renders(db):
@@ -426,7 +489,7 @@ def test_draw_vnav_page(db):
     g = sc.gns
     g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
     g.update(main_mod.Point(40.0, -74.0), 0.0, 120.0)
-    assert g.vnav_set("CHAR", 2000.0, 3.0)
+    assert g.vnav_set("CHAR", 2000.0, -500.0)
     g.cursor.group = list(PAGE_GROUPS).index("NAV")
     g.cursor.page = PAGE_GROUPS["NAV"].index("VNAV")
     surf = pygame.display.get_surface()
@@ -601,6 +664,40 @@ def test_on_key_plain_pageup_pagedown_changes_page_within_group(db):
     assert w.gns.cursor.page == page0 + 1             # page within it advanced
     main_mod._on_key(_key(pygame.K_PAGEDOWN), w, ui)
     assert w.gns.cursor.page == page0
+
+
+def test_on_key_c_cancels_direct_to(db):
+    """A bare CLR press (no dialog open) had no keyboard binding at all -
+    a no-device user had no way to cancel an active Direct-To. `C` now
+    routes a plain CLR event through, same as the IFR-1's CLR key."""
+    w = _bare_world(db)
+    ui = {"layout": "gps", "map_range": 20.0, "nav1_hsi": False, "running": True,
+          "time_warp": 1}
+    w.gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    w.gns.update(Point(40.0, -74.0), 0.0, 120.0)
+    assert w.gns.direct_to("CHAR")
+    assert w.gns.dto is not None
+    main_mod._on_key(_key(pygame.K_c), w, ui)
+    assert w.gns.dto is None
+    assert w.gns.fpl.to_wp.ident == "BRAVO"          # resumed the nearest leg
+
+
+def test_on_key_x_opens_and_drives_the_fpl_menu(db):
+    """O1: "Menu button needs a key" - the MNU key had no keyboard route at
+    all. `X` opens it; once open, Up/Down move the selection and Enter
+    confirms, same as the PROC selector's keyboard handling."""
+    w = _bare_world(db)
+    ui = {"layout": "gps", "map_range": 20.0, "nav1_hsi": False, "running": True,
+          "time_warp": 1}
+    w.gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    w.gns.cursor.go_to_flight_plan()
+    main_mod._on_key(_key(pygame.K_x), w, ui)
+    assert w.gns._fpl_menu is not None
+    sel0 = w.gns._fpl_menu.sel
+    main_mod._on_key(_key(pygame.K_DOWN), w, ui)
+    assert w.gns._fpl_menu.sel != sel0
+    main_mod._on_key(_key(pygame.K_ESCAPE), w, ui)
+    assert w.gns._fpl_menu is None
 
 
 def test_on_key_shift_pageup_pagedown_changes_page_group(db):

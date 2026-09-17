@@ -289,10 +289,11 @@ class Autopilot:
         it does not gate whether the AP steers."""
         if self.armed_lat not in (Lat.NAV, Lat.APR, Lat.REV):
             return
-        if self.armed_lat is Lat.NAV:
+        cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
+        if self.armed_lat is Lat.NAV and cdi_source != "VLOC":
             xtk = getattr(nav_state, "xtk_nm", None) if nav_state else None
             live = xtk is not None and abs(xtk) <= _CAPTURE_XTK_NM
-        else:  # APR / REV track the localizer
+        else:  # APR / REV, or NAV tracking VLOC: track the localizer/VOR needle
             live = (vloc_valid and vloc_deflection is not None
                     and abs(vloc_deflection) <= _CAPTURE_DEFLECTION)
         if live:
@@ -306,12 +307,24 @@ class Autopilot:
         if lat is Lat.HDG:
             return norm360(self.heading_bug + magvar)
 
-        if lat is Lat.NAV and nav_state is not None and getattr(nav_state, "dtk", None) is not None:
-            xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
-            gain = _GPSS_GAIN if self.gpss else _NAV_GAIN
-            self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
-            intercept = _clamp(-xtk * gain + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
-            return norm360(nav_state.dtk + intercept)
+        if lat is Lat.NAV:
+            # NAV tracks whatever the GNS CDI is actually showing (S-TEC 55X
+            # POH: NAV couples to the selected nav source) - once the pilot
+            # swaps CDI source to VLOC (the SWAP/CDI key), NAV should track
+            # the VOR/LOC needle, not keep silently flying the GPS course
+            # underneath a CDI that no longer displays it.
+            cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
+            if cdi_source == "VLOC":
+                if vloc_valid and vloc_course_deg is not None:
+                    dev = vloc_deflection or 0.0
+                    intercept = _clamp(dev * _VLOC_GAIN, -_MAX_INTERCEPT, _MAX_INTERCEPT)
+                    return norm360(vloc_course_deg + magvar + intercept)
+            elif nav_state is not None and getattr(nav_state, "dtk", None) is not None:
+                xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
+                gain = _GPSS_GAIN if self.gpss else _NAV_GAIN
+                self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
+                intercept = _clamp(-xtk * gain + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
+                return norm360(nav_state.dtk + intercept)
 
         if lat in (Lat.APR, Lat.REV) and vloc_valid and vloc_course_deg is not None:
             dev = (vloc_deflection or 0.0) * (-1.0 if lat is Lat.REV else 1.0)

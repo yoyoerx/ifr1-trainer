@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from navmath import Point, destination  # noqa: E402
+from navmath import Point, destination, great_circle_nm  # noqa: E402
 from navdata.model import (  # noqa: E402
     Airport,
     LegType,
@@ -223,6 +223,87 @@ def test_hold_in_lieu_of_pt_is_flown_then_auto_continues(db):
     assert seen[-1].mode == "LEG"                        # ...then auto-continued
     assert g.fpl.to_wp.ident == "DELT2"                  # past the hold, no pilot action needed
     assert not g.suspended and g._hold_state is None
+
+
+def _hold_procedure(db):
+    """A hold-in-lieu-of-PT at CHAR (inbound 000/R, single circuit), same
+    shape as `test_hold_in_lieu_of_pt_is_flown_then_auto_continues`, for the
+    INBOUND-capture tests below."""
+    db.add_waypoint(Waypoint("DELT2", Point(39.9, -74.0)))
+    db.add_procedure(Procedure(
+        airport="KTST", ident="I36", kind="approach", route_type="I",
+        transitions={"": (
+            ProcedureLeg(10, LegType.IF, fix_ident="ALFA"),
+            ProcedureLeg(20, LegType.TF, fix_ident="BRAVO"),
+            ProcedureLeg(30, LegType.HF, fix_ident="CHAR", turn="R",
+                        course_mag=0.0, time_min=1.0, is_iaf=True),
+            ProcedureLeg(40, LegType.TF, fix_ident="DELT2"),
+        )},
+    ))
+    g = Gns530(db)
+    g.load_procedure("KTST", "I36")
+    g.fpl.activate_leg(g.fpl.index_of("CHAR"))
+    return g
+
+
+# --------------------------------------------------------------------------- #
+# FINDINGS F17: the hold's INBOUND leg used to "capture" (and report DTG) off
+# along-track progress on a 60 nm reference line, which reads near-zero while
+# the aircraft is still well off the inbound centerline (e.g. mid-turn out of
+# a wide entry) - sequencing onto the next leg, cutting a corner toward it,
+# well before the aircraft was ever near the fix.
+# --------------------------------------------------------------------------- #
+def test_hold_inbound_does_not_capture_early_with_a_large_cross_track_offset(db):
+    g = _hold_procedure(db)
+    char = next(w for w in g.fpl.waypoints if w.ident == "CHAR")
+    g._start_hold(char, arrival_true=0.0, gs_kt=130.0)
+    hs = g._hold_state
+    hs["phase"] = "INBOUND"
+    # along-track on the 60 nm reference line is ~59.9 nm (i.e. "nearly
+    # captured" under the old along-track-only check) but the aircraft is
+    # genuinely 2 nm east of the actual fix.
+    near_along = destination(char.pos, hs["outbound"], 0.1)
+    pos = destination(near_along, 90.0, 2.0)
+    ns = g.update(pos, 0.0, 130.0, 1.0)
+    assert ns.mode == "HOLD" and g._hold_state is not None       # not captured yet
+    assert ns.dtg_nm == pytest.approx(great_circle_nm(pos, char.pos), abs=0.01)
+    assert ns.dtg_nm > 1.5                                       # honest distance, not ~0
+
+
+def test_hold_inbound_captures_cleanly_once_genuinely_near_the_fix(db):
+    g = _hold_procedure(db)
+    char = next(w for w in g.fpl.waypoints if w.ident == "CHAR")
+    g._start_hold(char, arrival_true=0.0, gs_kt=130.0)
+    hs = g._hold_state
+    hs["phase"] = "INBOUND"
+    pos = destination(char.pos, hs["outbound"], 0.1)             # 0.1 nm short, on course
+    ns = g.update(pos, 0.0, 130.0, 1.0)
+    assert ns.mode == "LEG" and g._hold_state is None            # single-circuit auto-continued
+    assert g.fpl.to_wp.ident == "DELT2"
+
+
+def test_hold_inbound_eventually_completes_at_the_closest_approach(db):
+    """A wide entry that never quite reaches `_FIX_CAPTURE_NM` must still
+    complete - at its closest approach - rather than fly past the fix and
+    away forever chasing an exact hit it will never land."""
+    g = _hold_procedure(db)
+    char = next(w for w in g.fpl.waypoints if w.ident == "CHAR")
+    g._start_hold(char, arrival_true=0.0, gs_kt=130.0)
+    hs = g._hold_state
+    hs["phase"] = "INBOUND"
+    far = destination(char.pos, hs["outbound"], 60.0)   # "a" - the 60 nm reference point
+    # walk inbound along-track from ~5 nm short of the fix to ~5 nm past it,
+    # holding a constant 1.5 nm cross-track offset throughout (never closes
+    # inside `_FIX_CAPTURE_NM`) - closest real approach is exactly at the fix
+    ns = None
+    for dist_from_far in range(55, 66):
+        center = destination(far, hs["inbound"], float(dist_from_far))
+        pos = destination(center, 90.0, 1.5)
+        ns = g.update(pos, 0.0, 130.0, 1.0)
+        if g._hold_state is None:
+            break
+    assert g._hold_state is None                                 # did complete, didn't hang
+    assert ns.mode == "LEG" and g.fpl.to_wp.ident == "DELT2"
 
 
 def test_hold_stays_indefinitely_until_pilot_releases_suspend(db):
@@ -710,6 +791,22 @@ def test_wpt_page_knob_types_an_identifier(g):
     assert g.lookup(g.wpt_entry.ident()).ident == "OOO"          # resolves the VOR
 
 
+def test_wpt_page_lookup_is_filtered_by_its_own_category(db):
+    """A WPT sub-page must only ever resolve its own category (Pilot's Guide
+    sec.4.2) - e.g. the VOR page shouldn't return an airport or intersection
+    that happens to share the identifier. "ALFA" here is both a plain
+    waypoint (from the shared fixture) and, added here, a VHF navaid and an
+    airport."""
+    db.add_vhf(VhfNavaid("ALFA", Point(40.01, -74.0), 114.0))
+    db.add_airport(Airport("ALFA", Point(40.02, -74.0)))
+    g = Gns530(db)
+    assert g.lookup("ALFA", "Intersection").__class__.__name__ == "Waypoint"
+    assert g.lookup("ALFA", "VOR").__class__.__name__ == "VhfNavaid"
+    assert g.lookup("ALFA", "Airport").__class__.__name__ == "Airport"
+    assert g.lookup("ALFA", "NDB") is None                       # no NDB by that ident
+    assert g.lookup("ALFA") is not None                           # unfiltered (e.g. DTO) still resolves
+
+
 def test_flight_plan_page_ent_inserts_before_the_selected_row(g):
     """Pilot's Guide sec.5.1: 'turn the large right knob to select the point
     to add the new waypoint - if an existing waypoint is highlighted, the
@@ -917,10 +1014,10 @@ def test_vnav_field_and_target_selection(g):
     assert g.vnav_field == 1
     g.handle_event(Event(mode=Mode.FMS1, inner=5))                # +500 ft
     assert g.vnav.target_alt_ft == 500.0
-    g.handle_event(Event(mode=Mode.FMS1, outer=1))                # -> angle field
+    g.handle_event(Event(mode=Mode.FMS1, outer=1))                # -> VS profile field
     assert g.vnav_field == 2
-    g.handle_event(Event(mode=Mode.FMS1, inner=5))                # +0.5 deg
-    assert g.vnav.angle_deg == pytest.approx(3.5)
+    g.handle_event(Event(mode=Mode.FMS1, inner=5))                # +500 fpm (default -400)
+    assert g.vnav.vs_fpm == pytest.approx(100.0)
 
 
 def test_vnav_ent_arms_only_once_a_target_is_picked_and_clr_clears(g):
@@ -942,17 +1039,48 @@ def test_vnav_ent_arms_only_once_a_target_is_picked_and_clr_clears(g):
 
 
 def test_vnav_status_computes_distance_tod_and_deviation(g):
+    """FINDINGS F23: the real GNS 530's VNAV input is a vertical SPEED
+    ("VS Profile"/"Vertical Speed Desired", Pilot's Guide sec.10/11 -
+    default 400 fpm descent), not a flight-path angle - there is no angle
+    field on the real unit. TOD/required-altitude/deviation are derived from
+    that rate at the current groundspeed (the manual requires > 35 kt GS for
+    exactly this reason)."""
     g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
     g.update(ALFA, 0.0, 120.0)                     # active leg ALFA->BRAVO
-    assert g.vnav_set("CHAR", 2000.0, 3.0)
-    st = g.vnav_status(alt_ft=5000.0)
+    assert g.vnav_set("CHAR", 2000.0, -500.0)       # descend at 500 fpm
+    st = g.vnav_status(alt_ft=5000.0, gs_kt=120.0)
     assert st.valid
     expected_dist = 60.0                           # ALFA->CHAR is 1 deg lat, ~60 nm
     assert st.distance_to_target_nm == pytest.approx(expected_dist, rel=0.02)
-    ft_per_nm = 6076.115949 * math.tan(math.radians(3.0))
+    ft_per_nm = 500.0 * 60.0 / 120.0                # 250 ft/nm at 500 fpm, 120 kt GS
     assert st.required_alt_ft == pytest.approx(2000.0 + expected_dist * ft_per_nm, rel=0.02)
     assert st.tod_distance_nm == pytest.approx((5000.0 - 2000.0) / ft_per_nm, rel=0.02)
     assert st.deviation_ft == pytest.approx(5000.0 - st.required_alt_ft, rel=0.02)
+
+
+def test_vnav_status_reports_required_vs_and_time_to_tod(g):
+    """VSR (Vertical Speed Required) is the live rate needed right now to
+    make the target at the target altitude - independent of the pilot's
+    chosen VS profile, same as the real unit's VSR readout."""
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    g.update(ALFA, 0.0, 120.0)
+    assert g.vnav_set("CHAR", 2000.0, -500.0)
+    st = g.vnav_status(alt_ft=5000.0, gs_kt=120.0)
+    to_lose, dist, gs = 5000.0 - 2000.0, 60.0, 120.0
+    time_min = dist / gs * 60.0
+    assert st.required_vs_fpm == pytest.approx(-to_lose / time_min, rel=0.02)
+    assert st.required_vs_fpm < 0                       # descending
+    assert st.time_to_tod_min == pytest.approx(st.distance_to_tod_nm / 120.0 * 60.0, rel=0.02)
+
+
+def test_vnav_status_invalid_below_35kt_groundspeed(g):
+    """Pilot's Guide: VNAV requires > 35 kt groundspeed."""
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    g.update(ALFA, 0.0, 120.0)
+    assert g.vnav_set("CHAR", 2000.0, -500.0)
+    st = g.vnav_status(alt_ft=5000.0, gs_kt=20.0)
+    assert not st.valid
+    assert st.distance_to_target_nm is not None         # DIS still shown, just no profile math
 
 
 def test_vnav_status_invalid_when_target_already_passed(g):
@@ -961,7 +1089,7 @@ def test_vnav_status_invalid_when_target_already_passed(g):
     assert g.vnav_set("BRAVO", 1000.0)
     g.fpl.activate_leg(2)                          # now flying BRAVO -> CHAR
     g.update(BRAVO, 0.0, 120.0)
-    st = g.vnav_status(alt_ft=3000.0)
+    st = g.vnav_status(alt_ft=3000.0, gs_kt=120.0)
     assert not st.valid
 
 
@@ -1047,13 +1175,88 @@ def test_cdi_scale_tightens_to_approach_when_procedure_active(db):
         airport="KTST", ident="RNV-Z", kind="approach", route_type="R",
         transitions={"": (
             ProcedureLeg(10, LegType.IF, fix_ident="ALFA"),
-            ProcedureLeg(20, LegType.TF, fix_ident="BRAVO"),
+            ProcedureLeg(20, LegType.TF, fix_ident="BRAVO", is_faf=True),
         )},
     ))
     g = Gns530(db)
     g.load_procedure("KTST", "RNV-Z")
-    ns = g.update(Point(40.48, -74.0), 0.0, 120.0)          # ~1.3 nm short of BRAVO
+    ns = g.update(Point(40.48, -74.0), 0.0, 120.0)          # ~1.3 nm short of BRAVO (the FAF)
     assert ns.cdi_scale_nm == pytest.approx(0.30)
+
+
+def test_cdi_scale_stays_approach_past_the_faf(db):
+    """FINDINGS: the 0.30 nm approach scale, once armed within 2 nm of the
+    FAF, must not widen again on the FAF -> MAP leg just because that leg's
+    own endpoint is farther than the arm distance (a real MAP fix is often
+    several miles past the FAF)."""
+    db.add_procedure(Procedure(
+        airport="KTST", ident="RNV-Z", kind="approach", route_type="R",
+        transitions={"": (
+            ProcedureLeg(10, LegType.IF, fix_ident="ALFA"),
+            ProcedureLeg(20, LegType.TF, fix_ident="BRAVO", is_faf=True),
+            ProcedureLeg(30, LegType.TF, fix_ident="CHAR", is_map=True),
+        )},
+    ))
+    g = Gns530(db)
+    g.load_procedure("KTST", "RNV-Z")
+    g.update(Point(40.48, -74.0), 0.0, 120.0)               # short of BRAVO (the FAF): armed
+    g.fpl.activate_leg(g.fpl.index_of("CHAR"))               # now past the FAF, on the MAP leg
+    ns = g.update(Point(40.6, -74.0), 0.0, 120.0)            # miles from CHAR - would un-arm before the fix
+    assert ns.cdi_scale_nm == pytest.approx(0.30)
+
+
+def test_cdi_scale_does_not_arm_early_from_an_unrelated_leg_passing_near_the_faf(db):
+    """FINDINGS F18: an *earlier* leg's own flight path can pass within 2 nm
+    of the FAF's coordinates by pure incidental geometry (KLNS I08:
+    LRP->DALAC happens to track within ~0.3 nm of POLCU well before DALAC's
+    hold is even reached) - that must not arm the 0.30 nm approach scale.
+    Here ALFA->CHAR runs straight through BRAVO (the FAF of a later leg)."""
+    db.add_procedure(Procedure(
+        airport="KTST", ident="RNV-Z", kind="approach", route_type="R",
+        transitions={"": (
+            ProcedureLeg(10, LegType.IF, fix_ident="ALFA"),
+            ProcedureLeg(20, LegType.TF, fix_ident="CHAR"),
+            ProcedureLeg(30, LegType.TF, fix_ident="BRAVO", is_faf=True),
+            ProcedureLeg(40, LegType.TF, fix_ident="DELT", is_map=True),
+        )},
+    ))
+    g = Gns530(db)
+    g.load_procedure("KTST", "RNV-Z")
+    # flying leg 1 (ALFA -> CHAR): passes exactly through BRAVO's position,
+    # but BRAVO (the FAF) isn't the active leg yet - must not tighten
+    ns = g.update(BRAVO, 0.0, 120.0)
+    assert ns.cdi_scale_nm != pytest.approx(0.30)
+    # now actually on the FAF-bound leg, close to BRAVO: correctly arms
+    g.fpl.activate_leg(g.fpl.index_of("BRAVO"))
+    ns = g.update(Point(40.49, -74.0), 0.0, 120.0)
+    assert ns.cdi_scale_nm == pytest.approx(0.30)
+
+
+def test_cdi_alarms_fixed_scale_caps_the_auto_value(g):
+    """AUX > Setup > CDI/Alarms: a fixed selection is a ceiling the scale
+    never widens past, but a genuinely tighter auto phase still tightens
+    further than it (H1: "does not show CDI Alarms... nothing configurable")."""
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    g.cdi_alarm_max_nm = 1.0
+    ns = g.update(Point(40.2, -74.0), 0.0, 120.0)         # far enroute - would be 5.0 nm Auto
+    assert ns.cdi_scale_nm == pytest.approx(1.0)
+
+
+def test_cdi_alarms_cycles_through_auto_and_fixed_choices(g):
+    assert g.cdi_alarm_max_nm is None                     # Auto by default
+    g.cursor.group = list(PAGE_GROUPS).index("AUX")
+    g.cursor.page = PAGE_GROUPS["AUX"].index("Setup")
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))     # cursor on
+    g.handle_event(Event(mode=Mode.FMS1, inner=1))
+    assert g.cdi_alarm_max_nm == pytest.approx(5.0)
+    g.handle_event(Event(mode=Mode.FMS1, inner=1))
+    assert g.cdi_alarm_max_nm == pytest.approx(1.0)
+    g.handle_event(Event(mode=Mode.FMS1, inner=1))
+    assert g.cdi_alarm_max_nm == pytest.approx(0.30)
+    g.handle_event(Event(mode=Mode.FMS1, inner=1))         # clamped at the last choice
+    assert g.cdi_alarm_max_nm == pytest.approx(0.30)
+    g.handle_event(Event(mode=Mode.FMS1, inner=-1))
+    assert g.cdi_alarm_max_nm == pytest.approx(1.0)
 
 
 def test_cdi_scale_ramps_gradually_when_dt_given(g):

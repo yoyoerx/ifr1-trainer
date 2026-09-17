@@ -419,27 +419,35 @@ class NavDatabase:
         pool = [wp for lst in self.waypoints.values() for wp in lst]
         return self._nearest(pool, ref, n, max_nm)
 
-    def find(self, ident: str, *, near: Point | None = None):
+    def find(self, ident: str, *, near: Point | None = None, kind: str | None = None):
         """All navaids / waypoints / airports matching ``ident``
         (VHF, then NDB, then fix, then airport).
 
         With ``near`` given, results are sorted by distance from that point.
+        ``kind`` (one of "vhf" / "ndb" / "waypoint" / "airport") restricts
+        the search to that single category - e.g. the GNS WPT group's VOR
+        page should only ever resolve a VHF navaid, not any airport or
+        intersection that happens to share the identifier. ``None`` (the
+        default) searches every category, as before.
         """
         ident = ident.strip().upper()
         hits: list = []
-        hits += self.vhf.get(ident, [])
-        hits += self.ndb.get(ident, [])
-        hits += self.waypoints.get(ident, [])
-        if ident in self.airports:
+        if kind in (None, "vhf"):
+            hits += self.vhf.get(ident, [])
+        if kind in (None, "ndb"):
+            hits += self.ndb.get(ident, [])
+        if kind in (None, "waypoint"):
+            hits += self.waypoints.get(ident, [])
+        if kind in (None, "airport") and ident in self.airports:
             hits.append(self.airports[ident])
         if near is not None:
             hits.sort(key=lambda e: great_circle_nm(e.pos, near))
         return hits
 
-    def nearest_fix(self, ident: str, ref: Point):
+    def nearest_fix(self, ident: str, ref: Point, *, kind: str | None = None):
         """The single closest entry matching ``ident`` to ``ref``, or ``None``.
 
         This is how ARINC procedure legs resolve a bare fix ident.
         """
-        hits = self.find(ident, near=ref)
+        hits = self.find(ident, near=ref, kind=kind)
         return hits[0] if hits else None

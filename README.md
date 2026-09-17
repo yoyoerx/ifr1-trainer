@@ -13,7 +13,7 @@ not real-world navigation.
 
 See `WORKING.md` for the detailed task tracker and `ARCHITECTURE.md` for the map.
 `FINDINGS.md` records the GNS 530 validation against the Garmin Pilot's Guide.
-804 tests passing. The trainer runs:
+825 tests passing. The trainer runs:
 
 ```
 python main.py --plan "KBOS PVD KJFK" --wind 300/25       # 530 + moving map
@@ -214,7 +214,9 @@ hardware at all). This is the full list, straight from `main._on_key`.
 | `Shift+PgUp` / `Shift+PgDn` | Page **group**: NAV → WPT → AUX → NRST (large knob) — the only keyboard route to WPT, AUX (incl. Weather), and NRST |
 | `Tab` | CRSR (cursor on/off) |
 | `D` | Open the Direct-To entry page |
+| `C` | CLR — cancels an active Direct-To (resumes the nearest flight-plan leg), deletes the selected Flight Plan/Catalog row, or backs out to Default NAV |
 | `R` | Open PROC (approach/SID/STAR selector) |
+| `X` | MNU — opens the Flight Plan / Flight Plan Catalog page menu (Invert/Copy/Sort/Delete); Up/Down/Enter/Esc drive it once open |
 | `[` / `]` | Map range out / in |
 | `Home` | Jump to Default NAV page |
 | `S` | Suspend (SUSP) |
@@ -255,10 +257,8 @@ hardware at all). This is the full list, straight from `main._on_key`.
 | `Enter` | Confirm / advance |
 | `Esc` / `Backspace` | Back out |
 
-Two known gaps: the GNS **MNU** key (flight-plan context menu — Invert/Copy/
-Sort/Delete Flight Plan, Sort Catalog) has no keyboard binding, and COM/NAV/
-XPDR standby-frequency tuning is IFR-1-only — neither has a keyboard fallback
-today.
+One known gap: COM/NAV/XPDR standby-frequency tuning is IFR-1-only — it has
+no keyboard fallback today.
 
 ## Time warp
 

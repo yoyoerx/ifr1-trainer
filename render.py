@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pygame
 
-from navmath import Point, great_circle_nm, initial_bearing, norm360
+from navmath import Point, destination, great_circle_nm, initial_bearing, norm360
 from gpsnav import VARIANT_530
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
@@ -29,6 +29,66 @@ _SCREEN_FRAC = (0.163, 0.050, 0.838, 0.765)
 _BEZEL_ASPECT = 165.0 / 120.0        # the real 530 faceplate is landscape
 _BEZEL_CACHE: dict = {}
 _WX_CACHE_TTL_S = 5.0   # Weather page: how often to re-read datasrc.wx's local cache
+_HOLD_TURN_RADIUS_NM = 1.0   # stylized - the real 530's moving-map hold symbol
+                             # isn't drawn to true turn-radius scale either
+
+
+def _hold_track_points(fix: Point, inbound_true: float, turn: str,
+                        leg_nm: float, arc_steps: int = 8) -> list[Point]:
+    """Points tracing a stylized hold "racetrack": outbound leg from ``fix``,
+    a 180 deg turn (to the R or L side per ``turn``), the parallel inbound
+    leg, and the turn back to ``fix`` - the same schematic shape a real GNS
+    530 moving map draws for a loaded hold (HM/HA/HF), rather than an
+    undifferentiated ring. Built by composing ``navmath.destination`` calls
+    in a fix-relative along/across frame (outbound-course-aligned), same
+    style as `gpsnav._expand_leg`'s synthetic-fix composition - fine at
+    hold-pattern scale, no need for exact great-circle offset math."""
+    outbound = norm360(inbound_true + 180.0)
+    # Turning right (or left) *at the fix* to reverse from inbound to
+    # outbound sweeps through the inbound course's own +90/-90 side (e.g.
+    # inbound 000, right turns: 000 -> 090 -> 180 sweeps through east), so
+    # that's the side the whole racetrack ends up displaced to - not
+    # outbound's +/-90, which is the reciprocal side and was backwards here
+    # in an earlier version of this function (verified against the "turn at
+    # the fix" derivation, not just plausible-looking output).
+    side = 90.0 if turn == "R" else -90.0
+    across = norm360(inbound_true + side)
+    sign = -1.0 if turn == "R" else 1.0
+    r = _HOLD_TURN_RADIUS_NM
+
+    def off(along_nm: float, across_nm: float) -> Point:
+        p = destination(fix, outbound, along_nm) if along_nm else fix
+        return destination(p, across, across_nm) if across_nm else p
+
+    far = off(leg_nm, 0.0)
+    far_off = off(leg_nm, 2.0 * r)
+    near_off = off(0.0, 2.0 * r)
+    center_far = off(leg_nm, r)
+    center_near = off(0.0, r)
+
+    def arc(center: Point, start_bearing: float) -> list[Point]:
+        return [destination(center, norm360(start_bearing + sign * 180.0 * i / arc_steps), r)
+                for i in range(1, arc_steps)]
+
+    pts = [fix, far]
+    pts += arc(center_far, norm360(across + 180.0))     # far-end turn
+    pts.append(far_off)
+    pts.append(near_off)
+    pts += arc(center_near, across)                     # near-end turn
+    pts.append(fix)
+    return pts
+
+
+def _pt_symbol_points(tip: Point, inbound_true: float, half_nm: float = 0.35) -> list[Point]:
+    """A small chevron at a procedure-turn's synthetic "PT" point, pointing
+    along the course flown inbound after the turn - distinguishes it from a
+    plain waypoint dot without needing the turn's exact (unknown, here)
+    outbound leg length. ``inbound_true`` is stashed on the waypoint by
+    `gpsnav._expand_leg`'s PI branch."""
+    back = norm360(inbound_true + 180.0)
+    left = destination(tip, norm360(back + 35.0), half_nm)
+    right = destination(tip, norm360(back - 35.0), half_nm)
+    return [left, tip, right]
 
 
 def _fpl_tag(wp) -> str:
@@ -492,26 +552,31 @@ class Renderer:
             self._t(text, x0 + fx * bw, y0 + fy * bh, font=self.f_sm,
                     color=DIM, center=True)
         if getattr(var, "short", "530") == "530":
-            # bottom row: 6 softkey cutouts - CDI/OBS/MSG/FPL/PROC sit over
-            # the first 5, measured centers at fy ~0.844
-            for text, fx in zip(("CDI", "OBS", "MSG", "FPL", "PROC"),
-                                (0.239, 0.341, 0.447, 0.552, 0.657)):
-                lab(text, fx, 0.844)
+            # bottom row: 6 softkey cutouts, left to right CDI/OBS/MSG/FPL/
+            # VNAV/PROC, measured centers at fy ~0.815 (a prior pass had
+            # only 5 fx's here - VNAV was missing and PROC sat in its slot)
+            for text, fx in zip(("CDI", "OBS", "MSG", "FPL", "VNAV", "PROC"),
+                                (0.239, 0.344, 0.448, 0.552, 0.656, 0.760)):
+                lab(text, fx, 0.815)
             # right column: 5 stacked cutouts, measured centers
             for text, fy in zip(("RNG", "D>", "MENU", "CLR", "ENT"),
                                 (0.203, 0.359, 0.450, 0.539, 0.630)):
                 lab(text, 0.915, fy)
         else:
-            # 430: the right-side cluster is one wide cutout over a 2x2
-            # grid - CDI spans the wide one, OBS/MSG and FPL/PROC pair up
-            # under it. No matching cutouts exist for RNG/D>/MENU/CLR/ENT
-            # on this faceplate art, so they're left unlabeled rather than
-            # guessed onto the wrong buttons.
-            lab("CDI", 0.898, 0.142)
-            lab("OBS", 0.844, 0.262)
-            lab("MSG", 0.953, 0.262)
-            lab("FPL", 0.844, 0.449)
-            lab("PROC", 0.953, 0.449)
+            # 430: bottom row is the same 5 keys as the 530 minus VNAV
+            # (CDI/OBS/MSG/FPL/PROC), measured centers at fy ~0.905. The
+            # right-side cluster is RNG (one wide cutout, top) over a 2x2
+            # grid of D>/MENU (row 1) and CLR/ENT (row 2) - a prior pass
+            # mislabeled this cluster CDI/OBS/MSG/FPL/PROC and left the
+            # actual bottom-row cutouts unlabeled.
+            for text, fx in zip(("CDI", "OBS", "MSG", "FPL", "PROC"),
+                                (0.291, 0.403, 0.515, 0.627, 0.739)):
+                lab(text, fx, 0.905)
+            lab("RNG", 0.897, 0.144)
+            lab("D>", 0.842, 0.278)
+            lab("MENU", 0.933, 0.278)
+            lab("CLR", 0.843, 0.426)
+            lab("ENT", 0.933, 0.426)
 
     def _below_bezel(self, sc: Scene, r: pygame.Rect, rows: int = 12):
         """Compact strip under the (landscape) unit - flight plan + nav-data state.
@@ -620,7 +685,7 @@ class Renderer:
                 # (or scrolling the knob) will change
                 cw = self.f_sm.size("0")[0]
                 ux = b.x + self.f_sm.size(prefix)[0] + buf.cursor * cw
-                pygame.draw.line(self.surf, AMBER, (ux, r0.bottom), (ux + cw, r0.bottom), 2)
+                pygame.draw.line(self.surf, AMBER, (ux, r0.bottom - 1), (ux + cw, r0.bottom - 1), 3)
             else:
                 self._t(f"{marker} {wp.ident:<7}", b.x, y, font=self.f_sm,
                         color=AMBER if i == sel else col)
@@ -666,31 +731,39 @@ class Renderer:
             y += 15
 
     def _draw_vnav_page(self, sc: Scene, b: pygame.Rect):
-        """VNAV profile page: pilot-entered target fix/altitude/angle (edited
-        with cursor-on, outer=field/inner=value) + live status once armed."""
+        """VNAV profile page: pilot-entered target fix/altitude/VS profile
+        (edited with cursor-on, outer=field/inner=value) + live status once
+        armed. The real GNS 530's own VNAV input is a vertical SPEED, not a
+        flight-path angle (Pilot's Guide sec.10/11 - "VS Profile")."""
         gns = sc.gns
         prof = gns.vnav
         on = getattr(gns.cursor, "cursor_on", False)
         field = getattr(gns, "vnav_field", 0)
         alt = getattr(sc.own, "altitude_ft", None)
-        st = gns.vnav_status(alt) if hasattr(gns, "vnav_status") else None
+        gs = getattr(sc.own, "gs_kt", None)
+        st = gns.vnav_status(alt, gs) if hasattr(gns, "vnav_status") else None
         y = b.y
         rows = [
             ("TARGET", prof.target_ident or "----"),
             ("TGT ALT", f"{prof.target_alt_ft:.0f} ft"),
-            ("ANGLE", f"{prof.angle_deg:.1f}°"),
+            ("VS PROFILE", f"{prof.vs_fpm:+.0f} fpm"),
         ]
         for i, (label, val) in enumerate(rows):
             col = AMBER if (on and i == field) else TEXT
             mk = ">" if (on and i == field) else " "
-            self._t(f"{mk} {label:<8}{val}", b.x, y, font=self.f_sm, color=col)
+            self._t(f"{mk} {label:<11}{val}", b.x, y, font=self.f_sm, color=col)
             y += 17
         self._t(f"VNV {'ARMED' if prof.armed else 'OFF  '}", b.x, y, font=self.f_sm,
                 color=GPS_GREEN if prof.armed else DIM)
         y += 20
         if st is None or not st.valid:
-            self._t("no active VNAV target" if not prof.armed else "target not ahead",
-                    b.x, y, font=self.f_sm, color=DIM)
+            if not prof.armed:
+                msg = "no active VNAV target"
+            elif gs is not None and gs <= 35.0:
+                msg = "GS too low (need > 35 kt)"
+            else:
+                msg = "target not ahead"
+            self._t(msg, b.x, y, font=self.f_sm, color=DIM)
             return
         self._t(f"DIS {st.distance_to_target_nm:5.1f} nm", b.x, y, font=self.f_sm, color=TEXT)
         y += 15
@@ -699,6 +772,13 @@ class Renderer:
             col = AMBER if st.alert else TEXT
             self._t(f"{label} {abs(st.distance_to_tod_nm):5.1f} nm", b.x, y,
                     font=self.f_sm, color=col)
+            y += 15
+            if st.time_to_tod_min is not None and st.distance_to_tod_nm >= 0:
+                self._t(f"TIME TO TOD {st.time_to_tod_min:4.1f} min", b.x, y,
+                        font=self.f_sm, color=col)
+                y += 15
+        if st.required_vs_fpm is not None:
+            self._t(f"REQ VS {st.required_vs_fpm:+.0f} fpm", b.x, y, font=self.f_sm, color=TEXT)
             y += 15
         if st.deviation_ft is not None:
             sign = "+" if st.deviation_ft >= 0 else ""
@@ -724,11 +804,23 @@ class Renderer:
         buf = getattr(gns, "wpt_entry", None)
         chars = "".join(buf.chars) if buf is not None else ""
         on = getattr(gns.cursor, "cursor_on", False)
+        # the page name (e.g. "INTERSECTION") on its own line - it's the
+        # longest of the four sub-page names and was overlapping the
+        # identifier when both shared a line - then per-character identifier
+        # cells with an underline on the active one, same cue as the
+        # Direct-To page and the Flight Plan edit field.
         self._t(sub.upper(), b.x, b.y, font=self.f_sm, color=DIM)
-        self._t(chars or "______", b.x + 70, b.y, font=self.f_md,
-                color=AMBER if on else TEXT)
-        ent = gns.lookup(chars) if buf is not None else None
-        y = b.y + 26
+        cw = 16
+        cy = b.y + 22
+        for i, ch in enumerate(buf.chars if buf is not None else "______"):
+            cx = b.x + i * cw
+            self._t(ch if ch.strip() else "_", cx + cw // 2, cy, font=self.f_md,
+                    color=AMBER if on else TEXT, center=True)
+            if on and buf is not None and i == buf.cursor:
+                pygame.draw.line(self.surf, AMBER, (cx + 2, cy + 20),
+                                 (cx + cw - 2, cy + 20), 2)
+        ent = gns.lookup(chars, sub) if buf is not None else None
+        y = cy + 30
         if ent is None:
             self._t("no match" if chars.strip() else "knob: enter identifier",
                     b.x, y, font=self.f_sm, color=DIM)
@@ -771,7 +863,13 @@ class Renderer:
         if not hits:
             self._t("none within range", b.x, y, font=self.f_sm, color=DIM)
             return
-        for i, e in enumerate(hits[:room]):
+        # scroll the window to keep the selection on-screen (same idea as the
+        # Weather page's CRSR scroll) - the list always started at the top
+        # before, so selecting past the first `room` entries (further-away
+        # POIs) moved the selection off-screen with nothing ever scrolling
+        # to show them.
+        top = max(0, min(max(0, len(hits) - room), sel - room // 2))
+        for i, e in enumerate(hits[top:top + room], start=top):
             brg = norm360(initial_bearing(sc.own.pos, e.pos) - mv)
             dis = great_circle_nm(sc.own.pos, e.pos)
             col = AMBER if (on and i == sel) else TEXT
@@ -779,6 +877,9 @@ class Renderer:
             self._t(f"{mk} {e.ident:<6} {brg:03.0f}° {dis:6.1f}nm", b.x, y,
                     font=self.f_sm, color=col)
             y += 15
+        if len(hits) > room:
+            more = ("^" if top > 0 else " ") + ("v" if top + room < len(hits) else " ")
+            self._t(more, b.right - 2, b.y, font=self.f_sm, color=AMBER, right=True)
 
     # -- AUX group: Trip Planning / Utility / Setup / Nav Data -------------
     def _draw_aux_page(self, sc: Scene, b: pygame.Rect, sub: str):
@@ -862,6 +963,7 @@ class Renderer:
     def _draw_aux_setup(self, sc: Scene, b: pygame.Rect):
         gns = sc.gns
         variant = getattr(gns, "variant", None)
+        on = getattr(gns.cursor, "cursor_on", False)
         y = b.y
         self._t(f"UNIT     {getattr(variant, 'name', '---')}", b.x, y, font=self.f_sm, color=TEXT)
         y += 17
@@ -870,7 +972,13 @@ class Renderer:
         y += 17
         self._t(f"BARO     {getattr(sc, 'baro_inhg', 29.92):.2f} in", b.x, y,
                 font=self.f_sm, color=TEXT)
-        y += 17
+        y += 20
+        alarm = getattr(gns, "cdi_alarm_max_nm", None)
+        val = "AUTO" if alarm is None else (f"{alarm:.2f}" if alarm < 1.0 else f"{alarm:.1f}")
+        mk = ">" if on else " "
+        self._t(f"{mk} CDI/ALARMS  {val}", b.x, y, font=self.f_sm,
+                color=AMBER if on else TEXT)
+        y += 20
         self._t("NAV UNITS  nm / kt / ft", b.x, y, font=self.f_sm, color=DIM)
 
     def _wx_read(self, sc: Scene, ident: str, kind: str):
@@ -928,34 +1036,43 @@ class Renderer:
         taf_r = self._wx_read(sc, ident, "taf")
         max_w = b.width
 
-        self._t("METAR", b.x, y, font=self.f_sm, color=DIM)
-        y += 15
+        # One combined scrollable list (METAR then TAF) instead of a fixed
+        # METAR/TAF split that just clipped whatever didn't fit - the 530's
+        # small screen routinely can't show a full TAF at once, and CRSR
+        # (cursor on, inner knob) now scrolls through all of it rather than
+        # permanently hiding the tail end.
+        lines: list[tuple[str, tuple[int, int, int]]] = [("METAR", DIM)]
         if metar_r is None:
-            self._t(f"no cached METAR - datasrc.wx metar {ident}", b.x, y,
-                    font=self.f_sm, color=DIM)
-            y += 14
+            lines.append((f"no cached METAR - datasrc.wx metar {ident}", DIM))
         else:
             metar, age = metar_r
-            for line in self._wrap(metar.raw or "(no data)", self.f_sm, max_w)[:3]:
-                self._t(line, b.x, y, font=self.f_sm, color=TEXT)
-                y += 14
+            lines += [(ln, TEXT) for ln in self._wrap(metar.raw or "(no data)", self.f_sm, max_w)]
             if age is not None:
-                self._t(f"{age:.0f} min ago", b.x, y, font=self.f_sm,
-                        color=AMBER if age > 75 else DIM)
-                y += 14
-        y += 6
-
-        self._t("TAF", b.x, y, font=self.f_sm, color=DIM)
-        y += 15
+                lines.append((f"{age:.0f} min ago", AMBER if age > 75 else DIM))
+        lines.append(("", TEXT))
+        lines.append(("TAF", DIM))
         if taf_r is None:
-            self._t(f"no cached TAF - datasrc.wx taf {ident}", b.x, y,
-                    font=self.f_sm, color=DIM)
+            lines.append((f"no cached TAF - datasrc.wx taf {ident}", DIM))
         else:
             taf, _age = taf_r
-            room = max(1, (b.bottom - y) // 14)
-            for line in self._wrap(taf.raw or "(no data)", self.f_sm, max_w)[:room]:
-                self._t(line, b.x, y, font=self.f_sm, color=TEXT)
-                y += 14
+            lines += [(ln, TEXT) for ln in self._wrap(taf.raw or "(no data)", self.f_sm, max_w)]
+
+        room = max(1, (b.bottom - y) // 14)
+        top = max(0, min(max(0, len(lines) - room), getattr(gns, "wx_scroll", 0)))
+        # write the clamped position back - GpsNav doesn't know the rendered
+        # line count (same reason the Charts page's chart_sel is clamped
+        # here, not there), so without this the raw wx_scroll counter could
+        # run far past the real max on a fast scroll and the knob would then
+        # have to un-scroll all the way back through the overshoot before
+        # the screen visibly moved again, instead of just capping in place.
+        if hasattr(gns, "wx_scroll"):
+            gns.wx_scroll = top
+        for text, col in lines[top:top + room]:
+            self._t(text, b.x, y, font=self.f_sm, color=col)
+            y += 14
+        if len(lines) > room:
+            more = ("^" if top > 0 else " ") + ("v" if top + room < len(lines) else " ")
+            self._t(more, b.right - 2, b.y, font=self.f_sm, color=AMBER, right=True)
 
     def _dtpp_charts_for(self, ident: str) -> list:
         """Charts for one airport from the cached d-TPP index (see
@@ -1129,13 +1246,25 @@ class Renderer:
             is_active = i == active and not dto_on   # DTO course owns the magenta
             col = MAGENTA if is_active else (150, 155, 160)
             pygame.draw.line(self.surf, col, pts[i - 1], pts[i], 2 if is_active else 1)
+        gs_kt = getattr(sc.own, "gs_kt", 0.0) or 0.0
         for wp, sp in zip(wps, pts):
             x, yy = int(sp[0]), int(sp[1])
             if getattr(wp, "is_map", False):             # MAP: amber X
                 pygame.draw.line(self.surf, AMBER, (x - 4, yy - 4), (x + 4, yy + 4), 2)
                 pygame.draw.line(self.surf, AMBER, (x - 4, yy + 4), (x + 4, yy - 4), 2)
-            elif getattr(wp, "hold", False):             # hold: ring
-                pygame.draw.circle(self.surf, AMBER, (x, yy), 6, 1)
+            elif getattr(wp, "hold", False):             # hold: the actual racetrack, not a bare ring
+                inbound = wp.hold_inbound_true if wp.hold_inbound_true is not None else 0.0
+                leg_nm = wp.hold_leg_nm or max(
+                    0.5, (gs_kt if gs_kt > 20.0 else 90.0) / 60.0 *
+                    (wp.hold_leg_min if wp.hold_leg_min is not None else 1.0))
+                track = [project(p) for p in
+                         _hold_track_points(wp.pos, inbound, wp.hold_turn or "R", leg_nm)]
+                pygame.draw.lines(self.surf, AMBER, True, track, 1)
+                pygame.draw.circle(self.surf, AMBER, (x, yy), 2)
+            elif wp.ident == "PT" and getattr(wp, "synthetic", False) \
+                    and wp.hold_inbound_true is not None:      # procedure turn: a chevron, not a dot
+                chevron = [project(p) for p in _pt_symbol_points(wp.pos, wp.hold_inbound_true)]
+                pygame.draw.lines(self.surf, AMBER, False, chevron, 2)
             elif getattr(wp, "is_faf", False):           # FAF: filled
                 pygame.draw.circle(self.surf, WHITE, (x, yy), 3)
             else:

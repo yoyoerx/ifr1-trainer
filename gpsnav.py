@@ -91,6 +91,12 @@ def _clampf(v: float, lo: float, hi: float) -> float:
 _FIX_CAPTURE_NM = 0.30
 # how far ahead of a sequence point the "WPT" alert starts (seconds of flight)
 _WPT_ALERT_SEC = 10.0
+# a hold's inbound leg (see _step_hold): once actual distance-to-fix has
+# opened back up by this much past its closest point of approach, the
+# aircraft is past the fix and moving away - treat the CPA as "reached"
+# rather than waiting indefinitely for an exact _FIX_CAPTURE_NM hit that a
+# wide entry (e.g. a teardrop's ~210 deg return turn) may never quite land.
+_HOLD_CPA_MARGIN_NM = 1.0
 
 # GPS CDI full-scale (each side), by phase of flight - GNS 530 Pilot's Guide
 # 190-00181-00 sec.3.3 / 10.4: 5.0 nm enroute, 1.0 nm terminal, 0.30 nm approach.
@@ -103,6 +109,9 @@ _CDI_APPROACH_NM = 0.30
 # outbound), symmetric with the arrival-side ramp.
 _CDI_TERMINAL_ARM_NM = 30.0
 _CDI_APPROACH_ARM_NM = 2.0
+# AUX > Setup > CDI/Alarms: Auto (phase-of-flight, the default/only mode
+# until now) or a fixed ceiling the scale never widens past - `None` is Auto.
+_CDI_ALARM_CHOICES: tuple[float | None, ...] = (None, _CDI_ENROUTE_NM, _CDI_TERMINAL_NM, _CDI_APPROACH_NM)
 # the scale slews toward its target rather than stepping (sec.6.2 "gradual ...
 # transition"): 5.0 -> 1.0 nm in ~30 s.
 _CDI_RAMP_NM_PER_S = (5.0 - 1.0) / 30.0
@@ -279,6 +288,11 @@ PAGE_GROUPS: dict[str, list[str]] = {
     "NRST": ["Nearest APT", "Nearest VOR", "Nearest NDB", "Nearest INT"],
 }
 _GROUP_ORDER = list(PAGE_GROUPS)
+# each WPT sub-page resolves only its own category (Pilot's Guide sec.4.2:
+# the Airport/Intersection/NDB/VOR pages are separate lookups) - the value
+# matches navdata.NavDatabase.find/nearest_fix's ``kind`` argument.
+_WPT_PAGE_KIND = {"Airport": "airport", "Intersection": "waypoint",
+                  "NDB": "ndb", "VOR": "vhf"}
 
 
 @dataclass
@@ -458,22 +472,34 @@ class FplMenu:
 
 
 # --------------------------------------------------------------------------- #
-# VNAV - a straight-line descent profile to a flight-plan fix
+# VNAV - a straight-line descent/climb profile to a flight-plan fix
 # --------------------------------------------------------------------------- #
-_VNAV_MIN_ANGLE = 1.0
-_VNAV_MAX_ANGLE = 6.0
+# The real GNS 530's VNAV page (Pilot's Guide sec.10/11, "Vertical
+# Navigation") programs a vertical SPEED ("VS Profile" / "Vertical Speed
+# Desired", ft/min - default a 400 fpm descent rate), not a flight-path
+# angle - there is no angle field on the real unit at all. The live "VSR"
+# (Vertical Speed Required) readout is what tells the pilot the rate needed
+# right now to stay on that profile; this trainer's earlier angle_deg field
+# was a misremembered invention, not the real GNS 530 behavior - corrected
+# per playtest feedback (round 5), cross-checked against the Pilot's Guide's
+# actual field labels.
+_VNAV_MIN_VS_FPM = -2000.0
+_VNAV_MAX_VS_FPM = 2000.0
+_VNAV_DEFAULT_VS_FPM = -400.0
+_VNAV_MIN_GS_KT = 35.0          # Pilot's Guide: VNAV needs > 35 kt groundspeed
 _FT_PER_NM = 6076.115949
 
 
 @dataclass(frozen=True, slots=True)
 class VnavProfile:
     """The pilot-entered VNAV target: cross ``target_ident`` at
-    ``target_alt_ft`` on a ``angle_deg`` path (Pilot's Guide sec.9 VNAV -
-    this trainer's version has no "distance before" offset field)."""
+    ``target_alt_ft``, descending/climbing at ``vs_fpm`` (+ = climb,
+    - = descend - Pilot's Guide's "VS Profile"/"Vertical Speed Desired"
+    field; this trainer's version has no "distance before" offset field)."""
 
     target_ident: str = ""
     target_alt_ft: float = 0.0
-    angle_deg: float = 3.0
+    vs_fpm: float = _VNAV_DEFAULT_VS_FPM
     armed: bool = False
 
 
@@ -483,16 +509,18 @@ class VnavStatus:
     from `update()`/`NavState` because altitude isn't otherwise part of this
     core's state (`update()` only ever sees pos/track/gs)."""
 
-    valid: bool = False                      # armed, target resolved, ahead of us
+    valid: bool = False                      # armed, target resolved, ahead of us, GS usable
     target_ident: str = ""
     target_alt_ft: float = 0.0
-    angle_deg: float = 3.0
+    vs_fpm: float = _VNAV_DEFAULT_VS_FPM
     distance_to_target_nm: float | None = None
     required_alt_ft: float | None = None     # ideal altitude at the present position
     tod_distance_nm: float | None = None     # distance-to-go needed to fly the profile
     distance_to_tod_nm: float | None = None  # + = TOD ahead; - = past TOD, should descend
     deviation_ft: float | None = None        # actual - required; + = above the path
     alert: bool = False                      # within 1 nm of the top of descent
+    required_vs_fpm: float | None = None     # VSR - live rate needed right now, independent of vs_fpm
+    time_to_tod_min: float | None = None     # ETE to the top of descent at current GS
 
 
 # --------------------------------------------------------------------------- #
@@ -570,6 +598,7 @@ class GpsNav:
         self.vnav = VnavProfile()                    # the VNAV page's pilot-entered target
         self.vnav_field = 0                          # 0=target 1=altitude 2=angle
         self.wx_sel = 0                               # selected station on the Weather page
+        self.wx_scroll = 0                            # line offset into that station's METAR/TAF text
         self.chart_airport_sel = 0                    # selected airport on the Charts page
         self.chart_sel = 0                            # selected chart within that airport
         self._expiry_warned = False
@@ -579,7 +608,13 @@ class GpsNav:
         self._auto_vloc_done = False              # one-shot GPS->VLOC CDI switch
         self._susp_at: tuple | None = None  # (active, ident) we auto-suspended at
         self._hold_state: dict | None = None  # in-progress holding-pattern circuit
+        self.cdi_alarm_max_nm: float | None = None  # AUX>Setup>CDI/Alarms override; None = Auto
         self._cdi_scale = _CDI_ENROUTE_NM  # live (slewed) GPS CDI full-scale, nm
+        self._cdi_scale_init = False       # snap once instead of slewing from the
+                                            # enroute default seeded above (a fresh
+                                            # start near the departure airport should
+                                            # read 1.0 nm immediately, not visibly
+                                            # ramp 5.0 -> 1.0 over the first few seconds)
         self._nav = NavState()
         # last ownship sample (set by update())
         self._pos: Point | None = None
@@ -858,7 +893,15 @@ class GpsNav:
             far = destination(base, out_true, leg.distance_nm or 4.0)
             side = -45.0 if leg.turn == "L" else 45.0
             tip = destination(far, norm360(out_true + 180.0 + side), 1.8)
-            yield PlanWaypoint("PT", tip, "wpt", synthetic=True, **flags), \
+            # hold_turn/hold_inbound_true aren't otherwise meaningful with
+            # hold=False (no HILPT is actually flown for a PI leg) - stashed
+            # here purely so render.py's map can draw a proper procedure-turn
+            # barb oriented the same way the real course reversal is flown,
+            # instead of an undifferentiated dot.
+            yield PlanWaypoint("PT", tip, "wpt", synthetic=True,
+                               hold_turn=(leg.turn or "R").strip().upper() or "R",
+                               hold_inbound_true=norm360(out_true + 180.0),
+                               **flags), \
                 norm360(out_true + 180.0)
             return
 
@@ -1041,6 +1084,7 @@ class GpsNav:
                 self.vnav_field = 0
             elif page == "Weather":
                 self.wx_sel = 0
+                self.wx_scroll = 0
             elif page == "Charts":
                 self.chart_airport_sel = 0
                 self.chart_sel = 0
@@ -1075,10 +1119,20 @@ class GpsNav:
                 self.vnav_field = max(0, min(2, self.vnav_field + outer))
             if inner:
                 self._vnav_edit(inner)
+        elif page == "Setup":
+            if inner:
+                self._cycle_cdi_alarm(inner)
         elif page == "Weather":
             if outer:
                 n = len(self.wx_station_idents())
                 self.wx_sel = max(0, min(max(0, n - 1), self.wx_sel + outer))
+                self.wx_scroll = 0                     # new station - back to the top
+            if inner:
+                # scrolls the METAR/TAF text itself, which routinely runs
+                # longer than the screen (H1/I1: "screen too small to show
+                # complete TAF... CRSR should scroll") - render.py clamps
+                # the upper bound against the actual line count each frame.
+                self.wx_scroll = max(0, self.wx_scroll + inner)
         elif page == "Charts":
             # outer (large knob) picks the airport, resetting the chart index
             # each time; inner (small knob) scrolls the chart list. GpsNav
@@ -1126,7 +1180,7 @@ class GpsNav:
             self.fpl.insert(row, wp)
             ed["row"] = row + 1     # cursor follows onto the (now shifted-down) old row
         elif page in ("Airport", "Intersection", "NDB", "VOR"):
-            entry = self.lookup(self.wpt_entry.ident())
+            entry = self.lookup(self.wpt_entry.ident(), page)
             if entry is not None:                  # DCT-from-a-WPT-page shortcut
                 self.direct_to(PlanWaypoint.from_entry(entry))
                 self.cursor.go_to_default_nav()
@@ -1164,7 +1218,7 @@ class GpsNav:
     def _vnav_edit(self, delta: int) -> None:
         """VNAV page, cursor on: outer picks the field (`vnav_field`), inner
         edits it - target fix (stepped through the remaining flight plan),
-        target altitude (+-100 ft), or descent angle (+-0.1 deg)."""
+        target altitude (+-100 ft), or VS profile (+-100 fpm)."""
         if self.vnav_field == 0:
             ahead = ([w.ident for w in self.fpl.waypoints[self.fpl.active:]]
                      if self.fpl.has_active_leg else [])
@@ -1177,8 +1231,16 @@ class GpsNav:
             alt = max(0.0, self.vnav.target_alt_ft + delta * 100.0)
             self.vnav = replace(self.vnav, target_alt_ft=alt)
         else:
-            angle = _clampf(self.vnav.angle_deg + delta * 0.1, _VNAV_MIN_ANGLE, _VNAV_MAX_ANGLE)
-            self.vnav = replace(self.vnav, angle_deg=angle)
+            vs = _clampf(self.vnav.vs_fpm + delta * 100.0, _VNAV_MIN_VS_FPM, _VNAV_MAX_VS_FPM)
+            self.vnav = replace(self.vnav, vs_fpm=vs)
+
+    def _cycle_cdi_alarm(self, delta: int) -> None:
+        """Setup page, cursor on: inner knob steps through CDI/Alarms'
+        Auto / 5.0 / 1.0 / 0.30 nm choices."""
+        cur = (_CDI_ALARM_CHOICES.index(self.cdi_alarm_max_nm)
+               if self.cdi_alarm_max_nm in _CDI_ALARM_CHOICES else 0)
+        cur = max(0, min(len(_CDI_ALARM_CHOICES) - 1, cur + (1 if delta > 0 else -1)))
+        self.cdi_alarm_max_nm = _CDI_ALARM_CHOICES[cur]
 
     # -- Flight Plan Catalog (Pilot's Guide sec.5.2): store / recall / -----
     # invert / delete whole plans. FPL 00 is always the active plan (`self.
@@ -1320,40 +1382,52 @@ class GpsNav:
         return dist
 
     def vnav_set(self, target_ident: str, target_alt_ft: float,
-                 angle_deg: float = 3.0) -> bool:
+                 vs_fpm: float = _VNAV_DEFAULT_VS_FPM) -> bool:
         """Program + arm a VNAV profile directly (the page does the same
         thing one field at a time). False (no-op) if the fix isn't in the
         active flight plan."""
         ident = target_ident.strip().upper()
         if self.fpl.index_of(ident) < 0:
             return False
-        angle = _clampf(angle_deg, _VNAV_MIN_ANGLE, _VNAV_MAX_ANGLE)
-        self.vnav = VnavProfile(ident, max(0.0, target_alt_ft), angle, armed=True)
+        vs = _clampf(vs_fpm, _VNAV_MIN_VS_FPM, _VNAV_MAX_VS_FPM)
+        self.vnav = VnavProfile(ident, max(0.0, target_alt_ft), vs, armed=True)
         return True
 
-    def vnav_status(self, alt_ft: float | None = None) -> VnavStatus:
+    def vnav_status(self, alt_ft: float | None = None, gs_kt: float | None = None) -> VnavStatus:
         prof = self.vnav
         base = VnavStatus(target_ident=prof.target_ident, target_alt_ft=prof.target_alt_ft,
-                           angle_deg=prof.angle_deg)
+                           vs_fpm=prof.vs_fpm)
         if not prof.armed or not prof.target_ident:
             return base
         i = self.fpl.index_of(prof.target_ident)
         dist = self._distance_to_index(i) if i >= 0 else None
         if dist is None:
             return base
-        ft_per_nm = _FT_PER_NM * math.tan(math.radians(prof.angle_deg))
-        required_alt = prof.target_alt_ft + dist * ft_per_nm
-        tod_nm = to_tod = dev = None
-        if alt_ft is not None and ft_per_nm > 0:
-            to_lose = alt_ft - prof.target_alt_ft
-            tod_nm = max(0.0, to_lose / ft_per_nm)
-            to_tod = dist - tod_nm
-            dev = alt_ft - required_alt
+        base = replace(base, distance_to_target_nm=dist)
+        # Pilot's Guide: VNAV needs > 35 kt groundspeed - converting a ft/min
+        # profile into a ground-track altitude profile is undefined below
+        # that (same reason the real unit requires it).
+        if gs_kt is None or gs_kt <= _VNAV_MIN_GS_KT or alt_ft is None or prof.vs_fpm == 0:
+            return base
+        ft_per_nm = prof.vs_fpm * 60.0 / gs_kt        # signed: - = descending, + = climbing
+        required_alt = prof.target_alt_ft - ft_per_nm * dist
+        to_lose = alt_ft - prof.target_alt_ft
+        tod_nm = max(0.0, to_lose / -ft_per_nm) if ft_per_nm else None
+        to_tod = dist - tod_nm if tod_nm is not None else None
+        dev = alt_ft - required_alt
+        time_min = dist / gs_kt * 60.0
+        # VSR (Vertical Speed Required): the live rate needed RIGHT NOW to
+        # reach target_alt_ft at the target, at the current groundspeed -
+        # independent of the pilot's chosen vs_fpm profile, same as the real
+        # unit's VSR readout (it's a "how am I doing" gauge, not an echo).
+        req_vs = -to_lose / time_min if time_min > 0 else None
+        time_to_tod = max(0.0, to_tod) / gs_kt * 60.0 if to_tod is not None else None
         return VnavStatus(
             valid=True, target_ident=prof.target_ident, target_alt_ft=prof.target_alt_ft,
-            angle_deg=prof.angle_deg, distance_to_target_nm=dist, required_alt_ft=required_alt,
+            vs_fpm=prof.vs_fpm, distance_to_target_nm=dist, required_alt_ft=required_alt,
             tod_distance_nm=tod_nm, distance_to_tod_nm=to_tod, deviation_ft=dev,
             alert=to_tod is not None and abs(to_tod) <= 1.0,
+            required_vs_fpm=req_vs, time_to_tod_min=time_to_tod,
         )
 
     def nearest_for_page(self, page: str) -> list:
@@ -1424,10 +1498,15 @@ class GpsNav:
             self.messages.append(f"NO WAYPOINT: {ident}")
             dlg.confirming = False                      # back to the identifier field
 
-    def lookup(self, ident: str):
-        """Resolve an identifier against the nav database near present position
-        (for the Direct-To page's live preview). Returns the entry or None."""
-        return self._resolve(ident, self._pos) if ident and ident.strip() else None
+    def lookup(self, ident: str, page: str | None = None):
+        """Resolve an identifier against the nav database near present
+        position (for the Direct-To page's live preview, or a WPT sub-page's
+        own category - e.g. the VOR page must only ever resolve a VHF
+        navaid, not an airport or intersection that happens to share the
+        identifier). Returns the entry or None."""
+        if not ident or not ident.strip():
+            return None
+        return self._resolve(ident, self._pos, kind=_WPT_PAGE_KIND.get(page))
 
     def _cancel(self) -> None:
         if self._dto_dialog is not None and self._dto_dialog.confirming:
@@ -1595,7 +1674,8 @@ class GpsNav:
         leg = self._active_leg()          # (from_pt, to_pt, from_id, to_id, is_dto) or None
         if leg is None:
             scale = self._step_cdi_scale(
-                self._target_cdi_scale(self._dist_to_destination(pos), None,
+                self._target_cdi_scale(self._dist_to_destination(pos),
+                                        self._dist_to_faf(pos),
                                         self._dist_to_departure(pos)), dt)
             self._nav = NavState(cdi_source=self.cdi_source,
                                  cdi_scale_nm=scale,
@@ -1606,7 +1686,8 @@ class GpsNav:
 
         dist = great_circle_nm(pos, b)
         scale = self._step_cdi_scale(
-            self._target_cdi_scale(self._dist_to_destination(pos), dist,
+            self._target_cdi_scale(self._dist_to_destination(pos),
+                                    self._dist_to_faf(pos) if self._approach_active else dist,
                                     self._dist_to_departure(pos)), dt)
 
         if self.obs_active:
@@ -1710,6 +1791,7 @@ class GpsNav:
             "fix": wp.pos, "ident": wp.ident, "inbound": inbound, "outbound": outbound,
             "sign": sign, "leg_nm": leg_nm, "phase": "OUTBOUND", "leg_hdg": leg_hdg,
             "single_circuit": wp.hold_single_circuit, "lap": 1, "exit_requested": False,
+            "min_dist_to_fix": None,   # closest approach seen this INBOUND leg - see _step_hold
         }
         self.suspended = True
 
@@ -1728,6 +1810,7 @@ class GpsNav:
             hs["phase"] = "OUTBOUND"
             hs["leg_hdg"] = hs["outbound"]       # subsequent laps fly the standard leg
             hs["lap"] += 1
+            hs["min_dist_to_fix"] = None
 
     def _step_hold(self, pos: Point, dt: float | None) -> NavState:
         """NavState while actively flying a hold - a synthetic outbound or
@@ -1742,17 +1825,42 @@ class GpsNav:
         xtk = cross_track_nm(a, b, pos)
         leg_len = great_circle_nm(a, b)
         along = along_track_nm(a, b, pos)
-        dtg = max(0.0, leg_len - along)
         tke = angle_diff(self._track, dtk)
 
-        if hs["phase"] == "OUTBOUND" and along >= leg_len - 0.05:
-            hs["phase"] = "INBOUND"
-        elif hs["phase"] == "INBOUND" and dtg <= _FIX_CAPTURE_NM:
-            self._complete_hold_lap()
-            return self.update(pos, self._track, self._gs, dt)   # new lap, or resumed leg
+        if hs["phase"] == "OUTBOUND":
+            dtg = max(0.0, leg_len - along)
+            if along >= leg_len - 0.05:
+                hs["phase"] = "INBOUND"
+        else:
+            # Capture (and the DTG/DIS readout) on the INBOUND leg uses
+            # straight-line distance to the fix itself, not along-track
+            # progress on this 60 nm reference line: with a real cross-track
+            # offset (e.g. still mid-turn out of the entry), along-track
+            # alone reads near-zero while the aircraft is still miles off
+            # the inbound centerline, so the hold "completed" and sequenced
+            # onto the next leg - pointed straight at it, cutting a corner -
+            # well before the aircraft ever got near the fix.
+            #
+            # A wide entry (a teardrop's ~210 deg return turn especially)
+            # can leave the intercept still converging as the aircraft
+            # passes abeam the fix, so an exact _FIX_CAPTURE_NM hit isn't
+            # guaranteed - waiting for one can fly the aircraft past the fix
+            # and away forever. Track the closest approach instead: capture
+            # on a clean close pass (real hit), or once distance has opened
+            # back up past that closest point by _HOLD_CPA_MARGIN_NM (the
+            # aircraft is now moving away - this is as close as it's getting).
+            dtg = great_circle_nm(pos, fix)
+            if hs["min_dist_to_fix"] is None or dtg < hs["min_dist_to_fix"]:
+                hs["min_dist_to_fix"] = dtg
+            past_cpa = dtg > hs["min_dist_to_fix"] + _HOLD_CPA_MARGIN_NM
+            if dtg <= _FIX_CAPTURE_NM or past_cpa:
+                self._complete_hold_lap()
+                return self.update(pos, self._track, self._gs, dt)   # new lap, or resumed leg
 
         scale = self._step_cdi_scale(
-            self._target_cdi_scale(self._dist_to_destination(pos), great_circle_nm(pos, fix),
+            self._target_cdi_scale(self._dist_to_destination(pos),
+                                    self._dist_to_faf(pos) if self._approach_active
+                                    else great_circle_nm(pos, fix),
                                     self._dist_to_departure(pos)), dt)
         to_wp = self.fpl.to_wp
         self._nav = NavState(
@@ -1784,20 +1892,58 @@ class GpsNav:
             return great_circle_nm(pos, self.fpl.waypoints[0].pos)
         return None
 
+    def _dist_to_faf(self, pos: Point) -> float | None:
+        """Great-circle nm to the loaded approach's FAF while actually flying
+        the leg that ends there, or ``0.0`` once it has already been
+        sequenced past (so the 0.30 nm approach scale, once armed, stays
+        armed for the rest of the approach - through the FAF->MAP leg -
+        instead of widening again just because that leg's own endpoint, the
+        MAP, is farther away than the arm distance).
+
+        Deliberately ``None`` (no approach-scale evaluation at all) before
+        the FAF's own leg is active: an earlier version used the FAF's
+        straight-line distance regardless of which leg was active, and an
+        earlier leg's flight path can pass within the 2 nm arm distance of
+        the FAF's coordinates by pure incidental geometry - e.g. on KLNS
+        I08, LRP->DALAC happens to track within ~0.3 nm of POLCU (the FAF)
+        well before DALAC's hold has even been reached - which armed and
+        then un-armed the 0.30 nm scale on a leg that has nothing to do with
+        the final approach segment. ``None`` also when no FAF is in the plan."""
+        faf_i = next((i for i, w in enumerate(self.fpl.waypoints) if w.is_faf), None)
+        if faf_i is None or self.fpl.active < faf_i:
+            return None
+        if self.fpl.active > faf_i:
+            return 0.0
+        return great_circle_nm(pos, self.fpl.waypoints[faf_i].pos)
+
     def _target_cdi_scale(self, dist_to_dest: float | None,
                           dist_to_fix: float | None,
                           dist_to_dep: float | None = None) -> float:
         if (self._approach_active and dist_to_fix is not None
                 and dist_to_fix <= _CDI_APPROACH_ARM_NM):
-            return _CDI_APPROACH_NM
-        near_dest = dist_to_dest is not None and dist_to_dest <= _CDI_TERMINAL_ARM_NM
-        near_dep = dist_to_dep is not None and dist_to_dep <= _CDI_TERMINAL_ARM_NM
-        if near_dest or near_dep:
-            return _CDI_TERMINAL_NM
-        return _CDI_ENROUTE_NM
+            auto = _CDI_APPROACH_NM
+        else:
+            near_dest = dist_to_dest is not None and dist_to_dest <= _CDI_TERMINAL_ARM_NM
+            near_dep = dist_to_dep is not None and dist_to_dep <= _CDI_TERMINAL_ARM_NM
+            auto = _CDI_TERMINAL_NM if (near_dest or near_dep) else _CDI_ENROUTE_NM
+        # AUX>Setup>CDI/Alarms: a fixed ceiling never widens past, but a
+        # tighter phase (e.g. genuinely on an armed approach) still tightens
+        # further than it - the selected value caps the scale, it doesn't
+        # override a legitimately tighter one.
+        if self.cdi_alarm_max_nm is not None:
+            return min(auto, self.cdi_alarm_max_nm)
+        return auto
 
     def _step_cdi_scale(self, target: float, dt: float | None) -> float:
-        """Slew the live scale toward ``target``; snap when ``dt`` is unknown."""
+        """Slew the live scale toward ``target``; snap when ``dt`` is unknown
+        or this is the first sample (a fresh start already inside a scale
+        arm - e.g. near the departure airport - should read that scale
+        immediately rather than visibly ramping down from the enroute
+        default seeded in ``__init__``)."""
+        if not self._cdi_scale_init:
+            self._cdi_scale = target
+            self._cdi_scale_init = True
+            return self._cdi_scale
         if not dt or dt <= 0.0:
             self._cdi_scale = target
             return self._cdi_scale
@@ -1813,11 +1959,11 @@ class GpsNav:
         return self._nav
 
     # -- internals -------------------------------------------------
-    def _resolve(self, ident: str, ref: Point | None):
+    def _resolve(self, ident: str, ref: Point | None, *, kind: str | None = None):
         ident = ident.strip().upper()
         if ref is not None:
-            return self.db.nearest_fix(ident, ref)
-        hits = self.db.find(ident)
+            return self.db.nearest_fix(ident, ref, kind=kind)
+        hits = self.db.find(ident, kind=kind)
         return hits[0] if hits else None
 
     def _active_leg(self):

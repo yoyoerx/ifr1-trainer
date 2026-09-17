@@ -1022,6 +1022,18 @@ def _on_key(e, w: World, ui: dict) -> None:
             pdlg.move(1)
         return
 
+    mdlg = getattr(g, "_fpl_menu", None)
+    if mdlg is not None:                      # MNU pop-up has the keyboard
+        if k in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+        elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+        elif k in (pygame.K_UP, pygame.K_LEFT):
+            g.handle_event(Event(mode=Mode.FMS1, outer=-1))
+        elif k in (pygame.K_DOWN, pygame.K_RIGHT):
+            g.handle_event(Event(mode=Mode.FMS1, outer=1))
+        return
+
     dlg = getattr(g, "_dto_dialog", None)
     if dlg is not None:                       # Direct-To page has the keyboard
         if k == pygame.K_ESCAPE or k == pygame.K_BACKSPACE:
@@ -1114,6 +1126,14 @@ def _on_key(e, w: World, ui: dict) -> None:
             g.ack_messages()
     elif k == pygame.K_HOME:
         g.cursor.go_to_default_nav()
+    elif k == pygame.K_c:
+        # the CLR bezel key outside any modal page/dialog - cancels an
+        # active Direct-To (resumes the nearest flight-plan leg), deletes
+        # the selected Flight Plan/Catalog row, or backs out to Default
+        # NAV. `Home` above only jumps pages; this was the missing
+        # keyboard route to a bare CLR press (no-device users had no way
+        # to cancel a Direct-To without it).
+        g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
     elif k == pygame.K_F11:
         w.radios.com1.set_emergency()
     elif k == pygame.K_a:
@@ -1150,6 +1170,10 @@ def _on_key(e, w: World, ui: dict) -> None:
         g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))   # opens the entry page
     elif k == pygame.K_r:
         g.begin_proc_select()                                     # PROC key
+    elif k == pygame.K_x:
+        # MNU key - the Flight Plan / Flight Plan Catalog page menu (Invert/
+        # Copy/Sort/Delete). Previously had no keyboard route at all.
+        g.handle_event(Event(mode=Mode.FMS1, pressed=("MNU",)))
     elif k == pygame.K_PAGEUP:
         # plain = small (inner) knob: page within the group, e.g. Default NAV -> Map;
         # +Shift = large (outer) knob: page GROUP, e.g. NAV -> WPT -> AUX -> NRST -

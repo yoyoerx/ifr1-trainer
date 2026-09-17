@@ -156,6 +156,261 @@ for each leg.
 for each waypoint from the second onward. Truncation to `variant.screen_rows`
 is unchanged (the 430 still shows fewer rows).
 
+### F12 — Approach CDI scale (0.30 nm) widened again right after the FAF
+Playtest round 3: flying KLNS I08, the CDI scale correctly tightened to 0.30 nm
+approaching POLCU (the FAF) but then opened back up to 1.0 nm just past it,
+instead of staying at 0.30 nm through the MAP as the Pilot's Guide describes.
+`_target_cdi_scale`'s approach arm was keyed off distance to whatever fix was
+at the end of the *currently active leg* — fine while flying toward the FAF
+itself, but once sequenced onto the FAF→MAP leg that "fix" became the MAP,
+often several miles past the FAF, so the 2 nm arm distance no longer held.
+**Fix:** `GpsNav._dist_to_faf` locates the loaded approach's actual FAF by its
+`is_faf` flag and returns `0.0` (still armed) once it has been sequenced past,
+so the 0.30 nm scale latches through the FAF→MAP segment instead of
+re-evaluating against a leg endpoint that keeps changing.
+
+### F13 — CDI scale visibly ramped 5.0 → 1.0 nm on a fresh start near the departure airport
+Playtest round 3: starting a flight already inside the departure airport's
+terminal arm still showed the scale begin at the 5.0 nm enroute default and
+slew down to 1.0 nm over the first few seconds, instead of reading 1.0 nm
+immediately. `_cdi_scale` was seeded to the enroute default in `__init__`
+regardless of the actual starting position, and `_step_cdi_scale` always
+slewed toward the target rather than snapping on the very first sample.
+**Fix:** a `_cdi_scale_init` latch makes the first `_step_cdi_scale` call
+snap directly to the phase-correct target; every call after that still slews
+normally.
+
+### F14 — No keyboard route to cancel an active Direct-To
+Playtest round 3: activating Direct-To (`D`, identifier, `ENT ENT`) worked,
+but nothing in the keyboard map could cancel it afterward — `Home` only jumps
+to the Default NAV page, it doesn't send a CLR press. The IFR-1's own CLR key
+already canceled correctly (`GpsNav._cancel` → `cancel_direct_to`); the
+keyboard simply had no equivalent for a bare CLR outside a modal dialog.
+**Fix:** keyboard `C` now sends a plain CLR event (`main._on_key`), matching
+the hardware — cancels Direct-To / resumes the nearest leg, deletes the
+selected Flight Plan or Catalog row, or backs out to Default NAV depending on
+context, same as the IFR-1's CLR key.
+
+### F15 — GNS 530 bezel legend missing VNAV; GNS 430 legend on the wrong cutouts
+Playtest round 3: the 530's bottom softkey row is 6 keys (CDI/OBS/MSG/FPL/
+VNAV/PROC); the legend loop only had 5 `fx` positions, so VNAV was never
+drawn and PROC's label sat in VNAV's slot. Separately, the 430's faceplate
+art was mislabeled entirely: the right-side RNG/D>/MENU/CLR/ENT cluster had
+been labeled CDI/OBS/MSG/FPL/PROC, and the actual CDI/OBS/MSG/FPL/PROC
+cutouts along the bottom were left blank.
+**Fix:** `render._bezel_key_labels` — re-measured every cutout's center
+against the actual rendered SVG art for both variants; the 530 row now
+carries all 6 labels (CDI/OBS/MSG/FPL/VNAV/PROC) at the corrected `fy`, and
+the 430 labels its own bottom row (CDI/OBS/MSG/FPL/PROC) plus its
+RNG/D>/MENU/CLR/ENT cluster on the right, matching that variant's real
+physical layout.
+
+### F16 — Moving map drew a hold (or a procedure turn) as an undifferentiated ring/dot
+Playtest round 3: "trainer is not drawing holds or PTs on the maps as would be
+expected from the 530." The map's per-waypoint loop had exactly one symbol for
+any waypoint with `hold=True` (a bare 6px ring, same for a single-circuit
+HILPT and a repeating missed-approach hold), and a synthetic PI-leg "PT"
+waypoint drew as a plain dot indistinguishable from any other fix — nothing
+conveyed the actual racetrack shape or turn direction a real GNS 530 moving
+map draws for a loaded hold, or the course-reversal shape for a procedure turn.
+**Fix:** `render._hold_track_points` builds the real stadium/racetrack shape
+(outbound leg, 180° turn, parallel inbound leg, 180° turn back to the fix)
+from the waypoint's own `hold_inbound_true`/`hold_turn`/`hold_leg_nm` (or
+leg-time-at-groundspeed when only `hold_leg_min` is published, matching
+`GpsNav._start_hold`'s own conversion) — verified against the actual "turn at
+the fix" geometry (a right-turn hold's racetrack sits on the inbound course's
++90° side), not just a plausible-looking sketch. `render._pt_symbol_points`
+draws a small chevron, oriented along the course flown inbound after the
+turn, at a PI leg's synthetic "PT" point instead of a plain dot — needed
+`gpsnav._expand_leg`'s PI branch to also stash `hold_turn`/`hold_inbound_true`
+on that waypoint (harmless: `hold` itself stays `False`, so nothing about how
+a PI leg is actually flown changes, only what render.py has to draw it with).
+Both shapes are ordinary `Point` lists run through the map's existing
+track-up `project()`, so they rotate with the aircraft like everything else
+on the map.
+
+### F17 — A hold's INBOUND leg could "capture" (and sequence onward) miles off to the side of the fix
+Follow-up question on F16: for KLNS I08's DALAC hold-in-lieu-of-PT, after the
+single circuit, does the aircraft actually return to DALAC, or does it cut a
+corner to intercept the DALAC→POLCU course instead? Traced with a real flight
+simulation: it cut the corner, sequencing onto POLCU's course from **2.08 nm**
+off DALAC — a real bug, not the intended "resume the flight plan" behavior.
+
+Root cause: `_step_hold`'s INBOUND phase tracks progress against a synthetic
+60 nm reference line running through the fix (needed to give the intercept
+math room to work), and used **along-track distance on that line** as both
+the pilot-facing DTG and the "close enough to the fix" capture test. Along-
+track distance measures the position projected onto the line - it reads
+near-zero whenever the aircraft is near the *far* end of the line, regardless
+of how far off to the side (cross-track) it actually is. A wide entry (this
+hold picked a teardrop entry, whose return leg is intentionally offset ~30°
+- ~1.25 nm laterally - from the inbound course, on top of a course reversal
+of ~210°) doesn't fully re-establish on the centerline before the aircraft's
+along-track position reaches the fix's, so the old check declared "captured"
+while genuinely still ~2 nm off the fix.
+
+**First fix attempted, and why it wasn't enough on its own:** switching the
+capture check to real straight-line distance to the fix (`great_circle_nm`)
+fixes the false-early trigger, but on its own is too strict for a wide entry
+whose intercept simply can't converge inside `_FIX_CAPTURE_NM` (0.30 nm) in
+the available track distance - in testing, the aircraft's closest approach to
+DALAC on this exact entry was ~1.7-1.8 nm, so a strict distance-only check
+never fires and the aircraft flies on past the fix forever, chasing a hit it
+will never land.
+
+**Fix:** track the closest real approach seen during the INBOUND leg
+(`hold_state["min_dist_to_fix"]`); capture on a clean hit (`<= 0.30` nm, the
+common case - verified to land within ~0.03 nm of the exact threshold for a
+simple direct entry) **or** once distance has opened back up by
+`_HOLD_CPA_MARGIN_NM` (1.0 nm) past that closest point, i.e. the aircraft is
+now moving away and this was as close as the intercept was going to get.
+`dtg_nm`/`dist_nm` on the INBOUND leg both now report the same honest
+straight-line distance to the fix throughout, instead of the old
+along-track number that could read near-zero miles from the actual fix.
+
+### F18 — Approach scale could arm from an unrelated, earlier leg's incidental proximity to the FAF
+Playtest round 4 (re-test of F16): the 0.30 nm scale dipped in and then back
+out again while still flying LRP→DALAC, well before DALAC's hold - let alone
+the FAF-bound leg - was ever reached. `GpsNav._dist_to_faf` (F16's fix)
+computed straight-line distance to the FAF from the aircraft's *current
+position* regardless of which leg was active - on KLNS I08, LRP→DALAC
+happens to track within ~0.3 nm of POLCU (the FAF) by pure incidental
+geometry (the whole approach is roughly co-linear), which briefly armed and
+then un-armed the scale on a leg that has nothing to do with the final
+approach segment.
+**Fix:** `_dist_to_faf` now returns `None` (no approach-scale evaluation at
+all) whenever `fpl.active < faf_i` - i.e. before the FAF's own leg is even
+active - instead of evaluating raw proximity regardless of procedural
+progress. Only once actually flying the leg that ends at the FAF does real
+distance start mattering; past it, the scale still locks at 0.30 nm as F16
+already fixed.
+
+### F19 — WPT sub-pages resolved any fix type, not just their own category
+Playtest round 4 (G1): "WPT will show Airport, navaid, or intersection in any
+of the pages, not filtered per page." The Airport/Intersection/NDB/VOR pages
+(Pilot's Guide sec.4.2) all called the same unfiltered `GpsNav.lookup`/
+`_resolve`, so typing an identifier on, say, the VOR page could resolve to an
+airport or intersection sharing that identifier instead of only a VHF navaid.
+**Fix:** `NavDatabase.find`/`nearest_fix` take an optional `kind` filter
+("airport" / "vhf" / "ndb" / "waypoint"); `GpsNav.lookup(ident, page)` maps
+the WPT page name to the matching kind via `_WPT_PAGE_KIND`. The Direct-To
+page's own lookup (no `page` given) stays unfiltered, as it should - any
+identifier type is a valid Direct-To target.
+
+### F20 — VNAV had no vertical-speed or time-to-descend readout
+Playtest round 4 (F1): "vnav should be in ft/min and yield time until
+starting descent. angle not typical metric." The descent-angle field itself
+is correct - it's the real GNS 530 VNAV page's own input (Pilot's Guide
+sec.9) - but the page never derived the two numbers a pilot actually flies
+to: required vertical speed and how long until top-of-descent.
+**Fix:** `VnavStatus` gained `required_vs_fpm` (the descent rate that holds
+the programmed angle at the current groundspeed) and `time_to_tod_min`
+(ETE to the top of descent at the current groundspeed); `vnav_status` now
+takes an optional `gs_kt`. `render._draw_vnav_page` shows both alongside the
+existing DIS/TOD/DEV readouts. `angle_deg` is unchanged - it's still how the
+profile itself is programmed.
+
+### F21 — AUX > Setup had no editable fields at all; CDI/Alarms was missing entirely
+Playtest round 4 (H1): "setup shows UNIT, CDI SRC, and BARO and NAV UNITS.
+nothing is configurable. does not show CDI Alarms." The Setup page was pure
+read-only display - Pilot's Guide sec.10.4 documents a CDI/Alarms field that
+lets the pilot force a fixed maximum CDI scale instead of the automatic
+phase-of-flight scaling, and nothing on this page did anything.
+**Fix:** `GpsNav.cdi_alarm_max_nm` (`None` = Auto, the default) cycles
+through Auto/5.0/1.0/0.30 nm via the Setup page's CRSR + inner knob
+(`_cycle_cdi_alarm`); `_target_cdi_scale` applies it as a ceiling on the
+auto-computed value (a genuinely tighter phase - e.g. an armed approach -
+still tightens further than a looser fixed selection, it doesn't get
+overridden by it). `render._draw_aux_setup` shows the field and its cursor.
+
+### F22 — Weather page silently clipped the TAF instead of scrolling
+Playtest round 4 (I1): "screen in 530 too small to show complete TAF and
+cuts off data. CRSR should scroll?" `_draw_aux_weather` always showed the
+first 3 METAR lines and however many TAF lines fit in the remaining space -
+anything past that was simply never shown, with no indication more existed.
+**Fix:** METAR and TAF are now built into one combined line list and CRSR
+(cursor on, inner knob - `GpsNav.wx_scroll`) scrolls a window through it;
+`^`/`v` markers in the corner show when there's more above/below. Switching
+station (outer knob) resets the scroll position back to the top.
+
+### F23 — VNAV's programmable field was a flight-path angle; the real GNS 530 programs a vertical speed
+Playtest round 5 (F1): "vnav SETTING should be in ft/min not an angle... please validate why I think
+this." Checked against the actual Pilot's Guide field labels (sec.10/11,
+"Vertical Navigation"): the real page has **Target Altitude, Altitude
+Reference (AGL/MSL), Target Distance + Before/After, Target Reference
+waypoint, and "Vertical Speed Desired"** (ft/min, default a 400 fpm descent
+rate) - there is no flight-path-angle field anywhere on the real unit. F20's
+`angle_deg` field was a misremembered invention, and the round-4 response
+defending it as "the real unit's own input" was wrong.
+**Fix:** `VnavProfile.angle_deg` replaced with `vs_fpm` (+ = climb, - =
+descend, default -400); `vnav_set`/`_vnav_edit` take/step it in ft/min
+instead of degrees. `vnav_status` derives `required_alt_ft`/`tod_distance_nm`/
+`deviation_ft` from `vs_fpm` at the current groundspeed (matching the real
+unit's documented >35 kt groundspeed requirement for VNAV - below that the
+page now shows why instead of just "target not ahead"), and `required_vs_fpm`
+(VSR) is the live rate needed right now, independent of the programmed
+profile - same as the real unit's VSR readout. `render._draw_vnav_page` shows
+"VS PROFILE ±#### fpm" instead of "ANGLE #.#°".
+
+### F24 — WPT page: sub-page name overlapped the identifier; no cursor underline
+Playtest round 5 (G1): "word 'intersection' overlaps identifier on page.
+identifier input should have underline hint for active character."
+`_draw_wpt_page` drew the page name and the identifier on the same line only
+70 px apart - "INTERSECTION" alone is wider than that at the small font - and
+never drew a cursor indicator on the identifier at all (unlike the Direct-To
+page and the Flight Plan edit field, which both already had one).
+**Fix:** the page name now gets its own line; the identifier renders as
+fixed-width per-character cells (same style as the Direct-To page) with an
+amber underline on the character the knob is on.
+
+### F25 — NRST lists couldn't scroll to reach farther-away results
+Playtest round 5 (G2): "should be able to scroll the lists like the
+metar/taf page to reach NRST POIs that are further away." `_draw_nrst_page`
+always rendered `hits[:room]` regardless of the selected row - moving the
+selection (outer knob) past the first screenful of results moved it
+off-screen with nothing ever scrolling to show it.
+**Fix:** the visible window now follows the selection (same idea as the
+Weather page's scroll), with a `^`/`v` marker when there's more above/below.
+
+### F26 — Weather page's scroll could overshoot and require scrolling back through it
+Playtest round 5 (I1, re-test): "if you overshoot the bottom of the list and
+scroll further, [it] makes you scroll back that number of steps before
+returning to scroll behavior. should just cap and then reverse." `wx_scroll`
+was incremented without limit in `GpsNav` (which has no way to know the
+rendered line count - the same reason the Charts page's `chart_sel` is
+deliberately left unclamped there too) while the display clamped it only at
+draw time, so a fast scroll past the end left the underlying counter far
+past the real maximum; scrolling back had to first "use up" that overshoot
+before the screen moved again.
+**Fix:** `render._draw_aux_weather` writes the clamped position back into
+`gns.wx_scroll` each frame it draws, so the counter can never actually run
+past what's real - reversing direction takes effect immediately.
+
+### F27 — Autopilot NAV mode ignored the CDI source switch, always flew GPS
+Playtest round 5 (L3): "NAV tuning and OBS rotation work but NAV source for
+the AP does not change to the NAV VOR when CDI is pressed. Expected behavior
+is to change the AP NAV source depending on the CDI state." `Autopilot`'s NAV
+lateral mode always steered off the GPS `nav_state` regardless of which
+source the GNS CDI was actually displaying - only APR/REV ever flew the raw
+VOR/LOC needle. On the real S-TEC 55X, NAV couples to *whatever the CDI is
+currently showing*: switch CDI source to VLOC (the SWAP/CDI key) and NAV
+should track the VOR/LOC needle, the same way it would with a simple
+non-GPS nav radio.
+**Fix:** `Autopilot._lateral_command`/`_maybe_capture_lateral` read
+`nav_state.cdi_source` (already on `NavState`, no new parameter needed) and
+switch NAV's tracking source and capture criterion to the VLOC
+course/deflection whenever it reads "VLOC", falling back to the existing
+GPS/xtk tracking otherwise. APR/REV are unchanged (always VLOC, as before).
+
+### F28 — MNU key had no keyboard route at all
+Playtest round 5 (O1): "Menu button needs a key." The Flight Plan / Flight
+Plan Catalog page menu (Invert/Copy/Sort/Delete) was reachable only via the
+IFR-1's physical MNU key - documented as a known gap, but never actually
+fixed until now.
+**Fix:** keyboard `X` sends a plain MNU press (`main._on_key`); once the menu
+pop-up is open, Up/Down/Enter/Esc drive it the same way the PROC selector's
+keyboard handling already works.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md

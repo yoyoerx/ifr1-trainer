@@ -19,9 +19,10 @@ class Own:
 
 
 class Nav:
-    def __init__(self, dtk=None, xtk=None):
+    def __init__(self, dtk=None, xtk=None, cdi_source="GPS"):
         self.dtk = dtk
         self.xtk_nm = xtk
+        self.cdi_source = cdi_source
 
 
 # --------------------------------------------------------------------------- #
@@ -91,6 +92,25 @@ def test_nav_trims_out_steady_crosswind_offset():
         # right over time; the simulated crosswind adds a constant push
         xtk += intercept * 0.02 + drift_per_s
     assert abs(xtk) < 0.3
+
+
+def test_nav_tracks_vloc_once_cdi_source_switches():
+    """FINDINGS: NAV couples to whatever the GNS CDI is actually showing
+    (S-TEC 55X POH: NAV tracks the selected nav source) - once the pilot
+    switches CDI source to VLOC (the SWAP/CDI key), NAV must fly the VOR/LOC
+    needle, not keep silently steering off the GPS course underneath it."""
+    ap = Autopilot()
+    ap.press_nav()
+    # still on GPS: flies the GPS course, ignores a live VLOC deflection
+    cmd = ap.update(Nav(dtk=360.0, xtk=0.0, cdi_source="GPS"), Own(heading=90.0), 0.0,
+                     vloc_course_deg=90.0, vloc_deflection=1.0, vloc_valid=True)
+    assert cmd.heading == pytest.approx(0.0)          # dtk 360 normalizes to 0
+    # CDI source switches to VLOC: NAV now tracks the VOR/LOC course+deflection,
+    # not the (still centered) GPS xtk
+    cmd = ap.update(Nav(dtk=360.0, xtk=0.0, cdi_source="VLOC"), Own(heading=90.0), 0.0,
+                     vloc_course_deg=90.0, vloc_deflection=1.0, vloc_valid=True)
+    assert cmd.heading != pytest.approx(360.0)
+    assert cmd.heading == pytest.approx(90.0 + 1.0 * 22.0)     # _VLOC_GAIN
 
 
 def test_nav_press_again_engages_gpss():
