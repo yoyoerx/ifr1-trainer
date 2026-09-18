@@ -457,6 +457,35 @@ now gives the middle (NAV1/NAV2/HDG) column a fixed 440px width instead of
 whatever the window happens to leave over, handing the freed space to the
 left tab column.
 
+### F31 — `stack` layout: still-wide nav heads, overlapping AP panel, no place for the AP bugs
+Immediate follow-up in the same session (2026-09-18): "still a lot of dead
+space around the nav heads. shrink more right. expand the tabs column. make
+sure the PDF expands with it. there is some overlapping of the AP and things
+at the bottom. actual IAS, HDG, ALT should be displayed next to the heading
+indicator, in placement similar to the OBS displays next to NAV1/NAV2." F30's
+440px middle column still left real dead space (NAV1/NAV2's info column only
+ever reaches ~320px in). Rendering an actual frame to a PNG (rather than
+guessing from code) found the real cause of "overlapping ... at the bottom":
+`draw_ap_panel`'s VS-window column position (`vcol`) is computed assuming a
+box as wide as `steam`'s (~900px) - at `stack`'s narrower right column it ran
+straight off the box's own right edge, its text landing on top of whatever
+sat next to it. The HDG/IAS/ALT bug boxes, meanwhile, sat in a separate row
+under the tab panel with no visual link to the HDG dial they set - and
+`draw_ap_panel`'s own side info box (HDG BUG/ALT SEL) duplicated them.
+**Fix:** middle column narrowed 440 -> 380px. `draw_ap_panel` gained a
+`show_info=False` mode (`stack` only - `steam` is unaffected, still
+`show_info=True` by default) that drops its own side info box (now
+redundant) and, when the VS window doesn't fit beside the mode-button row at
+this width, wraps it onto its own line underneath instead of overflowing.
+HDG/IAS/ALT are now shown *and* edited (click +/-) in a new
+`Renderer._stack_hdg_info` column to the right of the HDG dial, at the exact
+x `_card_geometry` gives NAV1/NAV2's own info columns - the same placement
+pattern, not a coincidence. Dropping the bottom AP-bug row also handed its
+height back to the tab content area, so PLATE/MAP/WX all gained *height* as
+well as the *width* freed by the narrower middle column - `_draw_stack_plate`
+already sized its rendered image off the passed-in rect rather than a fixed
+constant, so the plate image grows with it for free, no separate fix needed.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md

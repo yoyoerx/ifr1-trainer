@@ -24,7 +24,8 @@ import instruments as instr  # noqa: E402
 import sim_model as simmod  # noqa: E402
 from autopilot import Autopilot  # noqa: E402
 from radios import RadioStack  # noqa: E402
-from render import Renderer, Scene, _hold_track_points, _pt_symbol_points  # noqa: E402
+from render import (Renderer, Scene, _hold_track_points, _pt_symbol_points,  # noqa: E402
+                    draw_ap_panel)
 import main as main_mod  # noqa: E402
 from gpsnav import PlanWaypoint  # noqa: E402
 
@@ -1454,3 +1455,21 @@ def test_stack_plate_filter_click_updates_ui_state():
         ui = {"layout": "stack", "stack_tab": "PLATE", "plate_filter": "ALL"}
         main_mod._on_stack_click(_click(*r._stack_hit["plate:filter:DP"].center), w, ui, r)
     assert ui["plate_filter"] == "DP"
+
+
+def test_draw_ap_panel_show_info_false_wraps_the_vs_window_not_overflow():
+    """`stack`'s AP panel (draw_ap_panel(..., show_info=False)) drops the
+    side HDG BUG/ALT SEL info box - that readout now lives next to the HDG
+    indicator instead (`Renderer._stack_hdg_info`), showing it twice was
+    redundant - and, at this narrower width, the VS readout's column
+    position (`vcol`, computed assuming a wide box like `steam`'s) used to
+    run off the box's own right edge into whatever sits next to it.
+    Confirms the wrap-onto-its-own-line fallback keeps everything inside."""
+    from autopilot import Autopilot
+    surf = pygame.Surface((600, 150))
+    r = Renderer(surf)
+    rect = pygame.Rect(50, 10, 380, 112)
+    draw_ap_panel(surf, rect, Autopilot(), 0.0, r, show_info=False)
+    arr = pygame.surfarray.array2d(surf)
+    bg = arr[0, 0]
+    assert not (arr[rect.right + 2:, :] != bg).any()

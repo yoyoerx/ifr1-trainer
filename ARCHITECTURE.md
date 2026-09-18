@@ -89,7 +89,7 @@ routes `pygame.MOUSEBUTTONDOWN` to `_on_stack_click` while it's active (see
 Flags: `--config --unit --layout --xplane-feed --xplane-host --gdl90 --gdl90-host/-port --gdl90-discover --headless --time-warp --wx-auto-refresh --wx-metar-minutes --wx-taf-minutes --wx-winds-aloft-minutes` (+ the earlier plan/approach/wind/winds-aloft/wx-region/wx-station/tas/altitude/no-device/manual). `cli()` is the `octavi-trainer` entry point. | all | **done** |
 | `scoring.py` | Pure session-scoring accumulator. `ScoreTracker.sample(nav, own, panel, nav_head, alt_target)` one snapshot/loop; `.summary()` → `ScoreSummary` (xtk / CDI / glideslope RMS + max, TKE RMS, needle-peg count, altitude-vs-selected RMS, a 0-100 score + A-F grade against ¾-scale ACS tolerances). Only `LEG` / `DTO` samples score. `main.World.tick` feeds it; `run` prints `.lines()` on exit. | stdlib `math` | **done (6 tests)** |
 | `pyproject.toml` | setuptools packaging: `octavi-trainer = main:cli` console script, `pygame-ce` runtime dep, `device` (hidapi) + `dev` (pytest) extras, pytest config. Editable install (`pip install -e .`) is the supported mode (assets resolve via `__file__`). | setuptools | **done** |
-| `tests/` | pytest. `navmath`, `airac`, `navdata` parsers get real coverage; `gpsnav` / `instruments` / `sim_model` get scenario + sign-convention tests; `wmm` is checked against NOAA's published table; `gdl90` CRC against the spec example. `faa.py`/`wx.py` network calls are mocked; CIFP tests use verbatim public-domain record lines as fixtures. | `pytest` | 843 passing (wmm 103, navmath 67, airac 67, gns530 92, ifr1 47, cifp 36, render/main 71, arinc424 35, nasr 27, instruments 26, radios 25, wx 32, sim_model 21, autopilot 19, faa 19, windsaloft 14, wx_auto 13, config 20, foreflight_discovery 13, dtpp 21, navdata_query 11, gdl90 9, xplane_feed 8, gpsnav 7, scoring 6) |
+| `tests/` | pytest. `navmath`, `airac`, `navdata` parsers get real coverage; `gpsnav` / `instruments` / `sim_model` get scenario + sign-convention tests; `wmm` is checked against NOAA's published table; `gdl90` CRC against the spec example. `faa.py`/`wx.py` network calls are mocked; CIFP tests use verbatim public-domain record lines as fixtures. | `pytest` | 844 passing (wmm 103, navmath 67, airac 67, gns530 92, ifr1 47, cifp 36, render/main 72, arinc424 35, nasr 27, instruments 26, radios 25, wx 32, sim_model 21, autopilot 19, faa 19, windsaloft 14, wx_auto 13, config 20, foreflight_discovery 13, dtpp 21, navdata_query 11, gdl90 9, xplane_feed 8, gpsnav 7, scoring 6) |
 
 ---
 
@@ -247,17 +247,25 @@ three columns:
   `_draw_nrst_page`) rather than a bare row of `chart_code`s, which was both
   meaningless (every approach chart reads "IAP") and unbounded for a busy
   airport - `_draw_stack_plate`, SETTINGS = in-flight-adjustable trainer
-  options (wind, time-warp; `_draw_stack_settings`). Below it, HDG/IAS/ALT
-  autopilot-bug boxes (`_stack_ap_bugs`), directly
-  clickable (`+`/`-`) to edit — not read-only readouts.
+  options (wind, time-warp; `_draw_stack_settings`). No fixed-height row
+  taken out of it for AP-bug boxes any more (see Middle, below) - the whole
+  column's height goes to whichever tab is showing, and a rendered plate
+  image (`_draw_stack_plate`) sizes itself off the tab's actual rect, so it
+  grows with the column rather than a hardcoded size.
 - **Middle** — NAV1 and NAV2 as Bendix/King-style round CDI heads
   (`draw_nav_head`, reused unchanged from `steam`), plus a standalone heading
   indicator with a heading bug (`draw_hdg_indicator`, sharing its dial-drawing
   with `draw_six_pack`'s HDG cell via the extracted `_hdg_card` helper rather
-  than duplicating it). Fixed 440px width (`_stack_layout`'s `mid_w`), not
-  window-width-derived - `draw_nav_head` left-biases its round card, so past
-  that width the box was just dead panel background; the left tab column
-  gets whatever the window leaves over instead.
+  than duplicating it). Fixed 380px width (`_stack_layout`'s `mid_w`, tuned
+  down from an initial 440px - still not window-width-derived), leaving
+  NAV1/NAV2 a small margin past their info column and the HDG box's own info
+  column (next) enough room - `draw_nav_head` left-biases its round card, so
+  past this the box is just dead panel background; the left tab column gets
+  whatever the window leaves over instead. HDG/IAS/ALT autopilot bugs are
+  shown *and* edited (click `+`/`-`) in `Renderer._stack_hdg_info`, a column
+  to the right of the HDG dial at the same x `_card_geometry` gives NAV1/
+  NAV2's own OBS info column - not a separate row elsewhere, and not
+  duplicated in the AP panel's own info box (see Right, below).
 - **Right** — GNS 530 + GNS 430 (when `--dual`) + transponder + S-TEC 55X
   autopilot, stacked as one visually continuous column. The GNS units drop
   the photorealistic faceplate SVG bezel here (`_gns_unit(..., no_bezel=True)`
@@ -269,7 +277,12 @@ three columns:
   same bezel-key routing as `gps`/`dual`, just restyled. A compact
   `_stack_xpdr` box replaces the full `draw_radio_strip` (which doesn't fit
   the column's height budget) since COM/NAV are now on the GNS screens
-  themselves.
+  themselves. `draw_ap_panel(..., show_info=False)` drops its own side
+  HDG BUG/ALT SEL info box (now shown next to the HDG dial instead) and
+  wraps its VS-window readout onto its own line when it doesn't fit beside
+  the mode-button row at this column's width, rather than overflowing past
+  the box's own edge (`steam`'s call is unaffected - `show_info=True` is the
+  default, and its much wider `ap_rect` never triggers the wrap).
 
 **New capabilities, both scoped to `stack` only:**
 - **Mouse input.** The only layout with any mouse surface. `_stack_layout`

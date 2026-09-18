@@ -4,18 +4,18 @@ Task tracker for **octavi-ifr-trainer**. Newest status at the top of each list.
 `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped.
 
 Last updated: 2026-09-18 (stack layout: Phase 0-5 complete + WX/PLATE
-airport-switching + PLATE chart filter/middle-column-width follow-ups, 843
-tests green)
+airport-switching + PLATE chart filter/column-width/AP-panel-overlap
+follow-ups, 844 tests green)
 
 Prior task history (M0–M16, the initial build through the playtest-fix rounds)
 is archived in `archive/WORKING-2026-09-11.md`, refreshed here to start a clean
 slate for the next project. `FINDINGS.md` remains the permanent log of every
-bug fixed against the Pilot's Guide/playtest feedback (F1–F30 so far) and is
+bug fixed against the Pilot's Guide/playtest feedback (F1–F31 so far) and is
 **not** archived — keep adding to it as before.
 
 ---
 
-## Current status (2026-09-18, 843 tests green)
+## Current status (2026-09-18, 844 tests green)
 
 The trainer runs end to end on four layouts (`gps`, `steam`, `stack`,
 `dual`), driven by the IFR-1 or keyboard (`stack` also takes mouse input),
@@ -209,3 +209,17 @@ playtest-round fix (F1–F29) since.
   chip row over a scrollable full-chart-name list; `_stack_layout`'s middle
   column is now a fixed 440px, freeing the rest for the left tab column. 839
   -> 843 tests.
+
+- **2026-09-18** — F31: 440px still left real dead space, and rendering an
+  actual frame to a PNG (rather than guessing from code) found
+  `draw_ap_panel`'s VS-window column position assumed a `steam`-width box and
+  ran off `stack`'s narrower one, overlapping whatever sat next to it.
+  Narrowed the middle column to 380px; `draw_ap_panel` gained
+  `show_info=False` (drops its now-redundant side info box, wraps the VS
+  window onto its own line instead of overflowing - `steam` unaffected,
+  still the `show_info=True` default); HDG/IAS/ALT bugs moved from a
+  separate bottom row into `Renderer._stack_hdg_info`, next to the HDG dial
+  at the same x NAV1/NAV2 place their own OBS info column. Dropping that
+  bottom row also gave the tab content area its height back, and
+  `_draw_stack_plate`'s image already sizes off the passed rect, so PLATE
+  grows with the column for free. 843 -> 844 tests.

@@ -319,21 +319,27 @@ class Renderer:
         gap = 8
         top = 30
         bottom_margin = 8
-        right_w = 360
-        # `draw_nav_head` left-biases its round card (`_card_geometry`) and
-        # only needs enough room past it for the info column - past ~440px
-        # the rest of the box is just dead panel background (playtest:
-        # "boxes are way too wide"). Fixed, not W-derived, so the middle
-        # column doesn't balloon on a wider window; the tab panel gets
-        # whatever that leaves instead.
-        mid_w = 440
+        right_w = 380
+        # `draw_nav_head` left-biases its round card (`_card_geometry`) - the
+        # dial itself is governed by the box's *height*, not its width (see
+        # `_card_geometry`), so past the point where the info column's text
+        # stops, extra width is just dead panel background (playtest: "boxes
+        # are way too wide... shrink more right"). 380px leaves the NAV1/2
+        # info column a small margin and still gives the HDG box's own info
+        # column (`_stack_hdg_info`, to the right of its dial) enough room.
+        # Fixed, not W-derived, so the middle column doesn't balloon on a
+        # wider window - the tab panel gets whatever that leaves instead.
+        mid_w = 380
         left_w = W - right_w - mid_w - gap * 4
         mid_x = left_w + gap * 2
 
         # -- right column: the avionics stack ---------------------------
         rx = W - right_w - gap
         avail = H - top - bottom_margin
-        radio_h, ap_h = 84, 90
+        # ap_h a bit taller than steam's AP box needs: at stack's narrower
+        # column width, draw_ap_panel's VS window wraps onto its own line
+        # below the mode buttons (see draw_ap_panel's ap_rect.right check).
+        radio_h, ap_h = 84, 112
         n_gns = 2 if sc.gns2 is not None else 1
         gns_h = (avail - radio_h - ap_h - gap * (n_gns + 1)) // n_gns
         radios = sc.radios
@@ -348,8 +354,14 @@ class Renderer:
             y += gns_h + gap
         self._stack_xpdr(sc, pygame.Rect(rx, y, right_w, radio_h))
         y += radio_h + gap
+        # show_info=False: the HDG-bug/ALT-preselect readout this panel would
+        # otherwise draw in its own side box now lives next to the HDG
+        # indicator instead (`_stack_hdg_info`) - showing it twice was
+        # redundant, and the 6-button mode row didn't fit next to a second
+        # box at this layout's column width anyway (playtest: "overlapping
+        # of the AP and things at the bottom").
         draw_ap_panel(self.surf, pygame.Rect(rx, y, right_w, ap_h), sc.ap, sc.magvar, self,
-                     ias_bug=(sc.ias_target if getattr(sc, "ias_managed", False) else None))
+                     show_info=False)
 
         # -- middle column: instrument cluster ---------------------------
         inst_h = (avail - gap * 2) // 3
@@ -361,17 +373,21 @@ class Renderer:
         draw_nav_head(self.surf, n2, sc.nav2_head, "NAV2", self, t=scene_t)
         draw_hdg_indicator(self.surf, hd, sc.sixpack, self,
                            hdg_bug=getattr(sc.ap, "heading_bug", None) if sc.ap else None)
+        # HDG/IAS/ALT autopilot bugs, displayed (and clickable to edit) next
+        # to the HDG dial - the same placement NAV1/NAV2 use for their own
+        # OBS readout - rather than a separate row of boxes elsewhere.
+        rad, cx, cy = _card_geometry(hd, None)
+        info_x = int(cx + rad + 20)
+        info_y = int(cy - rad)
+        self._stack_hdg_info(sc, pygame.Rect(info_x, info_y, hd.right - info_x - 8,
+                                             hd.bottom - info_y - 8))
 
-        # -- left column: tabbed reference panel + AP-bug boxes ----------
+        # -- left column: tabbed reference panel -------------------------
         tab_h = 26
-        bug_h = 74
         tabs_rect = pygame.Rect(gap, top, left_w, tab_h)
-        content_rect = pygame.Rect(gap, top + tab_h + 4, left_w,
-                                   avail - tab_h - 4 - bug_h - gap)
-        bugs_rect = pygame.Rect(gap, content_rect.bottom + gap, left_w, bug_h)
+        content_rect = pygame.Rect(gap, top + tab_h + 4, left_w, avail - tab_h - 4)
         self._stack_tabs(sc, tabs_rect)
         self._stack_tab_content(sc, content_rect)
-        self._stack_ap_bugs(sc, bugs_rect)
 
     def _stack_xpdr(self, sc: Scene, rect: pygame.Rect) -> None:
         """A compact transponder box - just the squawk/mode, restyled to sit
@@ -558,27 +574,43 @@ class Renderer:
             self._t(txt, rct.centerx, rct.y + 3, font=self.f_sm, color=TEXT, center=True)
             self._stack_hit[name] = rct
 
-    def _stack_ap_bugs(self, sc: Scene, rect: pygame.Rect) -> None:
-        """HDG/IAS/ALT autopilot target bugs - shown *and* directly editable
-        here (click +/-), not read-only readouts (see WORKING.md)."""
-        cw = rect.w / 3
+    def _stack_hdg_info(self, sc: Scene, rect: pygame.Rect) -> None:
+        """HDG/IAS/ALT autopilot bug readouts, shown *and* directly editable
+        (click +/-) next to the heading indicator's dial - the same
+        placement NAV1/NAV2 use for their own OBS readout, rather than a
+        separate row of boxes elsewhere (playtest: "actual IAS, HDG, ALT
+        should be displayed next to the heading indicator, in placement
+        similar to the OBS displays next to NAV1/NAV2"). ``rect`` is the
+        space to the dial's right, inside the HDG box, top-aligned with the
+        dial itself (`_stack_layout` passes ``cy - rad``, same as
+        `draw_nav_head`'s own info column, not the box's top edge - which
+        would land level with the panel title instead).
+
+        Each field gets its own two-line row (label+value, then the +/-
+        buttons underneath) rather than squeezing buttons onto the value's
+        own line - `stack`'s narrower middle column doesn't leave enough
+        width for both a 4-digit altitude and two buttons side by side
+        without the value clipping into them."""
+        ap = sc.ap
         specs = [
-            ("HDG", f"{getattr(sc.ap, 'heading_bug', 0):03.0f}", "hdg"),
+            ("HDG", f"{getattr(ap, 'heading_bug', 0):03.0f}" if ap else "---", "hdg"),
             ("IAS", f"{sc.ias_target:.0f}" if getattr(sc, "ias_managed", False) else "---", "ias"),
-            ("ALT", f"{getattr(sc.ap, 'alt_preselect', 0):.0f}", "alt"),
+            ("ALT", f"{getattr(ap, 'alt_preselect', 0):.0f}" if ap else "---", "alt"),
         ]
-        for i, (label, val, key) in enumerate(specs):
-            br = pygame.Rect(int(rect.x + i * cw), rect.y, int(cw) - 6, rect.h)
-            _panel_box(self.surf, br, label, self)
-            self.lcd(val, br.centerx, br.centery - 2, color=CYAN, center=True)
-            bw = 28
-            minus = pygame.Rect(br.x + 6, br.bottom - 26, bw, 20)
-            plus = pygame.Rect(br.right - bw - 6, br.bottom - 26, bw, 20)
+        row_h = max(36, rect.h // 3)
+        bw = 24
+        y = rect.y
+        for label, val, key in specs:
+            self._t(label, rect.x, y, font=self.f_sm, color=DIM)
+            self.lcd(val, rect.x + 30, y - 2, color=CYAN)
+            minus = pygame.Rect(rect.x, y + 16, bw, 18)
+            plus = pygame.Rect(rect.x + bw + 4, y + 16, bw, 18)
             for rct, txt, sign in ((minus, "-", f"bug:{key}:-"), (plus, "+", f"bug:{key}:+")):
-                pygame.draw.rect(self.surf, PANEL, rct, border_radius=4)
-                pygame.draw.rect(self.surf, EDGE, rct, width=1, border_radius=4)
-                self._t(txt, rct.centerx, rct.y + 2, font=self.f_sm, color=TEXT, center=True)
+                pygame.draw.rect(self.surf, PANEL, rct, border_radius=3)
+                pygame.draw.rect(self.surf, EDGE, rct, width=1, border_radius=3)
+                self._t(txt, rct.centerx, rct.y + 1, font=self.f_sm, color=TEXT, center=True)
                 self._stack_hit[sign] = rct
+            y += row_h
 
     # -- steam-gauge layout ------------------------------------------
     def _steam_layout(self, sc: Scene) -> None:
@@ -2091,7 +2123,7 @@ def draw_hsi_head(surf, rect, nh, panel, label, r, radius=None, t=0.0):
         r._t(f"CRS {course:03.0f}", ix, cy - rad + 18, font=r.f_sm, color=DIM)
 
 
-def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
+def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None, *, show_info=True):
     """An S-TEC Fifty Five X style programmer: RDY lamp, HDG/NAV/APR/REV/ALT/VS
     button row, a VS window, GPSS / GS / TRIM annunciators - in its own box,
     matching the real unit's faceplate. The heading bug (lives on the DG/HSI,
@@ -2099,13 +2131,21 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
     accessory box on the real aircraft), and ``ias_bug`` (the trainer's own
     invented pseudo speed-manager set-point, not a real 55X feature at all)
     are avionics/instrument info, not part of the AP programmer - they get
-    their own box to the right rather than crowding onto the 55X's face."""
-    info_w = min(190, rect.w * 0.24)
-    ap_rect = pygame.Rect(rect.x, rect.y, rect.w - info_w - 8, rect.h)
-    info_rect = pygame.Rect(ap_rect.right + 8, rect.y, info_w, rect.h)
+    their own box to the right rather than crowding onto the 55X's face,
+    unless ``show_info=False`` (the "stack" layout, which shows/edits them
+    next to the HDG indicator instead - `Renderer._stack_hdg_info` - and
+    needs the 6-button mode row's full width; the row doesn't fit next to a
+    second box at `stack`'s narrower column width)."""
+    if show_info:
+        info_w = min(190, rect.w * 0.24)
+        ap_rect = pygame.Rect(rect.x, rect.y, rect.w - info_w - 8, rect.h)
+        info_rect = pygame.Rect(ap_rect.right + 8, rect.y, info_w, rect.h)
+        _panel_box(surf, info_rect, "", r)
+    else:
+        ap_rect = rect
+        info_rect = None
 
     _panel_box(surf, ap_rect, "", r)
-    _panel_box(surf, info_rect, "", r)
     if ap is None:
         r._t("no autopilot", ap_rect.centerx, ap_rect.centery, font=r.f_sm,
              color=DIM, center=True)
@@ -2150,8 +2190,16 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
     # stays a fixed, small gap clear of the digits at any VS value.
     vlab = bx[0] + 14
     vcol = vlab + 16 + 8 + 95           # label width + gap + max digit width
-    r._t("VS", vlab, y + 2, font=r.f_sm, color=DIM)
-    r.lcd(f"{getattr(ap, 'vs_target', 0):.0f}", vcol, y, big=True,
+    vy = y
+    if vcol > ap_rect.right - 4:
+        # doesn't fit beside the button row at this box's width (`stack`'s
+        # show_info=False box, far narrower than steam's) - wrap onto its
+        # own line below the buttons instead of running off the box's edge
+        vlab = ap_rect.x + 92
+        vcol = vlab + 16 + 8 + 95
+        vy = y + 34
+    r._t("VS", vlab, vy + 2, font=r.f_sm, color=DIM)
+    r.lcd(f"{getattr(ap, 'vs_target', 0):.0f}", vcol, vy, big=True,
           color=GPS_GREEN if vert in ("VS", "GS") else DIM, right=True)
 
     ann = []
@@ -2165,21 +2213,23 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None):
     if tr:
         ann.append((f"TRIM {'UP' if tr > 0 else 'DN'}", AMBER))
     ax = ap_rect.x + 92
+    ann_y = y + 36 if vy == y else vy + 22   # below the wrapped VS row too, when wrapped
     for text, col in ann:
-        rr = r._t(text, ax, y + 36, font=r.f_sm, color=col)
+        rr = r._t(text, ax, ann_y, font=r.f_sm, color=col)
         ax = rr.right + 10
 
     # -- info box: not part of the 55X itself --------------------------
-    iy = info_rect.y + 6
-    pitch = 17
-    icol = info_rect.right - 10
-    r._t("HDG BUG", info_rect.x + 10, iy, font=r.f_sm, color=DIM)
-    r.lcd(f"{getattr(ap, 'heading_bug', 0):03.0f}", icol, iy - 1, color=CYAN, right=True)
-    r._t("ALT SEL", info_rect.x + 10, iy + pitch, font=r.f_sm, color=DIM)
-    r.lcd(f"{getattr(ap, 'alt_preselect', 0):.0f}", icol, iy + pitch - 1, color=TEXT, right=True)
-    if ias_bug:
-        r._t("IAS SET", info_rect.x + 10, iy + pitch * 2, font=r.f_sm, color=DIM)
-        r.lcd(f"{ias_bug:.0f}", icol, iy + pitch * 2 - 1, color=CYAN, right=True)
+    if info_rect is not None:
+        iy = info_rect.y + 6
+        pitch = 17
+        icol = info_rect.right - 10
+        r._t("HDG BUG", info_rect.x + 10, iy, font=r.f_sm, color=DIM)
+        r.lcd(f"{getattr(ap, 'heading_bug', 0):03.0f}", icol, iy - 1, color=CYAN, right=True)
+        r._t("ALT SEL", info_rect.x + 10, iy + pitch, font=r.f_sm, color=DIM)
+        r.lcd(f"{getattr(ap, 'alt_preselect', 0):.0f}", icol, iy + pitch - 1, color=TEXT, right=True)
+        if ias_bug:
+            r._t("IAS SET", info_rect.x + 10, iy + pitch * 2, font=r.f_sm, color=DIM)
+            r.lcd(f"{ias_bug:.0f}", icol, iy + pitch * 2 - 1, color=CYAN, right=True)
 
 
 def draw_radio_strip(surf, rect, radios, gns, r, *, selector_mode="", shift_mode="", t=0.0):
