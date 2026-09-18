@@ -426,17 +426,33 @@ class Renderer:
             self._t("no flight-plan airports", rect.x, rect.y, font=self.f_sm, color=DIM)
             return
         ai = max(0, min(len(idents) - 1, getattr(gns, "chart_airport_sel", 0)))
+        y = rect.y
+        x = rect.x
+        for i, ident in enumerate(idents):
+            col = GPS_GREEN if i == ai else DIM
+            r = self._t(f" {ident} ", x, y, font=self.f_sm, color=col)
+            self._stack_hit[f"plate:airport:{i}"] = r      # click to switch airport
+            x = r.right + 2
+        y += 18
         ident = idents[ai]
         charts = self._dtpp_charts_for(ident)
         if not charts:
-            self._t(f"no charts cached for {ident}", rect.x, rect.y, font=self.f_sm, color=DIM)
-            self._t("datasrc.dtpp update-index", rect.x, rect.y + 16,
+            self._t(f"no charts cached for {ident}", rect.x, y, font=self.f_sm, color=DIM)
+            self._t("datasrc.dtpp update-index", rect.x, y + 16,
                    font=self.f_sm, color=DIM)
             return
         ci = max(0, min(len(charts) - 1, getattr(gns, "chart_sel", 0)))
+        if len(charts) > 1:                         # multiple plates for this airport
+            x = rect.x
+            for i, c in enumerate(charts):
+                col = GPS_GREEN if i == ci else DIM
+                r = self._t(f" {c.chart_code} ", x, y, font=self.f_sm, color=col)
+                self._stack_hit[f"plate:chart:{i}"] = r     # click to switch chart
+                x = r.right + 2
+            y += 18
         chart = charts[ci]
-        self._t(f"{ident}  {chart.chart_name}", rect.x, rect.y, font=self.f_sm, color=CYAN)
-        y = rect.y + 18
+        self._t(chart.chart_name, rect.x, y, font=self.f_sm, color=CYAN)
+        y += 18
         key = chart.pdf_name
         img = self._plate_cache.get(key)
         if img is not None:
@@ -1297,6 +1313,12 @@ class Renderer:
             col = AMBER if picked else (GPS_GREEN if i == sel else DIM)
             r = self._t(f">{ident}<" if picked else f" {ident} ", x, y,
                        font=self.f_sm, color=col)
+            # click-to-switch (the "stack" layout's only way to pick a
+            # station - there's no bezel outer knob to turn there; harmless
+            # to register on the "gps"/"dual" AUX Weather page too, since
+            # main._on_stack_click is only ever consulted while
+            # Scene.layout == "stack")
+            self._stack_hit[f"wx:airport:{i}"] = r
             x = r.right + 2
         y += 18
 

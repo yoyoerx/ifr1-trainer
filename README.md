@@ -13,7 +13,7 @@ not real-world navigation.
 
 See `WORKING.md` for the detailed task tracker and `ARCHITECTURE.md` for the map.
 `FINDINGS.md` records the GNS 530 validation against the Garmin Pilot's Guide.
-834 tests passing. The trainer runs:
+839 tests passing. The trainer runs:
 
 ```
 python main.py --plan "KBOS PVD KJFK" --wind 300/25       # 530 + moving map
@@ -50,8 +50,10 @@ S-TEC 55X programmer in a right-hand column; NAV1/NAV2 as round
 Bendix/King-style CDI+GS+OBS heads plus a standalone heading indicator in the
 middle; and a tabbed WX/MAP/PLATE/SETTINGS reference panel with clickable
 HDG/IAS/ALT autopilot-bug boxes on the left. It's the only layout with mouse
-support - click a tab to switch it, click a bug box's `+`/`-` to edit it. The
-PLATE tab rasterizes the selected AUX>Charts plate inline (`pypdfium2`)
+support - click a tab to switch it, click a bug box's `+`/`-` to edit it,
+click an airport ident to switch which flight-plan station WX/PLATE shows.
+The PLATE tab rasterizes the selected AUX>Charts plate inline (`pypdfium2`,
+click-switchable between airports and, when more than one is cached, charts)
 instead of handing the PDF to the OS viewer; SETTINGS exposes wind and
 time-warp for changing in flight. The window resizes larger while `stack` is
 active and back down when you leave it.

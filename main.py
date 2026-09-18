@@ -1103,9 +1103,28 @@ def _on_stack_click(e, w: World, ui: dict, renderer) -> None:
             w.ap.set_preselect(w.ap.alt_preselect + 100.0)
         elif name == "bug:alt:-":
             w.ap.set_preselect(w.ap.alt_preselect - 100.0)
+        elif name.startswith("wx:airport:"):
+            i = int(name.rsplit(":", 1)[1])
+            idents = w.gns.wx_station_idents()
+            if 0 <= i < len(idents):
+                w.gns.wx_sel = i
+                w.gns.wx_scroll = 0             # new station - back to the top (matches
+                                                 # gpsnav._page_edit's own outer-knob behavior)
+        elif name.startswith("plate:airport:"):
+            i = int(name.rsplit(":", 1)[1])
+            idents = w.gns.wx_station_idents()
+            if 0 <= i < len(idents):
+                w.gns.chart_airport_sel = i
+                w.gns.chart_sel = 0             # new airport - reset chart index (ditto)
+        elif name.startswith("plate:chart:"):
+            w.gns.chart_sel = int(name.rsplit(":", 1)[1])
         elif name == "plate:load":
-            g = w.gns2 if (ui.get("kbd_fms2") and w.gns2 is not None) else w.gns
-            _open_stack_plate(w, renderer, gns=g)
+            # the WX/PLATE tabs are always driven by the primary unit
+            # (Renderer._draw_stack_plate/_draw_aux_weather read Scene.gns,
+            # which main.py's Scene() always sets to w.gns - not the
+            # kbd_fms2-routed unit the GNS bezel keys use) - fetch from the
+            # same unit so what loads matches what's shown
+            _open_stack_plate(w, renderer, gns=w.gns)
         return
 
 

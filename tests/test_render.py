@@ -1331,3 +1331,44 @@ def test_stack_click_adjusts_wind_and_time_warp(db):
     assert w.sim.wind_kt == wind0 + 5
     main_mod._on_stack_click(_click(*r._stack_hit["warp:10"].center), w, ui, r)
     assert ui["time_warp"] == 10
+
+
+def _two_airport_world():
+    """A world whose flight plan has two real airports (`db`'s own fixture
+    only has enroute waypoints), for WX/PLATE airport-switching tests."""
+    d = NavDatabase(source="test")
+    d.add_airport(Airport("KBOS", Point(42.36, -71.01)))
+    d.add_airport(Airport("KLNS", Point(40.12, -76.30)))
+    w = _bare_world(d)
+    w.gns.load_flight_plan(["KBOS", "KLNS"])
+    return w, d
+
+
+def test_stack_wx_click_switches_which_airport_is_shown():
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w, d = _two_airport_world()
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, d, stack_tab="WX"))
+    assert w.gns.wx_sel == 0                               # departure by default
+    assert "wx:airport:1" in r._stack_hit
+    w.gns.wx_scroll = 5                                     # non-zero, to prove it resets
+    ui = {"layout": "stack", "stack_tab": "WX"}
+    main_mod._on_stack_click(_click(*r._stack_hit["wx:airport:1"].center), w, ui, r)
+    assert w.gns.wx_sel == 1                                # now the destination
+    assert w.gns.wx_scroll == 0
+
+
+def test_stack_plate_click_switches_airport_and_resets_chart():
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w, d = _two_airport_world()
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, d, stack_tab="PLATE"))
+    assert "plate:airport:0" in r._stack_hit
+    assert "plate:airport:1" in r._stack_hit
+    w.gns.chart_sel = 3                                     # non-zero, to prove it resets
+    ui = {"layout": "stack", "stack_tab": "PLATE"}
+    main_mod._on_stack_click(_click(*r._stack_hit["plate:airport:1"].center), w, ui, r)
+    assert w.gns.chart_airport_sel == 1
+    assert w.gns.chart_sel == 0

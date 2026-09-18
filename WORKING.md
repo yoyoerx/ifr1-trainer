@@ -3,7 +3,8 @@
 Task tracker for **octavi-ifr-trainer**. Newest status at the top of each list.
 `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped.
 
-Last updated: 2026-09-17 (stack layout: Phase 0-5 complete, 834 tests green)
+Last updated: 2026-09-18 (stack layout: Phase 0-5 complete + WX/PLATE
+airport-switching follow-up, 839 tests green)
 
 Prior task history (M0–M16, the initial build through the playtest-fix rounds)
 is archived in `archive/WORKING-2026-09-11.md`, refreshed here to start a clean
@@ -13,7 +14,7 @@ bug fixed against the Pilot's Guide/playtest feedback (F1–F28 so far) and is
 
 ---
 
-## Current status (2026-09-17, 834 tests green)
+## Current status (2026-09-18, 839 tests green)
 
 The trainer runs end to end on four layouts (`gps`, `steam`, `stack`,
 `dual`), driven by the IFR-1 or keyboard (`stack` also takes mouse input),
@@ -179,7 +180,7 @@ if this gets picked up.
 
 See `archive/WORKING-2026-09-11.md` for the full dated log through M0–M16 and
 the "gps"/"steam"/"dual" layouts' initial build, and `FINDINGS.md` for every
-playtest-round fix (F1–F28) since.
+playtest-round fix (F1–F29) since.
 
 - **2026-09-17** — `stack` layout built end to end, Phase 0-5 of the
   checklist above: `--layout stack` (+ `L`-cycle, window resize, mouse
@@ -192,3 +193,10 @@ playtest-round fix (F1–F28) since.
   tests. Two items scoped down from the original design (see Backlog): the
   SETTINGS wind editor is a single uniform value, not a winds-aloft profile;
   AP-bug boxes are click-only, no scroll-wheel. Not yet playtested.
+
+- **2026-09-18** — F29: WX/PLATE tabs could only ever show the departure
+  airport - no click target existed to switch stations, and PLATE had no
+  airport strip at all. `_draw_aux_weather`/`_draw_stack_plate` now register
+  `wx:airport:N`/`plate:airport:N`/`plate:chart:N` hit rects, dispatched by
+  `main._on_stack_click` the same way the tab/bug clicks already were. 837 ->
+  839 tests.

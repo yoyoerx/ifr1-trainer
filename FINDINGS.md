@@ -411,6 +411,28 @@ fixed until now.
 pop-up is open, Up/Down/Enter/Esc drive it the same way the PROC selector's
 keyboard handling already works.
 
+### F29 — `stack` layout: WX/PLATE could only ever show the departure airport
+User feedback after building `stack` (2026-09-18): "plates page is only
+showing the departure airport. would like it to show both. WX displays, but
+not possible to switch between the departing or arriving airport." Both
+`_draw_aux_weather` (WX tab) and `_draw_stack_plate` (PLATE tab) already
+picked their station off `gns.wx_sel`/`gns.chart_airport_sel`, and the WX
+tab even drew a strip of every flight-plan airport - but nothing in `stack`
+could ever change either value: normally the GNS bezel's outer knob does
+that (`gpsnav._page_edit`'s "Weather"/"Charts" branches), and `stack`'s
+mouse input had no equivalent click target. The PLATE tab didn't even draw
+an airport strip, so there was no visual sign a second airport existed.
+**Fix:** `_draw_aux_weather` now registers a `wx:airport:N` click rect per
+ident in the strip it already drew; `_draw_stack_plate` gained its own
+airport strip (`plate:airport:N`) plus, when an airport has more than one
+cached plate, a chart strip (`plate:chart:N`). `main._on_stack_click`
+dispatches all three, mirroring `_page_edit`'s own behavior (switching
+airport resets `wx_scroll`/`chart_sel` back to the top/first chart rather
+than leaving a stale scroll position or chart index from the previous
+airport). Also fixed in passing: `plate:load` always fetches via the same
+unit (`w.gns`) the tab actually displays, rather than a `kbd_fms2`-routed
+unit that could silently mismatch it.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md

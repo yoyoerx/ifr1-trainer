@@ -89,7 +89,7 @@ routes `pygame.MOUSEBUTTONDOWN` to `_on_stack_click` while it's active (see
 Flags: `--config --unit --layout --xplane-feed --xplane-host --gdl90 --gdl90-host/-port --gdl90-discover --headless --time-warp --wx-auto-refresh --wx-metar-minutes --wx-taf-minutes --wx-winds-aloft-minutes` (+ the earlier plan/approach/wind/winds-aloft/wx-region/wx-station/tas/altitude/no-device/manual). `cli()` is the `octavi-trainer` entry point. | all | **done** |
 | `scoring.py` | Pure session-scoring accumulator. `ScoreTracker.sample(nav, own, panel, nav_head, alt_target)` one snapshot/loop; `.summary()` → `ScoreSummary` (xtk / CDI / glideslope RMS + max, TKE RMS, needle-peg count, altitude-vs-selected RMS, a 0-100 score + A-F grade against ¾-scale ACS tolerances). Only `LEG` / `DTO` samples score. `main.World.tick` feeds it; `run` prints `.lines()` on exit. | stdlib `math` | **done (6 tests)** |
 | `pyproject.toml` | setuptools packaging: `octavi-trainer = main:cli` console script, `pygame-ce` runtime dep, `device` (hidapi) + `dev` (pytest) extras, pytest config. Editable install (`pip install -e .`) is the supported mode (assets resolve via `__file__`). | setuptools | **done** |
-| `tests/` | pytest. `navmath`, `airac`, `navdata` parsers get real coverage; `gpsnav` / `instruments` / `sim_model` get scenario + sign-convention tests; `wmm` is checked against NOAA's published table; `gdl90` CRC against the spec example. `faa.py`/`wx.py` network calls are mocked; CIFP tests use verbatim public-domain record lines as fixtures. | `pytest` | 834 passing (wmm 103, navmath 67, airac 67, gns530 92, ifr1 47, cifp 36, render/main 62, arinc424 35, nasr 27, instruments 26, radios 25, wx 30, sim_model 21, autopilot 19, faa 19, windsaloft 14, wx_auto 13, config 20, foreflight_discovery 13, dtpp 21, navdata_query 11, gdl90 9, xplane_feed 8, gpsnav 7, scoring 6) |
+| `tests/` | pytest. `navmath`, `airac`, `navdata` parsers get real coverage; `gpsnav` / `instruments` / `sim_model` get scenario + sign-convention tests; `wmm` is checked against NOAA's published table; `gdl90` CRC against the spec example. `faa.py`/`wx.py` network calls are mocked; CIFP tests use verbatim public-domain record lines as fixtures. | `pytest` | 839 passing (wmm 103, navmath 67, airac 67, gns530 92, ifr1 47, cifp 36, render/main 67, arinc424 35, nasr 27, instruments 26, radios 25, wx 32, sim_model 21, autopilot 19, faa 19, windsaloft 14, wx_auto 13, config 20, foreflight_discovery 13, dtpp 21, navdata_query 11, gdl90 9, xplane_feed 8, gpsnav 7, scoring 6) |
 
 ---
 
@@ -234,11 +234,17 @@ layouts stay at `WIN_W, WIN_H` (1000×640). `Renderer._stack_layout` draws
 three columns:
 
 - **Left** — a tabbed reference panel, independent of the GNS units
-  (`Renderer._stack_tabs` + `_stack_tab_content`): WX = METAR/TAF (reuses
-  `_draw_aux_weather`), MAP = the existing moving map (`_map`), PLATE = the
-  selected approach plate rendered **inline** as a rasterized PDF, SETTINGS =
-  in-flight-adjustable trainer options (wind, time-warp; `_draw_stack_settings`).
-  Below it, HDG/IAS/ALT autopilot-bug boxes (`_stack_ap_bugs`), directly
+  (`Renderer._stack_tabs` + `_stack_tab_content`): WX = METAR/TAF for any of
+  the flight plan's airports, click an ident in the strip to switch station
+  (reuses `_draw_aux_weather`, which now also registers a `wx:airport:N` hit
+  rect per ident - the strip existed before but had no way to drive it
+  without a bezel outer knob), MAP = the existing moving map (`_map`), PLATE
+  = the selected approach plate rendered **inline** as a rasterized PDF, with
+  its own clickable airport strip (`plate:airport:N`) and, when an airport
+  has more than one cached plate, a chart strip (`plate:chart:N`) -
+  `_draw_stack_plate`, SETTINGS = in-flight-adjustable trainer options (wind,
+  time-warp; `_draw_stack_settings`). Below it, HDG/IAS/ALT autopilot-bug
+  boxes (`_stack_ap_bugs`), directly
   clickable (`+`/`-`) to edit — not read-only readouts.
 - **Middle** — NAV1 and NAV2 as Bendix/King-style round CDI heads
   (`draw_nav_head`, reused unchanged from `steam`), plus a standalone heading
@@ -264,8 +270,9 @@ three columns:
   every frame; `main.run()`'s event loop calls `main._on_stack_click` on
   `pygame.MOUSEBUTTONDOWN` only while `stack` is active, which hit-tests the
   click and dispatches by name (`tab:*`, `warp:*`, `wind_dir:±`, `wind_kt:±`,
-  `bug:hdg/ias/alt:±`, `plate:load`). Click-only — no `MOUSEWHEEL` handling
-  yet (backlog in `WORKING.md`).
+  `bug:hdg/ias/alt:±`, `wx:airport:N`, `plate:airport:N`, `plate:chart:N`,
+  `plate:load`). Click-only — no `MOUSEWHEEL` handling yet (backlog in
+  `WORKING.md`).
 - **PDF rasterization**, via a new dependency: **`pypdfium2`** (small,
   MIT-licensed, pure-wheel — the dev machine has no system `poppler`, so a
   `pdftoppm`-shelling approach wasn't an option). Used only by the PLATE tab.
