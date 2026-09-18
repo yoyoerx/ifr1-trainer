@@ -348,7 +348,11 @@ python main.py --wx-region BOS --wx-station BOS   # fly the cached forecast
 
 `--wx-region`/`--wx-station` read whatever the most recent `winds-aloft` fetch
 cached (`data/wx/windtemp/<REGION>_latest.json`) — a one-off manual fetch
-doesn't auto-refresh (see `--wx-auto-refresh` below for that).
+doesn't auto-refresh (see `--wx-auto-refresh` below for that). `winds-aloft`
+takes one of AWC's 6 CONUS FD **regions** — `BOS MIA CHI DFW SLC SFO` — not a
+station/airport ident (`KBWI`, `BWI`, etc. will 400); `--wx-station` is then
+any station **within** that region's forecast table (e.g. `BOS`'s table also
+covers `JFK`, `ALB`, `BUF`, ...).
 
 Once `metar`/`taf` have been fetched, the GNS **AUX group has a Weather page**
 that shows the raw METAR and TAF for the flight plan's airports — departure,

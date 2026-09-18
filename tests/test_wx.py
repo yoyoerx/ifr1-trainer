@@ -139,6 +139,33 @@ def test_fetch_winds_aloft_decodes_and_raises_when_empty():
         wx.fetch_winds_aloft("ZZZ", get_text=lambda url: "FT  3000\n")
 
 
+def test_http_get_text_400_surfaces_the_json_error_detail(monkeypatch):
+    """AWC returns 400 (not 404) with a JSON body for a bad query param -
+    e.g. {"status":"error","error":"Invalid value for region"} - confirmed
+    live. `_http_get_text` should surface that detail in a clean
+    DataUnavailable, not let the raw HTTPError propagate as a traceback."""
+    import io
+    import urllib.error
+
+    def fake_urlopen(req, timeout=None):
+        body = json.dumps({"status": "error", "error": "Invalid value for region"}).encode()
+        raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, io.BytesIO(body))
+
+    monkeypatch.setattr(wx.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(wx.DataUnavailable, match="Invalid value for region"):
+        wx._http_get_text("https://example.invalid/x")
+
+
+def test_fetch_winds_aloft_bad_region_lists_the_valid_ones():
+    """A bad `region` should tell the pilot what to try instead, not just
+    that the fetch failed."""
+    def get_text(url):
+        raise wx.DataUnavailable("400 Bad Request: ... (Invalid value for region)")
+
+    with pytest.raises(wx.DataUnavailable, match="BOS.*MIA.*CHI.*DFW.*SLC.*SFO"):
+        wx.fetch_winds_aloft("BWI", get_text=get_text)
+
+
 def test_fetch_winds_aloft_lowercases_the_region_in_the_request_url():
     """AWC's windtemp endpoint 400s on an uppercase `region`
     ({"status":"error","error":"Invalid value for region"}), unlike every

@@ -66,6 +66,20 @@ def _http_get_text(url: str, *, timeout: int = HTTP_TIMEOUT) -> str:
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             raise DataUnavailable(f"404 Not Found: {url}") from exc
+        if exc.code == 400:
+            # AWC returns 400 (not 404) for a bad query param - e.g. an
+            # unrecognized winds-aloft `region` - with a JSON body like
+            # {"status":"error","error":"Invalid value for region"}. Surface
+            # that message (best-effort; fall back to the raw body/reason if
+            # it isn't the JSON shape expected) as a clean DataUnavailable
+            # instead of a raw traceback - `fetch_winds_aloft` adds the list
+            # of valid region codes on top of this.
+            body = exc.read().decode("utf-8", "replace")
+            try:
+                detail = json.loads(body).get("error", body)
+            except (json.JSONDecodeError, AttributeError):
+                detail = body or exc.reason
+            raise DataUnavailable(f"400 Bad Request: {url} ({detail})") from exc
         raise
     except urllib.error.URLError as exc:
         raise DataUnavailable(f"cannot reach {url}: {exc.reason}") from exc
@@ -237,6 +251,13 @@ def fetch_taf(idents: list[str], *, get_text=_http_get_text) -> list[Taf]:
     return [Taf.from_json(d) for d in data]
 
 
+# The 6 CONUS FD regions AWC's windtemp endpoint actually accepts, each named
+# for a representative station - not a real station/airport ident itself (a
+# common mix-up: `BWI`, `KBOS`, etc. are airports, not regions). Confirmed
+# live against the API rather than found in any AWC doc.
+FD_REGIONS = ("bos", "mia", "chi", "dfw", "slc", "sfo")
+
+
 def fetch_winds_aloft(region: str, *, fcst: str = "06",
                        get_text=_http_get_text) -> list[WindsAloftStation]:
     # AWC's API rejects an uppercase `region` outright ({"status":"error",
@@ -246,7 +267,16 @@ def fetch_winds_aloft(region: str, *, fcst: str = "06",
     # request URL; `region` everywhere else here (cache keys, messages) stays
     # whatever case the caller passed / `.upper()`'d, unaffected.
     url = AWC_BASE + f"windtemp?region={urllib.parse.quote(region.lower())}&fcst={fcst}&level=low"
-    text = get_text(url)
+    try:
+        text = get_text(url)
+    except DataUnavailable as exc:
+        # Most likely cause of a fetch failure here specifically (as opposed
+        # to metar/taf) is an invalid `region` - add the known-good list to
+        # whatever `_http_get_text` already raised (AWC's own error text,
+        # when it gave one) rather than leaving the pilot to guess.
+        raise DataUnavailable(
+            f"{exc} - region must be one of: {', '.join(r.upper() for r in FD_REGIONS)}"
+        ) from exc
     stations = decode_fd_text(text)
     if not stations:
         raise DataUnavailable(f"no winds-aloft data parsed for region {region} fcst {fcst}")
@@ -424,7 +454,9 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("idents", nargs="+", help="ICAO station idents")
 
     w = sub.add_parser("winds-aloft", help="fetch + cache an FD winds/temps-aloft forecast")
-    w.add_argument("region", help="NWS FD region code, e.g. BOS, MIA, SLC")
+    w.add_argument("region", help="NWS FD region code - one of: "
+                   + ", ".join(r.upper() for r in FD_REGIONS)
+                   + " (a region, not a station/airport ident)")
     w.add_argument("--fcst", default="06", choices=("06", "12", "24"),
                    help="forecast period (default: 06)")
 
