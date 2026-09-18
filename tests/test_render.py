@@ -1271,6 +1271,23 @@ def test_stack_layout_draws_all_columns_single_unit(db):
     assert "bug:hdg:+" in r._stack_hit and "bug:alt:-" in r._stack_hit
 
 
+def test_stack_middle_column_is_fixed_width_not_window_width(db):
+    """NAV1/NAV2 don't need the full remaining window width (playtest:
+    "boxes are way too wide... allow the tabs... to get bigger") - the
+    middle column is a fixed size regardless of window width, and the left
+    tab column gets whatever room that leaves."""
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, db))
+    tab_w = r._stack_hit["tab:WX"].width
+    # each of the 4 tabs is a quarter of the left column (minus a small
+    # gap) - comfortably wider than the old fixed 340px-wide left column
+    # produced (~81px/tab); this only holds if the middle column shrank
+    assert tab_w > 100
+
+
 def test_stack_layout_draws_with_a_second_unit(db):
     from render import STACK_W, STACK_H
     surf = pygame.Surface((STACK_W, STACK_H))
@@ -1372,3 +1389,68 @@ def test_stack_plate_click_switches_airport_and_resets_chart():
     main_mod._on_stack_click(_click(*r._stack_hit["plate:airport:1"].center), w, ui, r)
     assert w.gns.chart_airport_sel == 1
     assert w.gns.chart_sel == 0
+
+
+def _fake_charts(codes):
+    """A synthetic AUX>Charts index for one airport - `chart_code` values in
+    the order given, each with a distinct `chart_name` so the fixture can
+    tell rows apart."""
+    from datasrc.dtpp import ChartRecord
+    return [ChartRecord("PA", "TESTVILLE", "NE-3", "TST", "TEST FIELD", "N", str(i),
+                        code, f"{code} PROCEDURE {i}", "", f"chart{i}.pdf")
+            for i, code in enumerate(codes)]
+
+
+def test_stack_plate_filter_chips_condense_a_busy_procedure_list(db, monkeypatch):
+    """Playtest: "list of procedures is redundant/overflows with STR STR STR
+    IAP IAP DP DP DP DP DP" - a bare row of chart_code was both meaningless
+    (every approach showed "IAP") and could overflow. Filter chips (one per
+    code actually present) plus a real chart-name list fix both."""
+    from render import STACK_W, STACK_H
+    w, d = _two_airport_world()
+    charts = _fake_charts(["STAR", "STAR", "IAP", "IAP", "DP", "DP", "DP"])
+    monkeypatch.setattr(Renderer, "_dtpp_charts_for", lambda self, ident: charts)
+    surf = pygame.Surface((STACK_W, STACK_H))
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, d, stack_tab="PLATE"))
+    # one filter chip per distinct code, plus ALL
+    assert {"plate:filter:ALL", "plate:filter:STAR", "plate:filter:IAP",
+           "plate:filter:DP"} <= r._stack_hit.keys()
+    # rows are keyed by index into the *unfiltered* list and only the
+    # visible window (room=4) is registered - distinct chart names, not a
+    # wall of repeated codes
+    assert any(k.startswith("plate:chart:") for k in r._stack_hit)
+
+
+def test_stack_plate_filter_narrows_the_chart_list_and_snaps_selection(db, monkeypatch):
+    import dataclasses
+    from render import STACK_W, STACK_H
+    w, d = _two_airport_world()
+    charts = _fake_charts(["STAR", "IAP", "IAP", "DP"])
+    monkeypatch.setattr(Renderer, "_dtpp_charts_for", lambda self, ident: charts)
+    w.gns.chart_sel = 0                                    # currently on the STAR
+    surf = pygame.Surface((STACK_W, STACK_H))
+    r = Renderer(surf)
+    sc = dataclasses.replace(_stack_scene(w, d, stack_tab="PLATE"), plate_filter="IAP")
+    r.draw(sc)
+    # STAR (index 0) is hidden by the IAP filter - selection snaps onto the
+    # first IAP instead of staying pointed at a now-invisible chart
+    assert w.gns.chart_sel in (1, 2)
+    assert charts[w.gns.chart_sel].chart_code == "IAP"
+    # only the two IAP rows are click targets, not the STAR/DP ones
+    assert "plate:chart:1" in r._stack_hit and "plate:chart:2" in r._stack_hit
+    assert "plate:chart:0" not in r._stack_hit and "plate:chart:3" not in r._stack_hit
+
+
+def test_stack_plate_filter_click_updates_ui_state():
+    from render import STACK_W, STACK_H
+    w, d = _two_airport_world()
+    charts = _fake_charts(["STAR", "IAP", "DP"])
+    surf = pygame.Surface((STACK_W, STACK_H))
+    r = Renderer(surf)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Renderer, "_dtpp_charts_for", lambda self, ident: charts)
+        r.draw(_stack_scene(w, d, stack_tab="PLATE"))
+        ui = {"layout": "stack", "stack_tab": "PLATE", "plate_filter": "ALL"}
+        main_mod._on_stack_click(_click(*r._stack_hit["plate:filter:DP"].center), w, ui, r)
+    assert ui["plate_filter"] == "DP"

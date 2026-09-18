@@ -433,6 +433,30 @@ airport). Also fixed in passing: `plate:load` always fetches via the same
 unit (`w.gns`) the tab actually displays, rather than a `kbd_fms2`-routed
 unit that could silently mismatch it.
 
+### F30 — `stack` layout: PLATE's chart list was redundant; middle column too wide
+Two pieces of the same session's follow-up feedback (2026-09-18). First:
+"plate list of procedures is redundant/overflows with STR STR STR IAP IAP DP
+DP DP DP DP DP, maybe all these condense as a filter to show all the IAPs or
+all the DPs etc. rather than repeating." F29's chart strip showed only
+`chart_code` per chart - meaningless for telling two ILS/RNAV approaches
+apart (both just say "IAP") and unbounded, so a busy airport's row ran off
+the panel. Second: "NAV head layouts is janky. The boxes are way too wide.
+they should shrink to the right and allow the tabs with the WX, MAP, PLATES
+to get bigger." The middle column (`_stack_layout`) sized itself to
+`W - left_w - right_w`, but `draw_nav_head` left-biases its round card
+(`_card_geometry`) - past ~440px the extra width was just dead panel
+background, and the fixed 340px left column was starved of it.
+**Fix:** `_draw_stack_plate`'s chart section is now a scrollable, filterable
+list (`_STACK` chip row: `ALL` + each distinct `chart_code` actually present,
+click to narrow; a 4-row scroll window, same technique as `_draw_nrst_page`)
+showing the full `chart_name` per row, not just its category - entries are
+now distinguishable and bounded regardless of how many procedures an airport
+has. Switching the filter snaps `gns.chart_sel` onto the first still-visible
+chart if the old selection just got filtered out. Separately, `_stack_layout`
+now gives the middle (NAV1/NAV2/HDG) column a fixed 440px width instead of
+whatever the window happens to leave over, handing the freed space to the
+left tab column.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md

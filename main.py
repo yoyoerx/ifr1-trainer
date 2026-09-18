@@ -825,7 +825,7 @@ def run(cfg: Config) -> int:
     clock = pygame.time.Clock()
 
     ui = {"layout": cfg.layout, "map_range": 20.0, "nav1_hsi": False, "running": True,
-          "time_warp": cfg.time_warp, "stack_tab": "WX"}
+          "time_warp": cfg.time_warp, "stack_tab": "WX", "plate_filter": "ALL"}
     frames = 0
     nearby: list = []
     last_pos = None
@@ -911,6 +911,7 @@ def run(cfg: Config) -> int:
             ias_target=w.ias_target, ias_managed=w._ias_managed, t=w.t,
             time_warp=warp, gns2=w.gns2,
             stack_tab=ui["stack_tab"], wind_from_deg=w.sim.wind_from, wind_kt=w.sim.wind_kt,
+            plate_filter=ui["plate_filter"],
         ))
         pygame.display.flip()
 
@@ -1118,6 +1119,8 @@ def _on_stack_click(e, w: World, ui: dict, renderer) -> None:
                 w.gns.chart_sel = 0             # new airport - reset chart index (ditto)
         elif name.startswith("plate:chart:"):
             w.gns.chart_sel = int(name.rsplit(":", 1)[1])
+        elif name.startswith("plate:filter:"):
+            ui["plate_filter"] = name.split(":", 2)[2]
         elif name == "plate:load":
             # the WX/PLATE tabs are always driven by the primary unit
             # (Renderer._draw_stack_plate/_draw_aux_weather read Scene.gns,

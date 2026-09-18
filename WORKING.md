@@ -4,17 +4,18 @@ Task tracker for **octavi-ifr-trainer**. Newest status at the top of each list.
 `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped.
 
 Last updated: 2026-09-18 (stack layout: Phase 0-5 complete + WX/PLATE
-airport-switching follow-up, 839 tests green)
+airport-switching + PLATE chart filter/middle-column-width follow-ups, 843
+tests green)
 
 Prior task history (M0–M16, the initial build through the playtest-fix rounds)
 is archived in `archive/WORKING-2026-09-11.md`, refreshed here to start a clean
 slate for the next project. `FINDINGS.md` remains the permanent log of every
-bug fixed against the Pilot's Guide/playtest feedback (F1–F28 so far) and is
+bug fixed against the Pilot's Guide/playtest feedback (F1–F30 so far) and is
 **not** archived — keep adding to it as before.
 
 ---
 
-## Current status (2026-09-18, 839 tests green)
+## Current status (2026-09-18, 843 tests green)
 
 The trainer runs end to end on four layouts (`gps`, `steam`, `stack`,
 `dual`), driven by the IFR-1 or keyboard (`stack` also takes mouse input),
@@ -200,3 +201,11 @@ playtest-round fix (F1–F29) since.
   `wx:airport:N`/`plate:airport:N`/`plate:chart:N` hit rects, dispatched by
   `main._on_stack_click` the same way the tab/bug clicks already were. 837 ->
   839 tests.
+
+- **2026-09-18** — F30: PLATE's chart list ("STR STR STR IAP IAP DP DP DP DP
+  DP") was `chart_code`-only, indistinguishable and unbounded; the middle
+  column (NAV1/NAV2/HDG) was window-width-wide when `draw_nav_head` only
+  ever uses ~440px of it. `_draw_stack_plate` now shows a `plate:filter:CODE`
+  chip row over a scrollable full-chart-name list; `_stack_layout`'s middle
+  column is now a fixed 440px, freeing the rest for the left tab column. 839
+  -> 843 tests.

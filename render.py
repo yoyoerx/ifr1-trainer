@@ -221,6 +221,7 @@ class Scene:
     stack_tab: str = "WX"             # which left-column tab is showing
     wind_from_deg: float = 0.0        # World.wind_from, for the SETTINGS tab
     wind_kt: float = 0.0              # World.wind_kt, for the SETTINGS tab
+    plate_filter: str = "ALL"         # PLATE tab: "ALL" or one chart_code (IAP/DP/STAR/...)
 
 
 class Renderer:
@@ -318,10 +319,16 @@ class Renderer:
         gap = 8
         top = 30
         bottom_margin = 8
-        left_w = 340
         right_w = 360
+        # `draw_nav_head` left-biases its round card (`_card_geometry`) and
+        # only needs enough room past it for the info column - past ~440px
+        # the rest of the box is just dead panel background (playtest:
+        # "boxes are way too wide"). Fixed, not W-derived, so the middle
+        # column doesn't balloon on a wider window; the tab panel gets
+        # whatever that leaves instead.
+        mid_w = 440
+        left_w = W - right_w - mid_w - gap * 4
         mid_x = left_w + gap * 2
-        mid_w = W - left_w - right_w - gap * 4
 
         # -- right column: the avionics stack ---------------------------
         rx = W - right_w - gap
@@ -443,16 +450,55 @@ class Renderer:
             return
         ci = max(0, min(len(charts) - 1, getattr(gns, "chart_sel", 0)))
         if len(charts) > 1:                         # multiple plates for this airport
-            x = rect.x
-            for i, c in enumerate(charts):
-                col = GPS_GREEN if i == ci else DIM
-                r = self._t(f" {c.chart_code} ", x, y, font=self.f_sm, color=col)
+            # A bare row of `chart_code`s (playtest: "list of procedures is
+            # redundant/overflows with STR STR STR IAP IAP DP DP DP DP DP")
+            # was both meaningless (every ILS/RNAV/VOR approach shows the
+            # same "IAP") and could run off the panel for a busy airport.
+            # Filter chips (one per distinct code actually present, plus
+            # ALL) narrow the list first; the list itself then shows the
+            # full chart name, not just its category, so entries are
+            # distinguishable - a scrolling window (same technique as
+            # `_draw_nrst_page`) keeps a long filtered list on-screen.
+            codes = sorted({c.chart_code for c in charts})
+            flt = getattr(sc, "plate_filter", "ALL")
+            if len(codes) > 1:
+                x = rect.x
+                for label in ("ALL", *codes):
+                    col = GPS_GREEN if flt == label else DIM
+                    r = self._t(f" {label} ", x, y, font=self.f_sm, color=col)
+                    self._stack_hit[f"plate:filter:{label}"] = r
+                    x = r.right + 2
+                y += 16
+            else:
+                flt = "ALL"
+
+            visible = [c for c in charts if flt == "ALL" or c.chart_code == flt] or charts
+            if charts[ci] not in visible:
+                # the active filter just hid the current selection - snap to
+                # the filtered list's first entry so what's highlighted and
+                # what's about to load stay the same chart (same reasoning
+                # as `_draw_aux_weather` writing a clamped `wx_scroll` back)
+                ci = charts.index(visible[0])
+                gns.chart_sel = ci
+            sel_row = visible.index(charts[ci])
+
+            room = 4
+            top = max(0, min(max(0, len(visible) - room), sel_row - room // 2))
+            list_top = y
+            for row, c in enumerate(visible[top:top + room], start=top):
+                i = charts.index(c)
+                picked = i == ci
+                col = AMBER if picked else TEXT
+                mk = ">" if picked else " "
+                r = self._t(f"{mk}{c.chart_code:<4} {c.chart_name}", rect.x, y,
+                           font=self.f_sm, color=col)
                 self._stack_hit[f"plate:chart:{i}"] = r     # click to switch chart
-                x = r.right + 2
-            y += 18
+                y += 14
+            if len(visible) > room:
+                more = ("^" if top > 0 else " ") + ("v" if top + room < len(visible) else " ")
+                self._t(more, rect.right - 2, list_top, font=self.f_sm, color=AMBER, right=True)
+            y += 4
         chart = charts[ci]
-        self._t(chart.chart_name, rect.x, y, font=self.f_sm, color=CYAN)
-        y += 18
         key = chart.pdf_name
         img = self._plate_cache.get(key)
         if img is not None:
