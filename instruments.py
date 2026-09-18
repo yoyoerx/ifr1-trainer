@@ -424,6 +424,35 @@ def nav_head(receiver, ac_pos: Point, ac_alt_ft: float, gs_kt: float,
     )
 
 
+def gps_nav_head(nav, panel) -> NavHead:
+    """A :class:`NavHead`-shaped view of the GPS CDI, for a NAV1 round head
+    that's slaved to the GNS's own CDI/VLOC switch - the same real-world
+    wiring as a GPS-slaved analog CDI: the needle shows GPS course deviation
+    while the GNS's CDI source is GPS, and only the tuned NAV1 VOR/LOC
+    receiver (the plain `nav_head()` builder above) once the CDI key selects
+    VLOC. ``panel.cdi`` already carries this exact switch (`compute_panel`
+    picks GPS or VLOC deflection there); this just repackages it as a
+    NavHead so `render.draw_nav_head`/`draw_hsi_head` don't need a second
+    drawing path. ``nav`` supplies the to-waypoint ident/distance (GPS has
+    no VOR-style DME, but the "distance to the active fix" fills the same
+    display slot); ``panel`` supplies the already-computed CDI deflection."""
+    cdi = getattr(panel, "cdi", None)
+    if cdi is None or not getattr(cdi, "valid", False):
+        return NavHead(valid=False)
+    course = getattr(cdi, "course_deg", 0.0)
+    return NavHead(
+        valid=True,
+        is_localizer=False,
+        ident=(getattr(nav, "to_ident", "") or "").upper(),
+        course_deg=course,
+        obs_deg=course,
+        deflection=getattr(cdi, "deflection", 0.0),
+        to_from=getattr(cdi, "to_from", "TO") or "TO",
+        full_scale_deg=VOR_FULL_SCALE_DEG,
+        dme_nm=getattr(nav, "dist_nm", None),
+    )
+
+
 def six_pack(own, magvar_deg: float = 0.0) -> SixPack:
     """Snapshot the six primary flight instruments from a `sim_model.Ownship`."""
     hdg = norm360(getattr(own, "heading_deg", 0.0) - magvar_deg)

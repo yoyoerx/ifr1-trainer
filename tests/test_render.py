@@ -998,7 +998,9 @@ def test_route_event_fms_proc_key_opens_and_owns_the_selector(db):
     assert w.gns._proc_dialog.step == "PROC"
     main_mod.route_event(Event(mode=Mode.FMS1, pressed=("ENT",)), w)    # pick I09
     assert w.gns._proc_dialog.step == "TRANS" and w.gns._proc_dialog.options == ["VECTORS"]
-    main_mod.route_event(Event(mode=Mode.FMS1, pressed=("ENT",)), w)    # VECTORS -> load
+    main_mod.route_event(Event(mode=Mode.FMS1, pressed=("ENT",)), w)    # VECTORS -> Load?/Activate?
+    assert w.gns._proc_dialog.step == "LOADACT"
+    main_mod.route_event(Event(mode=Mode.FMS1, pressed=("ENT",)), w)    # confirm Load?
     assert w.gns._proc_dialog is None
     assert [wp.ident for wp in w.gns.fpl.waypoints][-2:] == ["ALFA", "BRAVO"]
 
@@ -1009,6 +1011,20 @@ def test_draw_proc_page(db):
     sc.gns._proc_dialog = ProcSelect(
         airport="KEND", step="PROC", kind="approach",
         options=["I05", "I23", "RNAV (GPS) Y 05"], sel=1)
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(sc)
+    assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
+
+
+def test_draw_proc_page_loadact_step(db):
+    """The Load?/Activate? step (Pilot's Guide p.61 step 5) renders through
+    the same generic `_proc_page` as every other step - `_proc_page` reads
+    `dlg.title`/`dlg.options` generically, no special-casing needed."""
+    from gpsnav import ProcSelect
+    sc = _scene(db)
+    sc.gns._proc_dialog = ProcSelect(
+        airport="KEND", step="LOADACT", kind="approach", proc_ident="I05",
+        options=["Load?", "Activate?"], sel=1)
     surf = pygame.display.get_surface()
     Renderer(surf).draw(sc)
     assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
@@ -1508,3 +1524,60 @@ def test_stack_hdg_actuals_are_actuals_not_ap_setpoints(db):
     r.draw(sc)                         # must not raise
     # the editable set-point boxes are still under the tab column
     assert "bug:hdg:+" in r._stack_hit and "bug:alt:-" in r._stack_hit
+
+
+# --------------------------------------------------------------------------- #
+# NAV1 round head slaved to the GNS's own CDI/VLOC switch (F33)
+# --------------------------------------------------------------------------- #
+def test_nav1_view_uses_gps_cdi_when_source_is_gps(db):
+    """The round NAV1 head is wired like a real GPS-slaved analog CDI - GPS
+    course deviation while the GNS's own CDI source is GPS, the tuned NAV1
+    VOR/LOC receiver only once the CDI key selects VLOC."""
+    sc = _scene(db)
+    assert sc.nav.cdi_source == "GPS"
+    r = Renderer(pygame.display.get_surface())
+    nh, kind = r._nav1_view(sc)
+    assert kind == "GPS"
+    assert nh.valid
+    assert nh.course_deg == pytest.approx(sc.panel.cdi.course_deg)
+    assert nh.deflection == pytest.approx(sc.panel.cdi.deflection)
+
+
+def test_nav1_view_falls_back_to_the_tuned_receiver_on_vloc(db):
+    import dataclasses
+    sc = _scene(db)
+    sc = dataclasses.replace(sc, nav=dataclasses.replace(sc.nav, cdi_source="VLOC"))
+    r = Renderer(pygame.display.get_surface())
+    nh, kind = r._nav1_view(sc)
+    assert kind is None
+    assert nh is sc.nav1_head                # unchanged - the tuned NAV1 receiver
+
+
+def test_draw_nav_head_gps_source_kind_labels_dtk_and_dis_not_obs_and_dme():
+    """`source_kind="GPS"` swaps the VOR/LOC labels ("OBS"/"CRS" -> "DTK",
+    "DME" -> "DIS") - a GPS "distance" isn't a DME reading, and there's no
+    pilot-set OBS course to show, just the desired track."""
+    from instruments import NavHead
+    surf = pygame.Surface((300, 300))
+    r = Renderer(surf)
+    nh = NavHead(valid=True, ident="ALFA", course_deg=90.0, obs_deg=90.0,
+                deflection=0.2, to_from="TO", dme_nm=12.3)
+    render.draw_nav_head(surf, pygame.Rect(0, 0, 300, 300), nh, "NAV1", r,
+                         source_kind="GPS")
+    arr = pygame.surfarray.array2d(surf)
+    assert arr.any()                          # must not raise, something drawn
+
+
+def test_stack_layout_nav1_draws_without_raising_in_gps_and_vloc(db):
+    """Integration smoke test for the full draw path - `Renderer._nav1_view`
+    feeding `draw_nav_head` in the `stack` layout, both CDI-source branches."""
+    import dataclasses
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    w.gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    w.gns.update(Point(40.0, -74.0), 0.0, 120.0)
+    sc = _stack_scene(w, db)
+    Renderer(surf).draw(sc)                   # GPS source - must not raise
+    sc2 = dataclasses.replace(sc, nav=dataclasses.replace(sc.nav, cdi_source="VLOC"))
+    Renderer(surf).draw(sc2)                  # VLOC source - must not raise

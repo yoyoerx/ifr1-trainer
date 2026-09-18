@@ -25,6 +25,7 @@ from instruments import (  # noqa: E402
     dme_slant,
     glideslope_deviation,
     gps_cdi_deflection,
+    gps_nav_head,
     marker_state,
     nav_head,
     six_pack,
@@ -266,6 +267,33 @@ def test_nav_head_untuned_is_invalid():
         obs_deg = 123.0
     nh = nav_head(Off(), STN, 0.0, 0.0, 0.0)
     assert not nh.valid and nh.obs_deg == 123.0
+
+
+# --------------------------------------------------------------------------- #
+# gps_nav_head - the NAV1 round head slaved to the GNS's own CDI/VLOC switch
+# --------------------------------------------------------------------------- #
+def test_gps_nav_head_repackages_panel_cdi():
+    """`gps_nav_head` must show exactly what `panel.cdi` (the GNS's own CDI
+    strip, and what the autopilot's NAV mode flies - F27) already computed,
+    not a second, independently-derived reading."""
+    nav = NavState(valid=True, cdi_source="GPS", dtk=90.0, xtk_nm=0.5,
+                   to_ident="alfa", dist_nm=12.3, to_from="TO", mode="LEG")
+    own = Ownship(STN, magvar_deg=-10.0)
+    panel = compute_panel(own, nav)
+    nh = gps_nav_head(nav, panel)
+    assert nh.valid and not nh.is_localizer
+    assert nh.ident == "ALFA"                       # upper-cased for display
+    assert nh.dme_nm == pytest.approx(12.3)
+    assert nh.course_deg == pytest.approx(panel.cdi.course_deg)
+    assert nh.deflection == pytest.approx(panel.cdi.deflection)
+    assert nh.to_from == "TO"
+
+
+def test_gps_nav_head_invalid_with_no_active_leg():
+    nav = NavState(valid=False)
+    own = Ownship(STN)
+    panel = compute_panel(own, nav)
+    assert not gps_nav_head(nav, panel).valid
 
 
 # --------------------------------------------------------------------------- #

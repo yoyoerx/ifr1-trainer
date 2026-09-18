@@ -13,7 +13,7 @@ not real-world navigation.
 
 See `WORKING.md` for the detailed task tracker and `ARCHITECTURE.md` for the map.
 `FINDINGS.md` records the GNS 530 validation against the Garmin Pilot's Guide.
-846 tests passing. The trainer runs:
+855 tests passing. The trainer runs:
 
 ```
 python main.py --plan "KBOS PVD KJFK" --wind 300/25       # 530 + moving map

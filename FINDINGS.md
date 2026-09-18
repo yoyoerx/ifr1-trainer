@@ -512,6 +512,63 @@ of two independently-computed positions that could drift apart.
 reads) and `_stack_setpoint_bugs` (the editable HDG/IAS/ALT boxes, restored
 under the tab column where they lived before F31 removed them).
 
+### F33 — NAV1 round head never followed the GNS's own CDI/VLOC switch
+User report (2026-09-18): "The nav1 head is not properly wired into GPS.
+Expected behavior is that when GPS is selected on the CDI on the gns it
+should display the CDI on the corresponding nav head. And then when CDI is
+pressed it should switch over to the VOR or v-loc frequency." The round
+NAV1 head (`steam` and `stack` layouts) was built purely from the tuned
+NAV1 VOR/LOC receiver (`instruments.nav_head`), completely independent of
+`nav.cdi_source` - it showed a raw VOR/LOC deviation (or "OFF" if untuned)
+regardless of whether the GNS's own CDI key was set to GPS or VLOC, even
+though `panel.cdi` (the CDI strip on the GNS screen itself) and the
+autopilot's NAV mode (F27) already switch correctly. On the real airplane
+this instrument is a GPS-slaved analog CDI: its GPS/VLOC mode literally is
+the GNS's own CDI key output, not an independent reading.
+**Fix:** `instruments.gps_nav_head(nav, panel)` repackages `panel.cdi`
+(already the correct GPS-or-VLOC deflection) into a `NavHead`, so
+`render.draw_nav_head`/`draw_hsi_head` don't need a second drawing path.
+`Renderer._nav1_view(sc)` picks it (with `source_kind="GPS"`, which
+relabels "OBS"/"CRS" -> "DTK" and "DME" -> "DIS", and skips the Morse-ident
+blink dot - a waypoint doesn't transmit Morse) while `nav.cdi_source ==
+"GPS"`, else falls back to the tuned NAV1 receiver exactly as before.
+NAV2 is untouched - a second, always-independent VOR/LOC receiver, the way
+a real second nav radio is.
+
+### F34 — PROC selector only ever loaded a procedure, never offered to activate it
+User report (2026-09-18): "when using the procedures button, when a
+procedure is selected, it should provide an option to load or to activate.
+Current behavior only loads and you have to do extra steps to activate.
+Review the Garmin POH and verify the correct button sequences." Verified
+against the Pilot's Guide (190-00181-00 Rev. H) sec.5, p.61 step 5 (text
+extracted directly via `pypdfium2` from a mirror with a real text layer,
+since the official Garmin PDF has none - see F23's note): "Rotate the large
+right knob to highlight 'Load?' or 'Activate?' (approaches only) and press
+ENT. ('Load?' adds the procedure to the flight plan without immediately
+using it for navigation guidance... 'Activate?' adds the procedure to the
+flight plan and begins navigating [it].)" This trainer's `ProcSelect`
+wizard (`_proc_advance`) skipped straight from picking the transition to
+loading (`_proc_load`, unconditionally) - the pilot could only activate
+afterward by reopening PROC and choosing "Activate Approach?"/"Activate
+Vectors-to-Final?" from the menu (which do exist, gated on `_approach_active`
+once something is loaded - that part already matched the manual's *later*
+re-activation flow on p.62, it's just the *initial* Load?/Activate? choice
+that was missing).
+**Fix:** `ProcSelect` gained a `LOADACT` step between TRANS and closing the
+dialog: `_proc_begin_loadact` offers `["Load?", "Activate?"]` for an
+approach (`"Load?"` highlighted by default, matching the manual) or just
+`["Load?"]` for a SID/STAR (activation for those stays the later, separate
+flow - the manual scopes "Activate?" here to approaches only). Choosing
+"Activate?" loads the procedure then immediately calls the same
+`_activate_approach(vtf=False)` the PROC-menu "Activate Approach?" item
+uses - which naturally reduces to Vectors-to-Final behavior when the chosen
+transition was VECTORS (no IAF ends up in the flight plan, so
+`_activate_approach` targets the FAF instead, same as it always did).
+CLR backs out through the new step correctly, including when TRANS itself
+was skipped (a procedure with no named transitions) via a new
+`has_trans_step` flag, so CLR doesn't try to reconstruct a transition list
+that was never shown.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md

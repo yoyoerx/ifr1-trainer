@@ -3,19 +3,19 @@
 Task tracker for **octavi-ifr-trainer**. Newest status at the top of each list.
 `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped.
 
-Last updated: 2026-09-18 (stack layout: Phase 0-5 complete + WX/PLATE
-airport-switching + PLATE chart filter/column-width/AP-panel-overlap/
-actuals-vs-setpoints follow-ups, 846 tests green)
+Last updated: 2026-09-18 (stack layout: Phase 0-5 complete + several
+follow-ups, + NAV1/GPS-CDI wiring fix + PROC Load?/Activate? fix,
+855 tests green)
 
 Prior task history (M0–M16, the initial build through the playtest-fix rounds)
 is archived in `archive/WORKING-2026-09-11.md`, refreshed here to start a clean
 slate for the next project. `FINDINGS.md` remains the permanent log of every
-bug fixed against the Pilot's Guide/playtest feedback (F1–F32 so far) and is
+bug fixed against the Pilot's Guide/playtest feedback (F1–F34 so far) and is
 **not** archived — keep adding to it as before.
 
 ---
 
-## Current status (2026-09-18, 846 tests green)
+## Current status (2026-09-18, 855 tests green)
 
 The trainer runs end to end on four layouts (`gps`, `steam`, `stack`,
 `dual`), driven by the IFR-1 or keyboard (`stack` also takes mouse input),
@@ -234,3 +234,23 @@ playtest-round fix (F1–F29) since.
   (read-only, from `Scene.sixpack`) and `_stack_setpoint_bugs` (editable,
   restored under the tab column where the boxes lived before F31). 844 ->
   846 tests.
+
+- **2026-09-18** — F33: the round NAV1 head was always built from the raw
+  tuned NAV1 receiver, ignoring `nav.cdi_source` entirely - on the real
+  airplane it's a GPS-slaved analog CDI, so it should show GPS deviation
+  while the GNS's own CDI key is on GPS, the receiver only once it's VLOC.
+  `instruments.gps_nav_head(nav, panel)` repackages `panel.cdi` (already
+  correctly source-switched) into a `NavHead`; `Renderer._nav1_view` picks
+  it or the tuned receiver per `cdi_source`. NAV2 unaffected. 846 -> 852
+  tests.
+
+- **2026-09-18** — F34: PROC only ever loaded a selected procedure - no
+  Load?/Activate? choice existed, so activating one right after selecting
+  it took a second PROC-menu round trip. Verified against the Pilot's Guide
+  p.61 step 5 (text extracted via `pypdfium2` from a mirror with a real
+  text layer): "'Load?' or 'Activate?' (approaches only)" is the actual next
+  step after picking the transition, not a separate later action.
+  `ProcSelect` gained a `LOADACT` step between TRANS and closing;
+  "Activate?" (approaches only - SIDs/STARs get "Load?" only, per the
+  manual) loads then calls the same `_activate_approach` the PROC menu's
+  "Activate Approach?" already uses. 852 -> 855 tests.

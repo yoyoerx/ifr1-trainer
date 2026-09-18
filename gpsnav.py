@@ -417,15 +417,27 @@ _PROC_MENU_KIND = {_PROC_APPROACH: "approach", _PROC_ARRIVAL: "star",
 
 @dataclass
 class ProcSelect:
-    """Modal state behind the PROC key: a small three-step wizard
-    (menu -> pick procedure -> pick transition) that ends in
-    :meth:`GpsNav.load_procedure`. Only display state lives here - the
-    database lookups are :class:`GpsNav`'s job."""
+    """Modal state behind the PROC key: a wizard (menu -> pick procedure ->
+    pick transition -> Load?/Activate?) that ends in
+    :meth:`GpsNav.load_procedure` (and, for "Activate?", `_activate_approach`
+    right after). Only display state lives here - the database lookups are
+    :class:`GpsNav`'s job.
+
+    The final Load?/Activate? step mirrors the Pilot's Guide (190-00181-00
+    Rev. H) sec.5 verbatim, p.61 step 5: "Rotate the large right knob to
+    highlight 'Load?' or 'Activate?' (approaches only) and press ENT.
+    ('Load?' adds the procedure to the flight plan without immediately using
+    it for navigation guidance... 'Activate?' adds the procedure to the
+    flight plan and begins navigating [it].)" - SIDs/STARs only ever offer
+    "Load?" at this step (arrivals/departures are activated later, the same
+    way any other flight-plan leg is)."""
 
     airport: str = ""
-    step: str = "MENU"                    # MENU | PROC | TRANS
-    kind: str = ""                        # approach | star | sid  (step PROC/TRANS)
-    proc_ident: str = ""                  # chosen procedure (step TRANS)
+    step: str = "MENU"                    # MENU | PROC | TRANS | LOADACT
+    kind: str = ""                        # approach | star | sid  (step PROC on)
+    proc_ident: str = ""                  # chosen procedure (step TRANS on)
+    transition: str | None = None         # chosen transition (step LOADACT)
+    has_trans_step: bool = True           # False if TRANS was skipped (no choices)
     options: list[str] = field(default_factory=list)
     sel: int = 0
 
@@ -443,7 +455,9 @@ class ProcSelect:
             return f"PROCEDURES  {self.airport}".rstrip()
         if self.step == "PROC":
             return f"{self.airport}  {self.kind.upper()}"
-        return f"{self.proc_ident}  TRANSITION"
+        if self.step == "TRANS":
+            return f"{self.proc_ident}  TRANSITION"
+        return f"{self.proc_ident}  LOAD/ACTIVATE"
 
 
 # --------------------------------------------------------------------------- #
@@ -1588,7 +1602,21 @@ class GpsNav:
         if dlg is None or dlg.step == "MENU":
             self._proc_dialog = None
             return
-        if dlg.step == "TRANS":
+        if dlg.step == "LOADACT":
+            if dlg.has_trans_step:
+                dlg.step = "TRANS"
+                proc = self.db.procedure(dlg.airport, dlg.proc_ident)
+                names = list(proc.transition_names()) if proc is not None else []
+                if dlg.kind == "approach":
+                    names = [_PROC_VECTORS, *names]
+                dlg.options = names
+                dlg.sel = 0
+            else:                                   # TRANS itself was skipped
+                dlg.step = "PROC"
+                dlg.options = sorted(p.ident for p in self.db.procs(dlg.airport, dlg.kind))
+                dlg.sel = 0
+                dlg.proc_ident = ""
+        elif dlg.step == "TRANS":
             dlg.step = "PROC"
             dlg.options = sorted(p.ident for p in self.db.procs(dlg.airport, dlg.kind))
             dlg.sel = 0
@@ -1621,29 +1649,65 @@ class GpsNav:
             if dlg.kind == "approach":
                 # VECTORS = load the final segment only (radar vectors to it)
                 names = [_PROC_VECTORS, *names]
-            if not names:                           # nothing to choose -> load now
-                self._proc_load(None)
+            if not names:                           # nothing to choose -> Load?/Activate?
+                dlg.transition = None
+                dlg.has_trans_step = False
+                self._proc_begin_loadact()
                 return
             dlg.step = "TRANS"
+            dlg.has_trans_step = True
             dlg.options = names
             dlg.sel = 0
             return
-        # step == "TRANS" - VECTORS is not a real transition key, so
-        # Procedure.assemble() falls through to the common segment alone.
-        self._proc_load(dlg.current)
+        if dlg.step == "TRANS":
+            # VECTORS is not a real transition key, so Procedure.assemble()
+            # falls through to the common segment alone.
+            dlg.transition = dlg.current
+            self._proc_begin_loadact()
+            return
+        # step == "LOADACT" - Pilot's Guide p.61 step 5: "Load?" (add to the
+        # flight plan without activating) or, approaches only, "Activate?"
+        # (add it AND immediately fly it - the same as loading, then an
+        # Activate Approach/Vectors-to-Final from the PROC menu, in one step).
+        if dlg.current == "Activate?":
+            self._proc_load(dlg.transition, activate=True)
+        else:
+            self._proc_load(dlg.transition, activate=False)
 
-    def _proc_load(self, transition: str | None) -> None:
+    def _proc_begin_loadact(self) -> None:
+        """Enter the final PROC-wizard step: Pilot's Guide p.61 step 5,
+        "Rotate the large right knob to highlight 'Load?' or 'Activate?'
+        (approaches only) and press ENT." SIDs/STARs only ever get "Load?"
+        here - they're activated later the same way any other flight-plan
+        leg is, not through this step (p.62: "To later activate a departure
+        or arrival, follow the steps on page 60")."""
+        dlg = self._proc_dialog
+        if dlg is None:
+            return
+        dlg.step = "LOADACT"
+        dlg.options = ["Load?", "Activate?"] if dlg.kind == "approach" else ["Load?"]
+        dlg.sel = 0                                 # "Load?" is the default highlight
+
+    def _proc_load(self, transition: str | None, *, activate: bool = False) -> None:
         dlg = self._proc_dialog
         if dlg is None:
             return
         n = self.load_procedure(dlg.airport, dlg.proc_ident, transition, append=True)
+        kind, proc_ident = dlg.kind, dlg.proc_ident
         self._proc_dialog = None
-        if n:
-            tag = f" {transition}" if transition else ""
-            self.messages.append(f"{dlg.kind.upper()} LOADED: {dlg.proc_ident}{tag}")
-            self.cursor.go_to_flight_plan()
+        if not n:
+            self.messages.append(f"PROC LOAD FAILED: {proc_ident}")
+            return
+        tag = f" {transition}" if transition else ""
+        if activate:
+            # p.62's "Activate Approach?" (or, when the loaded transition was
+            # VECTORS and so has no IAF, this naturally reduces to "Activate
+            # Vectors-to-Final?" instead - `_activate_approach` already picks
+            # whichever fix is actually present, and posts its own message).
+            self._activate_approach(vtf=False)
         else:
-            self.messages.append(f"PROC LOAD FAILED: {dlg.proc_ident}")
+            self.messages.append(f"{kind.upper()} LOADED: {proc_ident}{tag}")
+            self.cursor.go_to_flight_plan()
 
     def _activate_approach(self, *, vtf: bool) -> None:
         """PROC > Activate Approach / Vectors-To-Final: drop SUSP and steer to

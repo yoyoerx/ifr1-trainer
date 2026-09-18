@@ -19,6 +19,7 @@ import pygame
 
 from navmath import Point, destination, great_circle_nm, initial_bearing, norm360
 from gpsnav import VARIANT_530
+import instruments as instr
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 _FONT_DIR = _ASSETS / "fonts"
@@ -370,7 +371,8 @@ class Renderer:
         n2 = pygame.Rect(mid_x, n1.bottom + gap, mid_w, inst_h)
         hd = pygame.Rect(mid_x, n2.bottom + gap, mid_w, avail - inst_h * 2 - gap * 2)
         scene_t = getattr(sc, "t", 0.0)
-        draw_nav_head(self.surf, n1, sc.nav1_head, "NAV1", self, t=scene_t)
+        nav1_nh, nav1_kind = self._nav1_view(sc)
+        draw_nav_head(self.surf, n1, nav1_nh, "NAV1", self, t=scene_t, source_kind=nav1_kind)
         draw_nav_head(self.surf, n2, sc.nav2_head, "NAV2", self, t=scene_t)
         draw_hdg_indicator(self.surf, hd, sc.sixpack, self,
                            hdg_bug=getattr(sc.ap, "heading_bug", None) if sc.ap else None)
@@ -656,11 +658,13 @@ class Renderer:
         n1 = pygame.Rect(nav_x, sp_rect.y, nav_w, nav_h)
         n2 = pygame.Rect(nav_x, n1.bottom + gap, nav_w, nav_h)
         scene_t = getattr(sc, "t", 0.0)
+        nav1_nh, nav1_kind = self._nav1_view(sc)
         if sc.nav1_hsi:
-            draw_hsi_head(self.surf, n1, sc.nav1_head, sc.panel, "NAV1 / HSI", self,
+            draw_hsi_head(self.surf, n1, nav1_nh, sc.panel, "NAV1 / HSI", self,
                           radius=gauge_rad, t=scene_t)
         else:
-            draw_nav_head(self.surf, n1, sc.nav1_head, "NAV1", self, radius=gauge_rad, t=scene_t)
+            draw_nav_head(self.surf, n1, nav1_nh, "NAV1", self, radius=gauge_rad, t=scene_t,
+                          source_kind=nav1_kind)
         draw_nav_head(self.surf, n2, sc.nav2_head, "NAV2", self, radius=gauge_rad, t=scene_t)
 
         # bottom: full-width radio strip, autopilot programmer beneath it.
@@ -735,6 +739,21 @@ class Renderer:
     # -- the GPS unit (left column: 530 or 430) ------------------------
     def _variant(self, sc: Scene):
         return sc.variant or getattr(sc.gns, "variant", None) or VARIANT_530
+
+    def _nav1_view(self, sc: Scene):
+        """What the round NAV1 head should actually display: this trainer's
+        NAV1 head is wired like a real GPS-slaved analog CDI, not an
+        independent VOR/LOC receiver - it follows the GNS's own CDI/VLOC
+        switch (`nav.cdi_source`), exactly like `panel.cdi` (the CDI strip
+        on the GNS screen) and the autopilot's NAV mode (F27) already do.
+        Returns ``(nav_head, source_kind)`` - `source_kind="GPS"` (passed
+        straight through to `draw_nav_head`) while the switch is on GPS,
+        else `sc.nav1_head` (the tuned NAV1 receiver) with no override, the
+        same as before this existed. NAV2 is unaffected - a second, always-
+        independent VOR/LOC receiver, the way a second nav radio really is."""
+        if getattr(sc.nav, "cdi_source", "GPS") == "GPS":
+            return instr.gps_nav_head(sc.nav, sc.panel), "GPS"
+        return sc.nav1_head, None
 
     def _gns_unit(self, sc: Scene, *, box: tuple | None = None, no_bezel: bool = False,
                   freq: tuple | None = None):
@@ -2092,7 +2111,14 @@ def _ident_dot(surf, x, y, ident, t, color):
     pygame.draw.circle(surf, color if keyed else DIM, (x, y), 3)
 
 
-def draw_nav_head(surf, rect, nh, label, r, radius=None, t=0.0):
+def draw_nav_head(surf, rect, nh, label, r, radius=None, t=0.0, source_kind=None):
+    """``source_kind`` overrides the auto "LOC"/"VOR" label - pass "GPS" for
+    a NAV1 head built from `instruments.gps_nav_head` (the round CDI slaved
+    to the GNS's own CDI/VLOC switch: GPS course deviation while the GNS
+    shows GPS, the plain VOR/LOC receiver reading once it's VLOC - see
+    FINDINGS.md). A GPS "ident" is a waypoint, not a station that sends
+    Morse, so the ident-blink dot and the "DME" label (-> "DIS") are skipped/
+    relabelled accordingly."""
     _panel_box(surf, rect, label, r)
     if nh is None:
         r._t("no receiver", rect.centerx, rect.centery, font=r.f_sm, color=DIM, center=True)
@@ -2100,6 +2126,7 @@ def draw_nav_head(surf, rect, nh, label, r, radius=None, t=0.0):
     rad, cx, cy = _card_geometry(rect, radius)
     course = getattr(nh, "course_deg", 0.0)
     is_loc = getattr(nh, "is_localizer", False)
+    is_gps = source_kind == "GPS"
     color = CYAN if is_loc else GPS_GREEN
     # old-school round VOR/LOC head: rotating card + a centre CDI needle
     _vor_cdi_face(surf, cx, cy, rad, course, getattr(nh, "deflection", 0.0),
@@ -2112,18 +2139,21 @@ def draw_nav_head(surf, rect, nh, label, r, radius=None, t=0.0):
     # info column, right of the card
     ix = int(cx + rad + (40 if gs else 20))
     ident = getattr(nh, "ident", "") or "---"
-    kind = "LOC" if is_loc else "VOR"
+    kind = source_kind if source_kind is not None else ("LOC" if is_loc else "VOR")
     r._t(f"{kind} {ident}", ix, cy - rad, font=r.f_sm, color=color)
-    _ident_dot(surf, ix + r.f_sm.size(f"{kind} {ident}")[0] + 8, cy - rad + 4, ident, t, color)
+    if not is_gps:
+        _ident_dot(surf, ix + r.f_sm.size(f"{kind} {ident}")[0] + 8, cy - rad + 4, ident, t, color)
     num = f"{(getattr(nh,'obs_deg',0) if not is_loc else course):03.0f}"
-    r._t("OBS" if not is_loc else "CRS", ix, cy - rad + 18, font=r.f_sm, color=DIM)
+    r._t("DTK" if is_gps else ("OBS" if not is_loc else "CRS"), ix, cy - rad + 18,
+        font=r.f_sm, color=DIM)
     r.lcd(num, ix + 34, cy - rad + 16, color=TEXT)
     tf = getattr(nh, "to_from", "OFF")
     if tf in ("TO", "FROM"):
         r._t(tf, ix, cy - rad + 36, font=r.f_sm, color=color)
     dme = getattr(nh, "dme_nm", None)
     if dme is not None:
-        r._t(f"DME {dme:4.1f}", ix, cy - rad + 54, font=r.f_sm, color=TEXT)
+        r._t(f"{'DIS' if is_gps else 'DME'} {dme:4.1f}", ix, cy - rad + 54,
+            font=r.f_sm, color=TEXT)
 
 
 def draw_hsi_head(surf, rect, nh, panel, label, r, radius=None, t=0.0):

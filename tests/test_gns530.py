@@ -414,6 +414,9 @@ def test_proc_key_with_no_destination_airport_posts_a_message(g):
 
 
 def test_proc_select_loads_an_approach_with_its_transition(gp):
+    """Pilot's Guide p.61 step 5: after picking the transition, the wizard
+    stops at a "Load?"/"Activate?" choice before actually loading - it
+    doesn't load immediately."""
     gp.begin_proc_select()
     gp.handle_event(_fms(pressed=("ENT",)))          # SELECT APPROACH
     assert gp._proc_dialog.step == "PROC" and gp._proc_dialog.options == ["I05"]
@@ -421,19 +424,46 @@ def test_proc_select_loads_an_approach_with_its_transition(gp):
     assert gp._proc_dialog.step == "TRANS"
     assert gp._proc_dialog.options == ["VECTORS", "ALFA"]
     gp.handle_event(_fms(inner=1))                   # scroll to the ALFA transition
-    gp.handle_event(_fms(pressed=("ENT",)))          # load it
+    gp.handle_event(_fms(pressed=("ENT",)))          # -> Load?/Activate?
+    assert gp._proc_dialog.step == "LOADACT"
+    assert gp._proc_dialog.options == ["Load?", "Activate?"]
+    assert gp._proc_dialog.current == "Load?"        # "Load?" is the default highlight
+    gp.handle_event(_fms(pressed=("ENT",)))          # confirm Load?
     assert gp._proc_dialog is None
     idents = [w.ident for w in gp.fpl.waypoints]
     assert idents[-3:] == ["ALFA", "BRAVO", "CHAR"]  # IAF transition + final + MAP
     assert gp.fpl.waypoints[-1].is_map
     assert gp.cursor.page_name == "Flight Plan"      # jumps to the plan to review
+    assert gp.fpl.to_wp.ident != "ALFA"              # loaded only - not activated
+
+
+def test_proc_select_activate_loads_and_activates_in_one_pass(gp):
+    """The actual playtest complaint: activating a just-selected procedure
+    took a separate PROC-menu round trip after loading. Per the Pilot's
+    Guide (p.61 step 5), "Activate?" at the Load?/Activate? step loads AND
+    starts flying it immediately - no second PROC key press needed."""
+    gp.begin_proc_select()
+    gp.handle_event(_fms(pressed=("ENT",)))          # SELECT APPROACH
+    gp.handle_event(_fms(pressed=("ENT",)))          # pick I05
+    gp.handle_event(_fms(inner=1))                   # scroll to the ALFA transition
+    gp.handle_event(_fms(pressed=("ENT",)))          # -> Load?/Activate?
+    gp.handle_event(_fms(outer=1))                   # highlight Activate?
+    assert gp._proc_dialog.current == "Activate?"
+    gp.handle_event(_fms(pressed=("ENT",)))          # confirm Activate?
+    assert gp._proc_dialog is None
+    idents = [w.ident for w in gp.fpl.waypoints]
+    assert idents[-3:] == ["ALFA", "BRAVO", "CHAR"]
+    assert gp.fpl.to_wp.ident == "ALFA"              # already flying the IAF
+    assert not gp.suspended
 
 
 def test_proc_select_vectors_loads_only_the_final_segment(gp):
     gp.begin_proc_select()
     gp.handle_event(_fms(pressed=("ENT",)))          # SELECT APPROACH
     gp.handle_event(_fms(pressed=("ENT",)))          # pick I05
-    gp.handle_event(_fms(pressed=("ENT",)))          # sel 0 == VECTORS -> load, no transition
+    gp.handle_event(_fms(pressed=("ENT",)))          # sel 0 == VECTORS -> Load?/Activate?
+    assert gp._proc_dialog.step == "LOADACT"
+    gp.handle_event(_fms(pressed=("ENT",)))          # confirm Load? (no transition)
     assert gp._proc_dialog is None
     idents = [w.ident for w in gp.fpl.waypoints]
     assert idents == ["ALFA", "KEND", "CHAR"]        # no ALFA/BRAVO transition spliced in
@@ -444,12 +474,30 @@ def test_proc_select_clr_steps_back_one_level_then_closes(gp):
     gp.handle_event(_fms(pressed=("ENT",)))          # -> PROC
     gp.handle_event(_fms(pressed=("ENT",)))          # -> TRANS
     assert gp._proc_dialog.step == "TRANS"
+    gp.handle_event(_fms(pressed=("ENT",)))          # -> LOADACT
+    assert gp._proc_dialog.step == "LOADACT"
+    gp.handle_event(_fms(pressed=("CLR",)))
+    assert gp._proc_dialog.step == "TRANS"
     gp.handle_event(_fms(pressed=("CLR",)))
     assert gp._proc_dialog.step == "PROC"
     gp.handle_event(_fms(pressed=("CLR",)))
     assert gp._proc_dialog.step == "MENU"
     gp.handle_event(_fms(pressed=("CLR",)))
     assert gp._proc_dialog is None
+
+
+def test_proc_select_loadact_back_skips_to_proc_when_trans_had_no_choices(gp):
+    """A SID has no named transition here, so TRANS is skipped straight to
+    LOADACT - CLR from there must go back to PROC, not a TRANS step that was
+    never actually shown."""
+    gp.begin_proc_select()
+    gp.handle_event(_fms(outer=1))                   # highlight SELECT DEPARTURE
+    gp.handle_event(_fms(pressed=("ENT",)))
+    gp.handle_event(_fms(pressed=("ENT",)))          # pick EXITT1 -> straight to LOADACT
+    assert gp._proc_dialog.step == "LOADACT"
+    assert gp._proc_dialog.options == ["Load?"]      # SIDs never offer Activate? here
+    gp.handle_event(_fms(pressed=("CLR",)))
+    assert gp._proc_dialog.step == "PROC"
 
 
 def test_proc_menu_activate_vtf_appears_after_an_approach_is_loaded(gp):
