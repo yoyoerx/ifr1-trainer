@@ -139,6 +139,25 @@ def test_fetch_winds_aloft_decodes_and_raises_when_empty():
         wx.fetch_winds_aloft("ZZZ", get_text=lambda url: "FT  3000\n")
 
 
+def test_fetch_winds_aloft_lowercases_the_region_in_the_request_url():
+    """AWC's windtemp endpoint 400s on an uppercase `region`
+    ({"status":"error","error":"Invalid value for region"}), unlike every
+    other AWC endpoint here - confirmed live (`region=BOS` -> 400,
+    `region=bos` -> 200). The CLI/README document region codes upper-case
+    (`BOS`, `MIA`, ...), so the fetch itself must lower-case it for the URL
+    regardless of what case the caller passed."""
+    text = _fd_text([3000], {"BOS": ["2113"]})
+    seen = {}
+
+    def get_text(url):
+        seen["url"] = url
+        return text
+
+    wx.fetch_winds_aloft("BOS", get_text=get_text)
+    assert "region=bos" in seen["url"]
+    assert "region=BOS" not in seen["url"]
+
+
 # --------------------------------------------------------------------------- #
 # cache + status                                                             #
 # --------------------------------------------------------------------------- #

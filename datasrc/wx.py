@@ -239,7 +239,13 @@ def fetch_taf(idents: list[str], *, get_text=_http_get_text) -> list[Taf]:
 
 def fetch_winds_aloft(region: str, *, fcst: str = "06",
                        get_text=_http_get_text) -> list[WindsAloftStation]:
-    url = AWC_BASE + f"windtemp?region={urllib.parse.quote(region)}&fcst={fcst}&level=low"
+    # AWC's API rejects an uppercase `region` outright ({"status":"error",
+    # "error":"Invalid value for region"}, HTTP 400) even though every other
+    # AWC endpoint (metar/taf) is case-insensitive and the CLI/README document
+    # region codes in upper case (`BOS`, `MIA`, ...) - lower-case only for the
+    # request URL; `region` everywhere else here (cache keys, messages) stays
+    # whatever case the caller passed / `.upper()`'d, unaffected.
+    url = AWC_BASE + f"windtemp?region={urllib.parse.quote(region.lower())}&fcst={fcst}&level=low"
     text = get_text(url)
     stations = decode_fd_text(text)
     if not stations:
