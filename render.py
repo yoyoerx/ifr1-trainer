@@ -326,7 +326,7 @@ class Renderer:
         # stops, extra width is just dead panel background (playtest: "boxes
         # are way too wide... shrink more right"). 380px leaves the NAV1/2
         # info column a small margin and still gives the HDG box's own info
-        # column (`_stack_hdg_info`, to the right of its dial) enough room.
+        # column (`_stack_hdg_actuals`, to the right of its dial) enough room.
         # Fixed, not W-derived, so the middle column doesn't balloon on a
         # wider window - the tab panel gets whatever that leaves instead.
         mid_w = 380
@@ -354,12 +354,13 @@ class Renderer:
             y += gns_h + gap
         self._stack_xpdr(sc, pygame.Rect(rx, y, right_w, radio_h))
         y += radio_h + gap
-        # show_info=False: the HDG-bug/ALT-preselect readout this panel would
-        # otherwise draw in its own side box now lives next to the HDG
-        # indicator instead (`_stack_hdg_info`) - showing it twice was
-        # redundant, and the 6-button mode row didn't fit next to a second
-        # box at this layout's column width anyway (playtest: "overlapping
-        # of the AP and things at the bottom").
+        # show_info=False: the HDG-bug/ALT-preselect readout this panel
+        # would otherwise draw in its own side box is edited under the tab
+        # column instead (`_stack_setpoint_bugs`) and shown as an actual
+        # next to the HDG indicator (`_stack_hdg_actuals`) - drawing it here
+        # too would be a third copy, and the 6-button mode row didn't fit
+        # next to a second box at this layout's column width anyway
+        # (playtest: "overlapping of the AP and things at the bottom").
         draw_ap_panel(self.surf, pygame.Rect(rx, y, right_w, ap_h), sc.ap, sc.magvar, self,
                      show_info=False)
 
@@ -373,21 +374,28 @@ class Renderer:
         draw_nav_head(self.surf, n2, sc.nav2_head, "NAV2", self, t=scene_t)
         draw_hdg_indicator(self.surf, hd, sc.sixpack, self,
                            hdg_bug=getattr(sc.ap, "heading_bug", None) if sc.ap else None)
-        # HDG/IAS/ALT autopilot bugs, displayed (and clickable to edit) next
-        # to the HDG dial - the same placement NAV1/NAV2 use for their own
-        # OBS readout - rather than a separate row of boxes elsewhere.
+        # Actual HDG/IAS/ALT, next to the HDG dial - the same placement
+        # NAV1/NAV2 use for their own OBS readout - not the editable
+        # autopilot bugs (those live under the tab column below instead, so
+        # this column reads as "what the aircraft is actually doing" without
+        # a click target mixed in). `sc.sixpack` is the same actual-value
+        # source `draw_six_pack` itself reads.
         rad, cx, cy = _card_geometry(hd, None)
         info_x = int(cx + rad + 20)
         info_y = int(cy - rad)
-        self._stack_hdg_info(sc, pygame.Rect(info_x, info_y, hd.right - info_x - 8,
-                                             hd.bottom - info_y - 8))
+        self._stack_hdg_actuals(sc, pygame.Rect(info_x, info_y, hd.right - info_x - 8,
+                                                hd.bottom - info_y - 8))
 
-        # -- left column: tabbed reference panel -------------------------
+        # -- left column: tabbed reference panel + AP set-point bugs -----
         tab_h = 26
+        bug_h = 74
         tabs_rect = pygame.Rect(gap, top, left_w, tab_h)
-        content_rect = pygame.Rect(gap, top + tab_h + 4, left_w, avail - tab_h - 4)
+        content_rect = pygame.Rect(gap, top + tab_h + 4, left_w,
+                                   avail - tab_h - 4 - bug_h - gap)
+        bugs_rect = pygame.Rect(gap, content_rect.bottom + gap, left_w, bug_h)
         self._stack_tabs(sc, tabs_rect)
         self._stack_tab_content(sc, content_rect)
+        self._stack_setpoint_bugs(sc, bugs_rect)
 
     def _stack_xpdr(self, sc: Scene, rect: pygame.Rect) -> None:
         """A compact transponder box - just the squawk/mode, restyled to sit
@@ -574,43 +582,58 @@ class Renderer:
             self._t(txt, rct.centerx, rct.y + 3, font=self.f_sm, color=TEXT, center=True)
             self._stack_hit[name] = rct
 
-    def _stack_hdg_info(self, sc: Scene, rect: pygame.Rect) -> None:
-        """HDG/IAS/ALT autopilot bug readouts, shown *and* directly editable
-        (click +/-) next to the heading indicator's dial - the same
-        placement NAV1/NAV2 use for their own OBS readout, rather than a
-        separate row of boxes elsewhere (playtest: "actual IAS, HDG, ALT
-        should be displayed next to the heading indicator, in placement
-        similar to the OBS displays next to NAV1/NAV2"). ``rect`` is the
-        space to the dial's right, inside the HDG box, top-aligned with the
-        dial itself (`_stack_layout` passes ``cy - rad``, same as
-        `draw_nav_head`'s own info column, not the box's top edge - which
-        would land level with the panel title instead).
-
-        Each field gets its own two-line row (label+value, then the +/-
-        buttons underneath) rather than squeezing buttons onto the value's
-        own line - `stack`'s narrower middle column doesn't leave enough
-        width for both a 4-digit altitude and two buttons side by side
-        without the value clipping into them."""
-        ap = sc.ap
+    def _stack_hdg_actuals(self, sc: Scene, rect: pygame.Rect) -> None:
+        """Actual HDG/IAS/ALT, read-only, next to the heading indicator's
+        dial - the same placement NAV1/NAV2 use for their own OBS readout
+        (playtest: "actual IAS, HDG, ALT should be displayed next to the
+        heading indicator, in placement similar to the OBS displays next to
+        NAV1/NAV2" - a follow-up clarifying these should be *actuals*, not
+        the autopilot's set points, which moved to `_stack_setpoint_bugs`
+        instead). ``rect`` is the space to the dial's right, inside the HDG
+        box, top-aligned with the dial itself (`_stack_layout` passes
+        ``cy - rad``, same as `draw_nav_head`'s own info column - not the
+        box's top edge, which would land level with the panel title).
+        Values come from `sc.sixpack`, the same actual-value snapshot
+        `draw_six_pack` itself reads, so this always agrees with the six-pack
+        on any layout that shows both."""
+        sp = sc.sixpack
         specs = [
-            ("HDG", f"{getattr(ap, 'heading_bug', 0):03.0f}" if ap else "---", "hdg"),
-            ("IAS", f"{sc.ias_target:.0f}" if getattr(sc, "ias_managed", False) else "---", "ias"),
-            ("ALT", f"{getattr(ap, 'alt_preselect', 0):.0f}" if ap else "---", "alt"),
+            ("HDG", f"{getattr(sp, 'heading_deg', 0):03.0f}" if sp else "---"),
+            ("IAS", f"{getattr(sp, 'airspeed_kt', 0):.0f}" if sp else "---"),
+            ("ALT", f"{getattr(sp, 'altitude_ft', 0):.0f}" if sp else "---"),
         ]
-        row_h = max(36, rect.h // 3)
-        bw = 24
+        row_h = max(20, rect.h // 3)
         y = rect.y
-        for label, val, key in specs:
+        for label, val in specs:
             self._t(label, rect.x, y, font=self.f_sm, color=DIM)
-            self.lcd(val, rect.x + 30, y - 2, color=CYAN)
-            minus = pygame.Rect(rect.x, y + 16, bw, 18)
-            plus = pygame.Rect(rect.x + bw + 4, y + 16, bw, 18)
-            for rct, txt, sign in ((minus, "-", f"bug:{key}:-"), (plus, "+", f"bug:{key}:+")):
-                pygame.draw.rect(self.surf, PANEL, rct, border_radius=3)
-                pygame.draw.rect(self.surf, EDGE, rct, width=1, border_radius=3)
-                self._t(txt, rct.centerx, rct.y + 1, font=self.f_sm, color=TEXT, center=True)
-                self._stack_hit[sign] = rct
+            self.lcd(val, rect.x + 30, y - 2, color=TEXT)
             y += row_h
+
+    def _stack_setpoint_bugs(self, sc: Scene, rect: pygame.Rect) -> None:
+        """HDG/IAS/ALT autopilot target bugs - shown *and* directly editable
+        here (click +/-), not read-only readouts, back under the tabbed
+        column (see WORKING.md / FINDINGS.md F32) - the actual values these
+        set points steer toward are shown next to the HDG dial instead
+        (`_stack_hdg_actuals`), so this row is unambiguously "what you're
+        telling the autopilot", not "what the aircraft is doing"."""
+        cw = rect.w / 3
+        specs = [
+            ("HDG", f"{getattr(sc.ap, 'heading_bug', 0):03.0f}", "hdg"),
+            ("IAS", f"{sc.ias_target:.0f}" if getattr(sc, "ias_managed", False) else "---", "ias"),
+            ("ALT", f"{getattr(sc.ap, 'alt_preselect', 0):.0f}", "alt"),
+        ]
+        for i, (label, val, key) in enumerate(specs):
+            br = pygame.Rect(int(rect.x + i * cw), rect.y, int(cw) - 6, rect.h)
+            _panel_box(self.surf, br, label, self)
+            self.lcd(val, br.centerx, br.centery - 2, color=CYAN, center=True)
+            bw = 28
+            minus = pygame.Rect(br.x + 6, br.bottom - 26, bw, 20)
+            plus = pygame.Rect(br.right - bw - 6, br.bottom - 26, bw, 20)
+            for rct, txt, sign in ((minus, "-", f"bug:{key}:-"), (plus, "+", f"bug:{key}:+")):
+                pygame.draw.rect(self.surf, PANEL, rct, border_radius=4)
+                pygame.draw.rect(self.surf, EDGE, rct, width=1, border_radius=4)
+                self._t(txt, rct.centerx, rct.y + 2, font=self.f_sm, color=TEXT, center=True)
+                self._stack_hit[sign] = rct
 
     # -- steam-gauge layout ------------------------------------------
     def _steam_layout(self, sc: Scene) -> None:
@@ -1830,13 +1853,16 @@ def _hdg_card(surf, hdx, hdy, rad, hd, hdg_bug, r):
 def draw_hdg_indicator(surf, rect, sp, r, hdg_bug=None):
     """Standalone directional-gyro/heading-indicator instrument - the
     "stack" layout's middle column, below NAV1/NAV2 (see WORKING.md). Same
-    card as one cell of `draw_six_pack`, in its own titled box."""
+    card as one cell of `draw_six_pack`, in its own titled box - left-biased
+    via `_card_geometry`, same as `draw_nav_head`'s VOR/LOC card, so the
+    actual-value info column `Renderer._stack_hdg_actuals` draws to its
+    right starts exactly where the dial ends (a centered dial and a
+    left-biased info-column position, computed separately, used to overlap)."""
     _panel_box(surf, rect, "HDG", r)
     if sp is None:
         r._t("no data", rect.centerx, rect.centery, font=r.f_sm, color=DIM, center=True)
         return
-    rad = min(rect.w, rect.h - 20) / 2 - 10
-    cx, cy = rect.centerx, rect.centery + 8
+    rad, cx, cy = _card_geometry(rect, None)
     _hdg_card(surf, cx, cy, rad, getattr(sp, "heading_deg", 0.0), hdg_bug, r)
 
 
@@ -2132,10 +2158,11 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None, *, show_info=True):
     invented pseudo speed-manager set-point, not a real 55X feature at all)
     are avionics/instrument info, not part of the AP programmer - they get
     their own box to the right rather than crowding onto the 55X's face,
-    unless ``show_info=False`` (the "stack" layout, which shows/edits them
-    next to the HDG indicator instead - `Renderer._stack_hdg_info` - and
-    needs the 6-button mode row's full width; the row doesn't fit next to a
-    second box at `stack`'s narrower column width)."""
+    unless ``show_info=False`` (the "stack" layout, which shows the actual
+    values next to the HDG indicator instead - `Renderer._stack_hdg_actuals`
+    - and edits the set points under the tab column - `_stack_setpoint_bugs`
+    - and needs the 6-button mode row's full width; the row doesn't fit next
+    to a second box at `stack`'s narrower column width)."""
     if show_info:
         info_w = min(190, rect.w * 0.24)
         ap_rect = pygame.Rect(rect.x, rect.y, rect.w - info_w - 8, rect.h)

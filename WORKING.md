@@ -4,18 +4,18 @@ Task tracker for **octavi-ifr-trainer**. Newest status at the top of each list.
 `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped.
 
 Last updated: 2026-09-18 (stack layout: Phase 0-5 complete + WX/PLATE
-airport-switching + PLATE chart filter/column-width/AP-panel-overlap
-follow-ups, 844 tests green)
+airport-switching + PLATE chart filter/column-width/AP-panel-overlap/
+actuals-vs-setpoints follow-ups, 846 tests green)
 
 Prior task history (M0–M16, the initial build through the playtest-fix rounds)
 is archived in `archive/WORKING-2026-09-11.md`, refreshed here to start a clean
 slate for the next project. `FINDINGS.md` remains the permanent log of every
-bug fixed against the Pilot's Guide/playtest feedback (F1–F31 so far) and is
+bug fixed against the Pilot's Guide/playtest feedback (F1–F32 so far) and is
 **not** archived — keep adding to it as before.
 
 ---
 
-## Current status (2026-09-18, 844 tests green)
+## Current status (2026-09-18, 846 tests green)
 
 The trainer runs end to end on four layouts (`gps`, `steam`, `stack`,
 `dual`), driven by the IFR-1 or keyboard (`stack` also takes mouse input),
@@ -223,3 +223,14 @@ playtest-round fix (F1–F29) since.
   bottom row also gave the tab content area its height back, and
   `_draw_stack_plate`'s image already sizes off the passed rect, so PLATE
   grows with the column for free. 843 -> 844 tests.
+
+- **2026-09-18** — F32: `draw_hdg_indicator` still centered the dial even
+  after F31's info column moved to a left-biased x - two independently
+  computed geometries for one box, drifted apart, overlapping. Also, that
+  info column showed the *autopilot's* set points, editable right there,
+  when the placement (beside the dial, like NAV1/NAV2's OBS) implied
+  actuals. `draw_hdg_indicator` now calls `_card_geometry` itself (one call
+  site, not two); the info column split into `_stack_hdg_actuals`
+  (read-only, from `Scene.sixpack`) and `_stack_setpoint_bugs` (editable,
+  restored under the tab column where the boxes lived before F31). 844 ->
+  846 tests.

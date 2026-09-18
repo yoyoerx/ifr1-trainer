@@ -485,6 +485,32 @@ height back to the tab content area, so PLATE/MAP/WX all gained *height* as
 well as the *width* freed by the narrower middle column - `_draw_stack_plate`
 already sized its rendered image off the passed-in rect rather than a fixed
 constant, so the plate image grows with it for free, no separate fix needed.
+(`_stack_hdg_info` was renamed `_stack_hdg_actuals` in F32, below - it split
+into a read-only display and a separate editable widget.)
+
+### F32 — `stack` layout: dial still centered, actuals conflated with AP set points
+Immediate follow-up (2026-09-18): "heading indicator should be left aligned
+in it's box so that is stops overlapping the ALT, IAS, HDG displays. I would
+like the behavior change for the ALT, IAS, HDG. in the HG box, they should be
+actuals, and the set point for these should be back under the tabbed
+columns." F31's fix computed the HDG/IAS/ALT info column's x-position from
+`_card_geometry` (left-biased), but `draw_hdg_indicator` itself still drew
+the dial centered in its box (`cx = rect.centerx`, never actually changed
+when the info column was added) - two different geometries for the same box,
+so the (correctly positioned) info column overlapped the (still-centered)
+dial. Separately, that info column showed the *autopilot's* HDG bug/IAS
+target/ALT preselect, editable right there - not the aircraft's actual
+heading/airspeed/altitude the placement (beside the dial, like NAV1/NAV2's
+actual-value-adjacent OBS) implied.
+**Fix:** `draw_hdg_indicator` now calls `_card_geometry` itself, the same
+left-biased geometry `draw_nav_head` uses and the one `_stack_layout` was
+already assuming for the info column - both come from one call site instead
+of two independently-computed positions that could drift apart.
+`Renderer._stack_hdg_info` (shown *and* edited) split into
+`_stack_hdg_actuals` (next to the dial, read-only, sourced from
+`Scene.sixpack` - the same actual-value snapshot `draw_six_pack` itself
+reads) and `_stack_setpoint_bugs` (the editable HDG/IAS/ALT boxes, restored
+under the tab column where they lived before F31 removed them).
 
 ---
 

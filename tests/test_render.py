@@ -24,6 +24,7 @@ import instruments as instr  # noqa: E402
 import sim_model as simmod  # noqa: E402
 from autopilot import Autopilot  # noqa: E402
 from radios import RadioStack  # noqa: E402
+import render  # noqa: E402
 from render import (Renderer, Scene, _hold_track_points, _pt_symbol_points,  # noqa: E402
                     draw_ap_panel)
 import main as main_mod  # noqa: E402
@@ -1473,3 +1474,37 @@ def test_draw_ap_panel_show_info_false_wraps_the_vs_window_not_overflow():
     arr = pygame.surfarray.array2d(surf)
     bg = arr[0, 0]
     assert not (arr[rect.right + 2:, :] != bg).any()
+
+
+def test_draw_hdg_indicator_left_biases_the_dial():
+    """The dial used to be centered in its box while the info column next
+    to it (`Renderer._stack_hdg_actuals`) assumed a left-biased position
+    (`_card_geometry`, the same one `draw_nav_head` uses) - mismatched, so
+    the two overlapped (playtest: "heading indicator should be left aligned
+    in its box so that it stops overlapping the ALT, IAS, HDG displays")."""
+    surf = pygame.Surface((400, 300))
+    r = Renderer(surf)
+    rect = pygame.Rect(0, 0, 400, 300)
+    render.draw_hdg_indicator(surf, rect, instr.SixPack(heading_deg=90.0), r)
+    rad, cx, cy = render._card_geometry(rect, None)
+    assert cx < rect.centerx          # left-biased, not centered
+
+
+def test_stack_hdg_actuals_are_actuals_not_ap_setpoints(db):
+    """F32: HDG/IAS/ALT next to the heading dial must read the aircraft's
+    actual state, while the editable autopilot bugs stay under the tab
+    column - a follow-up clarifying an earlier round had conflated the two
+    (a single display that was both "the readout" and "the editable set
+    point" next to the dial)."""
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    w.ap.heading_bug = 55.0            # deliberately different from actual heading
+    w.ap.alt_preselect = 9000.0        # deliberately different from actual altitude
+    sc = _stack_scene(w, db)
+    assert sc.sixpack.heading_deg != w.ap.heading_bug
+    assert sc.sixpack.altitude_ft != w.ap.alt_preselect
+    r = Renderer(surf)
+    r.draw(sc)                         # must not raise
+    # the editable set-point boxes are still under the tab column
+    assert "bug:hdg:+" in r._stack_hit and "bug:alt:-" in r._stack_hit
