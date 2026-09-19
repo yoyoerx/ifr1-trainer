@@ -263,3 +263,25 @@ def test_mode_line_smoke():
     ap.lateral = Lat.NAV
     ap.armed_lat = None
     assert "NAV" in ap.mode_line() and "GPSS" in ap.mode_line()
+
+
+def test_apr_builds_wind_drift_trim_for_a_steady_localizer_offset():
+    """F38 (KLNS ILS 08 playtest): APR was proportional-only, so a steady
+    needle offset (crosswind drift) never got a stronger correction - the AP
+    parked off-centre. A captured, off-centre needle must integrate trim
+    toward the course side, and the trim must be dt-based."""
+    ap = Autopilot()
+    ap.press_apr()
+    base = ap.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
+                     vloc_course_deg=90.0, vloc_deflection=0.3, vloc_valid=True).heading
+    for _ in range(20):
+        cmd = ap.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
+                        vloc_course_deg=90.0, vloc_deflection=0.3, vloc_valid=True)
+    assert cmd.heading > base                    # turning harder toward the needle
+    # a pegged (uncaptured) needle must not wind the trim up
+    ap2 = Autopilot()
+    ap2.press_apr()
+    for _ in range(50):
+        c2 = ap2.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
+                        vloc_course_deg=90.0, vloc_deflection=1.0, vloc_valid=True)
+    assert c2.heading == pytest.approx(90.0 + 22.0)

@@ -63,6 +63,7 @@ _NAV_GAIN = 8.0        # deg intercept / nm XTK  (NAV, analog CDI)
 _APR_GAIN = 13.0       # deg intercept / nm XTK  (APR, tighter)
 _GPSS_GAIN = 12.0      # deg / nm  (digital roll steering, crisp)
 _VLOC_GAIN = 22.0      # deg / unit-deflection   (localizer)
+_VLOC_I_GAIN = 0.8     # deg of trim per (unit-deflection . s) - wind-drift trim on VOR/LOC
 _MAX_INTERCEPT = 30.0
 _CAPTURE_XTK_NM = 1.2
 _CAPTURE_DEFLECTION = 0.75
@@ -299,6 +300,19 @@ class Autopilot:
         if live:
             self.armed_lat = None
 
+    def _vloc_intercept(self, dev: float, dt: float) -> float:
+        """Intercept angle (deg, + = turn right of the course) for a VOR/LOC
+        needle deflection ``dev`` (+ = fly right): proportional, plus an
+        integral wind-drift trim (`_xtk_i`, shared with the GPS paths) that
+        only accumulates once the needle is inside the capture band. Without
+        it a steady crosswind leaves a permanent offset - the needle parks
+        off-centre and the AP never "tries" any harder (KLNS ILS 08
+        playtest)."""
+        if abs(dev) <= _CAPTURE_DEFLECTION and dt:
+            self._xtk_i = _clamp(self._xtk_i + dev * _VLOC_I_GAIN * dt,
+                                 -_XTK_I_MAX, _XTK_I_MAX)
+        return _clamp(dev * _VLOC_GAIN + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
+
     def _lateral_command(self, nav_state, own, magvar, dt,
                          vloc_course_deg, vloc_deflection, vloc_valid) -> float:
         lat = self.lateral
@@ -317,7 +331,7 @@ class Autopilot:
             if cdi_source == "VLOC":
                 if vloc_valid and vloc_course_deg is not None:
                     dev = vloc_deflection or 0.0
-                    intercept = _clamp(dev * _VLOC_GAIN, -_MAX_INTERCEPT, _MAX_INTERCEPT)
+                    intercept = self._vloc_intercept(dev, dt)
                     return norm360(vloc_course_deg + magvar + intercept)
             elif nav_state is not None and getattr(nav_state, "dtk", None) is not None:
                 xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
@@ -334,7 +348,7 @@ class Autopilot:
                 self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
                 return norm360(nav_state.dtk + _clamp(-xtk * _GPSS_GAIN + self._xtk_i,
                                                      -_MAX_INTERCEPT, _MAX_INTERCEPT))
-            intercept = _clamp(dev * _VLOC_GAIN, -_MAX_INTERCEPT, _MAX_INTERCEPT)
+            intercept = self._vloc_intercept(dev, dt)
             crs = vloc_course_deg + (180.0 if lat is Lat.REV else 0.0)
             return norm360(crs + magvar + intercept)
 

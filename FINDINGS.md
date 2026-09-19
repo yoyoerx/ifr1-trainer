@@ -611,6 +611,24 @@ altitude, else the uniform wind) feeds the readout, which is labelled as
 winds aloft when so; the +/- buttons start from that effective wind (and,
 as before, replace the profile with a uniform wind once used).
 
+
+### F38 — APR/NAV(VLOC) parked off-centre in a crosswind (no wind-drift trim)
+Playtest (2026-09-19, KLNS ILS 08): "Tracking the klns ils 08 was very poor.
+We were left of course compared the the CDI but the AP in APR with GS made
+no effort to correct the course to the right." Reproduced in a headless sim
+(`--approach "KLNS I08"`, APR, 20 kt crosswind): with no wind the AP tracked
+fine, but with a crosswind the needle settled at ~0.4 deflection and stayed
+there - the VOR/LOC path in `Autopilot._lateral_command` was
+proportional-only (`dev * _VLOC_GAIN`), so a steady drift produced a steady
+intercept angle that exactly balanced it, i.e. a permanent offset (the GPS
+NAV/GPSS paths already had an integral `_xtk_i`).
+**Fix:** `Autopilot._vloc_intercept` adds an integral wind-drift trim to
+APR/REV and NAV-on-VLOC (shared `_xtk_i`, `_VLOC_I_GAIN` 0.8 deg per
+unit-deflection-second, dt-based so time warp is unaffected), accumulating
+only once the needle is inside the capture band so an uncaptured, pegged
+needle can't wind it up. The sim now converges to a centered needle with a
+settled crab.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md
