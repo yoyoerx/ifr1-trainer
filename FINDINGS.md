@@ -632,6 +632,25 @@ at 8 deg, and bleeds off during an intercept. Headless KLNS I08 sims: no wind
 now captures with only a small overshoot; 20 kt crosswind settles at ~0.02
 deflection instead of parking at ~0.4.
 
+
+### F39 — Winds-aloft decode read the wrong columns (135 kt at 5000 ft)
+Playtest (2026-09-19, `--plan "EMI KLNS" --wx-region BOS --wx-station EMI`):
+"the AP on NAV (either with or without GPSS) puts us on TRK of 083 even
+though DTK is 051." Not an autopilot bug: the cached EMI profile held a
+single level, `39000 ft 320@135`, which `windsaloft` (holding the nearest
+level's value outside the table) applied at 5000 ft - a 135 kt crosswind on
+a 140 kt aircraft that no lateral mode can hold. Root cause was
+`datasrc.wx.decode_fd_text`: real NWS FD groups are **right-aligned** under
+their header numbers, but the decoder sliced from each header's *left* edge
+(the synthetic test fixture was left-justified, so it agreed with the bug).
+On real text it read the wrong columns and only the last one survived.
+**Fix:** slice the 7 columns ending at each header's right edge; the fixture
+now uses the real right-aligned layout and a verbatim real-text regression
+test was added. EMI now decodes to nine levels (e.g. 5000 ft ~ 8 kt); a
+headless EMI-KLNS NAV run tracks DTK with ~0.0 nm xtk. Refetch stale caches
+with `python -m datasrc.wx winds-aloft BOS` (the auto-refresh does it on
+launch).
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md

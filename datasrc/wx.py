@@ -155,7 +155,12 @@ def decode_fd_text(text: str) -> list[WindsAloftStation]:
             continue
         if line.lstrip().upper().startswith("FT "):
             # column layout: station field (~4 wide) then one 7-char field/level
-            header_cols = [m.start() for m in re.finditer(r"\d{3,5}", line)]
+            # Each station group is RIGHT-aligned under its header number
+            # (header "  6000" over group "9900+08"), not left-aligned - the
+            # original left-edge slicing read the wrong columns on real NWS
+            # text and kept only the last level (39000 ft), which then got
+            # applied at every altitude (135 kt at 5000 ft on EMI-KLNS).
+            header_cols = [m.end() for m in re.finditer(r"\d{3,5}", line)]
             continue
         if header_cols is None:
             continue                                    # preamble / data-basis line
@@ -164,7 +169,7 @@ def decode_fd_text(text: str) -> list[WindsAloftStation]:
             continue
         levels: list[tuple[int, float | None, float | None, float | None]] = []
         for level_ft, col in zip(FD_LEVELS, header_cols):
-            field_text = line[col:col + 7].strip() if col < len(line) else ""
+            field_text = line[max(4, col - 7):col].strip() if col > 4 else ""
             if not field_text:
                 continue
             from_deg, kt, temp_c = decode_fd_group(field_text, level_ft)

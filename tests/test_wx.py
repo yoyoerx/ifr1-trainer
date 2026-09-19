@@ -12,12 +12,14 @@ from datasrc import wx  # noqa: E402
 
 
 def _fd_text(levels_used, groups_by_station):
-    """Build a synthetic fixed-width FD product body (station col 4 wide,
-    each level 7 wide, left-justified - matches decode_fd_text's slicing)."""
-    header = "FT  " + "".join(f"{lv:<7}" for lv in levels_used)
+    """Build a synthetic FD product body in the REAL layout: station id in
+    cols 0-3, each level column 8 wide, with every group RIGHT-aligned under
+    its header number (as the NWS product is - the original left-justified
+    fixture is why a slicing bug survived until real text hit it)."""
+    header = "FT  " + "".join(f"{lv:>8}" for lv in levels_used)
     lines = [header]
     for ident, groups in groups_by_station.items():
-        lines.append(f"{ident:<4}" + "".join(f"{g:<7}" for g in groups))
+        lines.append(f"{ident:<4}" + "".join(f"{g:>8}" for g in groups))
     return "\n".join(lines)
 
 
@@ -318,3 +320,27 @@ def test_cli_winds_aloft_unavailable_returns_2(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(wx, "_http_get_text", lambda url, timeout=wx.HTTP_TIMEOUT: "FT  3000\n")
     rc = wx.main(["--data-dir", str(tmp_path), "winds-aloft", "ZZZ"])
     assert rc == 2
+
+
+REAL_FD = """(Extracted from FBUS31 KWNO 192001)
+FD1US1
+DATA BASED ON 191800Z
+VALID 200000Z   FOR USE 2000-0300Z. TEMPS NEG ABV 24000
+
+FT  3000    6000    9000   12000   18000   24000  30000  34000  39000
+EMI 1417 2511+12 3022+10 3128+05 2828-07 2733-16 254331 263142 282355
+PSB      3214+16 3219+11 3021+07 3028-04 2822-15 273231 263542 253755
+"""
+
+
+def test_decode_fd_text_on_real_nws_layout_keeps_every_level():
+    """Regression (EMI-KLNS playtest: TRK 083 with DTK 051): on the real,
+    right-aligned NWS text the decoder read the wrong columns and kept only
+    39000 ft (320@135 by garbage), which the sim then applied at 5000 ft."""
+    st = {s.ident: dict((lv, (d, k)) for lv, d, k, _t in s.levels)
+          for s in wx.decode_fd_text(REAL_FD)}
+    assert st["EMI"][3000] == (140.0, 17.0)
+    assert st["EMI"][6000] == (250.0, 11.0)
+    assert st["EMI"][39000] == (280.0, 23.0)
+    assert len(st["EMI"]) == 9
+    assert 3000 not in st["PSB"] and st["PSB"][6000] == (320.0, 14.0)   # blank 3000 col
