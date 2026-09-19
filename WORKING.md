@@ -5,17 +5,17 @@ Task tracker for **octavi-ifr-trainer**. Newest status at the top of each list.
 
 Last updated: 2026-09-18 (stack layout: Phase 0-5 complete + several
 follow-ups, + NAV1/GPS-CDI wiring fix + PROC Load?/Activate? fix,
-855 tests green)
+860 tests green)
 
 Prior task history (M0–M16, the initial build through the playtest-fix rounds)
 is archived in `archive/WORKING-2026-09-11.md`, refreshed here to start a clean
 slate for the next project. `FINDINGS.md` remains the permanent log of every
-bug fixed against the Pilot's Guide/playtest feedback (F1–F34 so far) and is
+bug fixed against the Pilot's Guide/playtest feedback (F1–F35 so far) and is
 **not** archived — keep adding to it as before.
 
 ---
 
-## Current status (2026-09-18, 855 tests green)
+## Current status (2026-09-19, 860 tests green)
 
 The trainer runs end to end on four layouts (`gps`, `steam`, `stack`,
 `dual`), driven by the IFR-1 or keyboard (`stack` also takes mouse input),
@@ -254,3 +254,9 @@ playtest-round fix (F1–F29) since.
   "Activate?" (approaches only - SIDs/STARs get "Load?" only, per the
   manual) loads then calls the same `_activate_approach` the PROC menu's
   "Activate Approach?" already uses. 852 -> 855 tests.
+
+- **2026-09-19** — F35: single-unit `stack` gained a COM2/NAV2 tuning panel
+  (`Renderer._stack_radio2`, `ap_h` tall, click flip-flop/MHz/kHz); in
+  `--dual`, FMS2 now drives NAV2 like FMS1 drives NAV1 (`World._panel2`,
+  `Renderer._nav2_view`, FMS2's CDI strip on its own panel). 855 -> 860
+  tests.

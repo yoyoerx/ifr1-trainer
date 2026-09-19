@@ -1581,3 +1581,77 @@ def test_stack_layout_nav1_draws_without_raising_in_gps_and_vloc(db):
     Renderer(surf).draw(sc)                   # GPS source - must not raise
     sc2 = dataclasses.replace(sc, nav=dataclasses.replace(sc.nav, cdi_source="VLOC"))
     Renderer(surf).draw(sc2)                  # VLOC source - must not raise
+
+
+# --------------------------------------------------------------------------- #
+# COM2/NAV2 tuning panel (single-unit stack) and FMS2 -> NAV2 (--dual) (F35)
+# --------------------------------------------------------------------------- #
+def test_stack_single_unit_has_a_com2_nav2_tuning_panel_as_tall_as_the_ap(db):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, db))
+    for key in ("com2", "nav2"):
+        for act in ("swap", "mhz-", "mhz+", "khz-", "khz+"):
+            assert f"radio:{key}:{act}" in r._stack_hit
+
+
+def test_stack_dual_has_no_com2_nav2_panel(db):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _dual_world(db)
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, db, gns2=w.gns2))
+    assert not any(k.startswith("radio:") for k in r._stack_hit)
+
+
+def test_stack_radio_clicks_tune_com2_and_nav2(db):
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    r = Renderer(surf)
+    r.draw(_stack_scene(w, db))
+    ui = {"layout": "stack", "stack_tab": "WX"}
+    c0, n0 = w.radios.com2.standby_mhz, w.radios.nav2.standby_mhz
+    main_mod._on_stack_click(_click(*r._stack_hit["radio:com2:khz+"].center), w, ui, r)
+    main_mod._on_stack_click(_click(*r._stack_hit["radio:nav2:mhz+"].center), w, ui, r)
+    assert w.radios.com2.standby_mhz == pytest.approx(c0 + 0.025)
+    assert w.radios.nav2.standby_mhz == pytest.approx(n0 + 1.0)
+    act = w.radios.nav2.active_mhz
+    main_mod._on_stack_click(_click(*r._stack_hit["radio:nav2:swap"].center), w, ui, r)
+    assert w.radios.nav2.active_mhz == pytest.approx(n0 + 1.0)
+    assert w.radios.nav2.standby_mhz == pytest.approx(act)
+
+
+def test_nav2_view_follows_fms2_when_dual(db):
+    import dataclasses
+    w = _dual_world(db)
+    w.gns.load_flight_plan(["ALFA", "BRAVO"])
+    w.gns2.load_flight_plan(["ALFA", "BRAVO"])
+    sc = _stack_scene(w, db, gns2=w.gns2)
+    own_i = instr.Ownship(Point(40.1, -74.0), 0.0, 0.0, 120.0, 5000.0, -13.0)
+    n2 = w.gns2.update(Point(40.1, -74.0), 0.0, 120.0)
+    sc = dataclasses.replace(sc, panel2=instr.compute_panel(own_i, n2))
+    r = Renderer(pygame.display.get_surface())
+    nh, kind = r._nav2_view(sc)
+    assert kind == "GPS" and nh.valid                    # FMS2 on GPS -> NAV2 shows GPS
+    assert nh.course_deg == pytest.approx(sc.panel2.cdi.course_deg)
+    w.gns2.toggle_cdi_source()                           # FMS2 CDI key -> VLOC
+    n2v = w.gns2.update(Point(40.1, -74.0), 0.0, 120.0)  # next tick picks it up
+    sc_v = dataclasses.replace(sc, panel2=instr.compute_panel(own_i, n2v))
+    nh2, kind2 = r._nav2_view(sc_v)
+    assert kind2 is None and nh2 is sc_v.nav2_head       # the tuned NAV2 receiver
+    # FMS1's CDI source has no say over NAV2 in --dual
+    w.gns2.toggle_cdi_source()                           # FMS2 back to GPS
+    w.gns2.update(Point(40.1, -74.0), 0.0, 120.0)
+    w.gns.toggle_cdi_source()                            # FMS1 -> VLOC
+    w.gns.update(Point(40.1, -74.0), 0.0, 120.0)
+    assert r._nav2_view(sc)[1] == "GPS"
+
+
+def test_nav2_view_single_unit_is_always_the_raw_receiver(db):
+    w = _bare_world(db)
+    sc = _stack_scene(w, db)
+    nh, kind = Renderer(pygame.display.get_surface())._nav2_view(sc)
+    assert kind is None and nh is sc.nav2_head

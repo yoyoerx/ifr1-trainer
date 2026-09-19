@@ -273,11 +273,12 @@ def _local_magvar(db, pos):
 class Frame:
     """One tick's output - everything render needs."""
 
-    __slots__ = ("own", "nav", "panel", "nav1", "nav2", "sixpack")
+    __slots__ = ("own", "nav", "panel", "nav1", "nav2", "sixpack", "panel2")
 
-    def __init__(self, own, nav, panel, nav1, nav2, sixpack):
+    def __init__(self, own, nav, panel, nav1, nav2, sixpack, panel2=None):
         self.own, self.nav, self.panel = own, nav, panel
         self.nav1, self.nav2, self.sixpack = nav1, nav2, sixpack
+        self.panel2 = panel2          # FMS2's own CDI panel (--dual), else None
 
 
 class World:
@@ -444,7 +445,7 @@ class World:
             sp = instr.six_pack(st, self.magvar)
             self.score.sample(nav, st, panel, nav_head=n1,
                               alt_target=self.ap.alt_hold_ft if self.ap.engaged else None)
-            return Frame(st, nav, panel, n1, n2, sp)
+            return Frame(st, nav, panel, n1, n2, sp, self._panel2(own_i))
 
         st = self.sim.state
         self.radios.resolve(self.db, st.pos, st.altitude_ft)
@@ -476,7 +477,7 @@ class World:
         sp = instr.six_pack(st, self.magvar)
         self.score.sample(nav, st, panel, nav_head=n1,
                           alt_target=self.ap.alt_hold_ft if self.ap.engaged else None)
-        return Frame(st, nav, panel, n1, n2, sp)
+        return Frame(st, nav, panel, n1, n2, sp, self._panel2(own_i))
 
     def _auto_vloc(self, nav) -> None:
         """Approach VLOC handling. On the real 530W, activating the staged VLOC
@@ -535,6 +536,21 @@ class World:
             own_i, nav, phase=_phase_for(nav),
             nav1=_tuned_nav(self.radios.nav1) if vloc else None,
             nav2=_tuned_nav(self.radios.nav2) if vloc else None,
+        )
+
+    def _panel2(self, own_i):
+        """FMS2's instrument panel (``--dual`` only): FMS2 drives NAV2 the way
+        FMS1 drives NAV1 - its own CDI source picks GPS guidance or the NAV2
+        receiver, so the NAV2 head and FMS2's CDI strip follow FMS2's CDI key
+        rather than FMS1's."""
+        g2 = self.gns2
+        if g2 is None:
+            return None
+        nav2 = g2.nav
+        vloc = getattr(nav2, "cdi_source", "GPS") == "VLOC"
+        return instr.compute_panel(
+            own_i, nav2, phase=_phase_for(nav2),
+            nav1=_tuned_nav(self.radios.nav2) if vloc else None,
         )
 
     def _apply(self, cmd) -> None:
@@ -911,7 +927,7 @@ def run(cfg: Config) -> int:
             ias_target=w.ias_target, ias_managed=w._ias_managed, t=w.t,
             time_warp=warp, gns2=w.gns2,
             stack_tab=ui["stack_tab"], wind_from_deg=w.sim.wind_from, wind_kt=w.sim.wind_kt,
-            plate_filter=ui["plate_filter"],
+            plate_filter=ui["plate_filter"], panel2=fr.panel2,
         ))
         pygame.display.flip()
 
@@ -1119,6 +1135,19 @@ def _on_stack_click(e, w: World, ui: dict, renderer) -> None:
                 w.gns.chart_sel = 0             # new airport - reset chart index (ditto)
         elif name.startswith("plate:chart:"):
             w.gns.chart_sel = int(name.rsplit(":", 1)[1])
+        elif name.startswith("radio:"):
+            _, which, action = name.split(":")
+            rx_ = w.radios.com2 if which == "com2" else w.radios.nav2
+            if action == "swap":
+                rx_.swap()
+            elif action == "mhz+":
+                rx_.tune(mhz=1)
+            elif action == "mhz-":
+                rx_.tune(mhz=-1)
+            elif action == "khz+":
+                rx_.tune(khz=1)
+            elif action == "khz-":
+                rx_.tune(khz=-1)
         elif name.startswith("plate:filter:"):
             ui["plate_filter"] = name.split(":", 2)[2]
         elif name == "plate:load":

@@ -217,6 +217,7 @@ class Scene:
 
     # -- second FMS unit (layout="dual" and "stack") --
     gns2: object = None                # gpsnav.GpsNav for FMS2, or None (single-unit)
+    panel2: object = None              # instruments.Panel driven by FMS2/NAV2 (--dual)
 
     # -- stack-panel extras (layout="stack") --
     stack_tab: str = "WX"             # which left-column tab is showing
@@ -292,8 +293,7 @@ class Renderer:
         h1 = (total_h - gap) // 2
         h2 = total_h - gap - h1
         self._gns_unit(sc, box=(x0, y0, w, h1))
-        sc2 = dataclasses.replace(sc, gns=sc.gns2, nav=sc.gns2.nav,
-                                  variant=getattr(sc.gns2, "variant", None))
+        sc2 = self._unit2_scene(sc)
         self._gns_unit(sc2, box=(x0, y0 + h1 + gap, w, h2))
         self._map(sc)
         self._hsi(sc)
@@ -342,17 +342,24 @@ class Renderer:
         # below the mode buttons (see draw_ap_panel's ap_rect.right check).
         radio_h, ap_h = 84, 112
         n_gns = 2 if sc.gns2 is not None else 1
-        gns_h = (avail - radio_h - ap_h - gap * (n_gns + 1)) // n_gns
+        # Single unit: the slot a second GNS would take goes to a COM2/NAV2
+        # tuning panel, as tall as the autopilot (`--dual` tunes those via
+        # FMS2 instead, so it has no such panel).
+        radio2_h = ap_h if sc.gns2 is None else 0
+        n_blocks = n_gns + 1 + (1 if radio2_h else 0)
+        gns_h = (avail - radio_h - ap_h - radio2_h - gap * n_blocks) // n_gns
         radios = sc.radios
         self._gns_unit(sc, box=(rx, top, right_w, gns_h), no_bezel=True,
                        freq=(radios.com1, radios.nav1, "1") if radios else None)
         y = top + gns_h + gap
         if sc.gns2 is not None:
-            sc2 = dataclasses.replace(sc, gns=sc.gns2, nav=sc.gns2.nav,
-                                      variant=getattr(sc.gns2, "variant", None))
+            sc2 = self._unit2_scene(sc)
             self._gns_unit(sc2, box=(rx, y, right_w, gns_h), no_bezel=True,
                            freq=(radios.com2, radios.nav2, "2") if radios else None)
             y += gns_h + gap
+        if radio2_h:
+            self._stack_radio2(sc, pygame.Rect(rx, y, right_w, radio2_h))
+            y += radio2_h + gap
         self._stack_xpdr(sc, pygame.Rect(rx, y, right_w, radio_h))
         y += radio_h + gap
         # show_info=False: the HDG-bug/ALT-preselect readout this panel
@@ -373,7 +380,8 @@ class Renderer:
         scene_t = getattr(sc, "t", 0.0)
         nav1_nh, nav1_kind = self._nav1_view(sc)
         draw_nav_head(self.surf, n1, nav1_nh, "NAV1", self, t=scene_t, source_kind=nav1_kind)
-        draw_nav_head(self.surf, n2, sc.nav2_head, "NAV2", self, t=scene_t)
+        nav2_nh, nav2_kind = self._nav2_view(sc)
+        draw_nav_head(self.surf, n2, nav2_nh, "NAV2", self, t=scene_t, source_kind=nav2_kind)
         draw_hdg_indicator(self.surf, hd, sc.sixpack, self,
                            hdg_bug=getattr(sc.ap, "heading_bug", None) if sc.ap else None)
         # Actual HDG/IAS/ALT, next to the HDG dial - the same placement
@@ -398,6 +406,36 @@ class Renderer:
         self._stack_tabs(sc, tabs_rect)
         self._stack_tab_content(sc, content_rect)
         self._stack_setpoint_bugs(sc, bugs_rect)
+
+    def _stack_radio2(self, sc: Scene, rect: pygame.Rect) -> None:
+        """COM2 / NAV2 tuning panel (single-unit `stack` only): active and
+        standby frequency, a flip-flop button, and standby tuning buttons
+        (MHz and kHz steps) - click targets ``radio:<com2|nav2>:<swap|
+        mhz-|mhz+|khz-|khz+>`` handled by `main._on_stack_click`. Same
+        radios the IFR-1's COM2/NAV2 modes tune, so both stay in step."""
+        _panel_box(self.surf, rect, "COM2 / NAV2", self)
+        radios = sc.radios
+        if radios is None:
+            return
+        row_h = (rect.h - 24) // 2
+        rows = (("com2", "COM2", radios.com2, "{:07.3f}", GPS_GREEN),
+                ("nav2", "NAV2", radios.nav2, "{:06.2f}", CYAN))
+        for i, (key, label, rx_, fmt, col) in enumerate(rows):
+            y = rect.y + 22 + i * row_h
+            self._t(label, rect.x + 8, y + 4, font=self.f_sm, color=DIM)
+            self.lcd(fmt.format(rx_.active_mhz), rect.x + 50, y, color=col)
+            sw = pygame.Rect(rect.x + 138, y, 26, 20)
+            self.lcd(fmt.format(rx_.standby_mhz), rect.x + 170, y, color=AMBER)
+            btns = [(sw, "<>", "swap")]
+            bx = rect.x + 262
+            for txt, name in (("M-", "mhz-"), ("M+", "mhz+"), ("k-", "khz-"), ("k+", "khz+")):
+                btns.append((pygame.Rect(bx, y, 26, 20), txt, name))
+                bx += 29
+            for rct, txt, name in btns:
+                pygame.draw.rect(self.surf, PANEL, rct, border_radius=3)
+                pygame.draw.rect(self.surf, EDGE, rct, width=1, border_radius=3)
+                self._t(txt, rct.centerx, rct.y + 3, font=self.f_sm, color=TEXT, center=True)
+                self._stack_hit[f"radio:{key}:{name}"] = rct
 
     def _stack_xpdr(self, sc: Scene, rect: pygame.Rect) -> None:
         """A compact transponder box - just the squawk/mode, restyled to sit
@@ -665,7 +703,9 @@ class Renderer:
         else:
             draw_nav_head(self.surf, n1, nav1_nh, "NAV1", self, radius=gauge_rad, t=scene_t,
                           source_kind=nav1_kind)
-        draw_nav_head(self.surf, n2, sc.nav2_head, "NAV2", self, radius=gauge_rad, t=scene_t)
+        nav2_nh, nav2_kind = self._nav2_view(sc)
+        draw_nav_head(self.surf, n2, nav2_nh, "NAV2", self, radius=gauge_rad, t=scene_t,
+                      source_kind=nav2_kind)
 
         # bottom: full-width radio strip, autopilot programmer beneath it.
         ap_h = 64
@@ -754,6 +794,28 @@ class Renderer:
         if getattr(sc.nav, "cdi_source", "GPS") == "GPS":
             return instr.gps_nav_head(sc.nav, sc.panel), "GPS"
         return sc.nav1_head, None
+
+    def _nav2_view(self, sc: Scene):
+        """NAV2's round head. With a second FMS unit (`--dual`), FMS2 drives
+        it exactly as FMS1 drives NAV1 (see `_nav1_view`): GPS course
+        deviation from FMS2 while FMS2's own CDI source is GPS, the tuned
+        NAV2 receiver once FMS2's CDI key selects VLOC. Single-unit, NAV2 is
+        just its raw receiver, as before."""
+        g2 = sc.gns2
+        if g2 is not None and sc.panel2 is not None:
+            if getattr(g2.nav, "cdi_source", "GPS") == "GPS":
+                return instr.gps_nav_head(g2.nav, sc.panel2), "GPS"
+        return sc.nav2_head, None
+
+    def _unit2_scene(self, sc: Scene) -> Scene:
+        """A Scene for drawing FMS2 as its own GNS unit: FMS2's gns/nav/
+        variant, and (when available) FMS2's own CDI panel rather than
+        FMS1's, so its CDI strip follows FMS2's CDI key."""
+        import dataclasses
+        return dataclasses.replace(
+            sc, gns=sc.gns2, nav=sc.gns2.nav,
+            panel=sc.panel2 if sc.panel2 is not None else sc.panel,
+            variant=getattr(sc.gns2, "variant", None))
 
     def _gns_unit(self, sc: Scene, *, box: tuple | None = None, no_bezel: bool = False,
                   freq: tuple | None = None):

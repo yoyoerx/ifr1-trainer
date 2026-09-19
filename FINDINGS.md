@@ -569,6 +569,29 @@ was skipped (a procedure with no named transitions) via a new
 `has_trans_step` flag, so CLR doesn't try to reconstruct a transition list
 that was never shown.
 
+### F35 — `stack`: no way to tune COM2/NAV2 single-unit; FMS2 didn't drive NAV2 in --dual
+User request (2026-09-19): "For the stack layout that is not dual, there
+should be a radio 2 and nav 2 display that is the same height as the
+autopilot so that we could tune those frequencies. And the dual
+configuration, fms2 should drive nav2." Single-unit `stack` had nowhere to
+see or tune COM2/NAV2 (only via the IFR-1's COM2/NAV2 modes, with no
+on-screen readout); in `--dual`, NAV2's round head was always the raw NAV2
+receiver and FMS2's CDI strip reused FMS1's panel - so FMS2's CDI key did
+nothing visible outside its own screen.
+**Fix:** single-unit `stack` gets `Renderer._stack_radio2`, a COM2/NAV2
+panel (active + standby, flip-flop, standby MHz/kHz +/-; hit keys
+`radio:<com2|nav2>:<swap|mhz+|mhz-|khz+|khz-|>`, handled in
+`main._on_stack_click` through the same `ComRadio`/`NavReceiver` methods the
+IFR-1 modes use) in the slot a second GNS would take, exactly `ap_h` tall.
+`--dual` has no such panel - FMS2 is the second radio stack's front end.
+For `--dual`, `World._panel2` builds FMS2's own `compute_panel` (NAV2 as its
+VLOC source, mirroring how `_panel` uses NAV1 for FMS1), carried on
+`Frame.panel2`/`Scene.panel2`; `Renderer._nav2_view` (mirror of
+`_nav1_view`, F33) shows FMS2's GPS course deviation while FMS2's CDI source
+is GPS and the tuned NAV2 receiver once FMS2's CDI key selects VLOC, and the
+FMS2 unit's own CDI strip now uses `panel2` too (`_unit2_scene`, also in the
+`dual` layout). FMS1's CDI key has no effect on NAV2.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md
