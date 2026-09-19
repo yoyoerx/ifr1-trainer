@@ -223,6 +223,7 @@ class Scene:
     stack_tab: str = "WX"             # which left-column tab is showing
     wind_from_deg: float = 0.0        # World.wind_from, for the SETTINGS tab
     wind_kt: float = 0.0              # World.wind_kt, for the SETTINGS tab
+    wind_aloft: bool = False          # wind shown is from a winds-aloft profile
     plate_filter: str = "ALL"         # PLATE tab: "ALL" or one chart_code (IAP/DP/STAR/...)
 
 
@@ -587,7 +588,8 @@ class Renderer:
         of these going forward. Not the GNS's own CDI/Alarms Setup page,
         which stays on the GNS (AUX>Setup) where it already works."""
         y = rect.y
-        self._t("WIND", rect.x, y, font=self.f_sm, color=DIM)
+        self._t("WIND (winds aloft at current altitude; +/- sets a uniform wind)"
+                if sc.wind_aloft else "WIND", rect.x, y, font=self.f_sm, color=DIM)
         y += 16
         row = pygame.Rect(rect.x, y, rect.w, 22)
         self._t(f"FROM {sc.wind_from_deg:03.0f} deg", row.x, row.y, font=self.f_md, color=TEXT)

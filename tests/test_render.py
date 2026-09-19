@@ -1655,3 +1655,16 @@ def test_nav2_view_single_unit_is_always_the_raw_receiver(db):
     sc = _stack_scene(w, db)
     nh, kind = Renderer(pygame.display.get_surface())._nav2_view(sc)
     assert kind is None and nh is sc.nav2_head
+
+
+def test_settings_wind_shows_the_loaded_winds_aloft_not_zero(db):
+    """F37: the SETTINGS wind read the uniform wind (0 when a winds-aloft
+    profile is what's actually loaded)."""
+    import windsaloft
+    w = _bare_world(db)
+    w.sim.set_winds_aloft(windsaloft.parse_cli("3000:280/20 9000:300/35"))
+    d, k = w.sim.current_wind()
+    assert k > 0 and w.sim.wind_kt == 0
+    assert (d, k) == w.sim._wind_here()
+    w.sim.set_wind(90, 10)
+    assert w.sim.current_wind() == (90.0, 10.0)

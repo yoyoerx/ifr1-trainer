@@ -601,6 +601,16 @@ north up (with the OBS readout correct beside it) whatever the OBS was set
 to. **Fix:** an untuned head's `course_deg` now equals the OBS setting, so
 the card follows the OBS knob with the OFF flag showing, like a real CDI.
 
+### F37 — SETTINGS wind read 0 with a winds-aloft profile loaded
+User report (2026-09-19): "the wind in the setting should show what the
+current wind that is loaded is rather than just read 0." The SETTINGS tab
+read `SimModel.wind_from/wind_kt` - the *uniform* wind, 0 whenever a
+winds-aloft profile (`--winds-aloft`, `--wx-region`) is what's actually
+acting. **Fix:** `SimModel.current_wind()` (the profile at the current
+altitude, else the uniform wind) feeds the readout, which is labelled as
+winds aloft when so; the +/- buttons start from that effective wind (and,
+as before, replace the profile with a uniform wind once used).
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md

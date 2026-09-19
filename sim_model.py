@@ -124,6 +124,12 @@ class SimModel:
     def set_winds_aloft(self, profile: WindsAloftProfile | None) -> None:
         self.winds_aloft = profile
 
+    def current_wind(self) -> tuple[float, float]:
+        """(from_deg, kt) actually acting on the aircraft right now - the
+        winds-aloft profile at the current altitude if one is loaded, else the
+        uniform wind. What a wind readout should show."""
+        return self._wind_here()
+
     def _wind_here(self) -> tuple[float, float]:
         """(from_deg, kt) at the current altitude - profile if set, else uniform."""
         if self.winds_aloft is not None:

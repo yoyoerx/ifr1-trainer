@@ -926,7 +926,8 @@ def run(cfg: Config) -> int:
             nav1_hsi=ui["nav1_hsi"], ap=w.ap, radios=w.radios,
             ias_target=w.ias_target, ias_managed=w._ias_managed, t=w.t,
             time_warp=warp, gns2=w.gns2,
-            stack_tab=ui["stack_tab"], wind_from_deg=w.sim.wind_from, wind_kt=w.sim.wind_kt,
+            stack_tab=ui["stack_tab"], wind_from_deg=w.sim.current_wind()[0], wind_kt=w.sim.current_wind()[1],
+            wind_aloft=w.sim.winds_aloft is not None,
             plate_filter=ui["plate_filter"], panel2=fr.panel2,
         ))
         pygame.display.flip()
@@ -1101,13 +1102,13 @@ def _on_stack_click(e, w: World, ui: dict, renderer) -> None:
         elif name.startswith("warp:"):
             ui["time_warp"] = int(name.split(":", 1)[1])
         elif name == "wind_dir:+":
-            w.sim.set_wind(w.sim.wind_from + 10, w.sim.wind_kt)
+            d, k = w.sim.current_wind(); w.sim.set_wind(d + 10, k)
         elif name == "wind_dir:-":
-            w.sim.set_wind(w.sim.wind_from - 10, w.sim.wind_kt)
+            d, k = w.sim.current_wind(); w.sim.set_wind(d - 10, k)
         elif name == "wind_kt:+":
-            w.sim.set_wind(w.sim.wind_from, max(0.0, w.sim.wind_kt + 5))
+            d, k = w.sim.current_wind(); w.sim.set_wind(d, max(0.0, k + 5))
         elif name == "wind_kt:-":
-            w.sim.set_wind(w.sim.wind_from, max(0.0, w.sim.wind_kt - 5))
+            d, k = w.sim.current_wind(); w.sim.set_wind(d, max(0.0, k - 5))
         elif name == "bug:hdg:+":
             w.ap.turn_heading_bug(5)
         elif name == "bug:hdg:-":
