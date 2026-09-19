@@ -273,11 +273,18 @@ def test_apr_builds_wind_drift_trim_for_a_steady_localizer_offset():
     ap = Autopilot()
     ap.press_apr()
     base = ap.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
-                     vloc_course_deg=90.0, vloc_deflection=0.3, vloc_valid=True).heading
+                     vloc_course_deg=90.0, vloc_deflection=0.15, vloc_valid=True).heading
     for _ in range(20):
         cmd = ap.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
-                        vloc_course_deg=90.0, vloc_deflection=0.3, vloc_valid=True)
+                        vloc_course_deg=90.0, vloc_deflection=0.15, vloc_valid=True)
     assert cmd.heading > base                    # turning harder toward the needle
+    # a large (intercept-in-progress) deflection must not wind the trim up
+    ap3 = Autopilot()
+    ap3.press_apr()
+    for _ in range(50):
+        c3 = ap3.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
+                        vloc_course_deg=90.0, vloc_deflection=0.5, vloc_valid=True)
+    assert c3.heading == pytest.approx(90.0 + 0.5 * 22.0)
     # a pegged (uncaptured) needle must not wind the trim up
     ap2 = Autopilot()
     ap2.press_apr()

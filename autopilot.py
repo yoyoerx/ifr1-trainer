@@ -63,7 +63,9 @@ _NAV_GAIN = 8.0        # deg intercept / nm XTK  (NAV, analog CDI)
 _APR_GAIN = 13.0       # deg intercept / nm XTK  (APR, tighter)
 _GPSS_GAIN = 12.0      # deg / nm  (digital roll steering, crisp)
 _VLOC_GAIN = 22.0      # deg / unit-deflection   (localizer)
-_VLOC_I_GAIN = 0.8     # deg of trim per (unit-deflection . s) - wind-drift trim on VOR/LOC
+_VLOC_I_BAND = 0.2     # only integrate while |deflection| is this small
+_VLOC_I_MAX = 8.0      # deg - drift trim authority
+_VLOC_I_GAIN = 3.0     # deg of trim per (unit-deflection . s) - wind-drift trim on VOR/LOC
 _MAX_INTERCEPT = 30.0
 _CAPTURE_XTK_NM = 1.2
 _CAPTURE_DEFLECTION = 0.75
@@ -302,15 +304,21 @@ class Autopilot:
 
     def _vloc_intercept(self, dev: float, dt: float) -> float:
         """Intercept angle (deg, + = turn right of the course) for a VOR/LOC
-        needle deflection ``dev`` (+ = fly right): proportional, plus an
-        integral wind-drift trim (`_xtk_i`, shared with the GPS paths) that
-        only accumulates once the needle is inside the capture band. Without
-        it a steady crosswind leaves a permanent offset - the needle parks
-        off-centre and the AP never "tries" any harder (KLNS ILS 08
-        playtest)."""
-        if abs(dev) <= _CAPTURE_DEFLECTION and dt:
-            self._xtk_i = _clamp(self._xtk_i + dev * _VLOC_I_GAIN * dt,
-                                 -_XTK_I_MAX, _XTK_I_MAX)
+        needle deflection ``dev`` (+ = fly right): proportional, plus a small
+        integral wind-drift trim (`_xtk_i`, shared with the GPS paths).
+        The trim only accumulates while the needle is nearly centred
+        (|dev| <= `_VLOC_I_BAND`) - a steady small offset is drift; a large
+        one is just the intercept in progress, and integrating through it
+        winds the trim up and overshoots the course (the first cut of this
+        did exactly that, even in still air). Outside the band it bleeds off.
+        Without any trim, a steady crosswind leaves a permanent offset (KLNS
+        ILS 08 playtest)."""
+        if dt:
+            if abs(dev) <= _VLOC_I_BAND:
+                self._xtk_i = _clamp(self._xtk_i + dev * _VLOC_I_GAIN * dt,
+                                     -_VLOC_I_MAX, _VLOC_I_MAX)
+            else:
+                self._xtk_i *= max(0.0, 1.0 - 0.3 * dt)     # bleed off during an intercept
         return _clamp(dev * _VLOC_GAIN + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
 
     def _lateral_command(self, nav_state, own, magvar, dt,

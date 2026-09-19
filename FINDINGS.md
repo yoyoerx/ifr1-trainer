@@ -623,11 +623,14 @@ proportional-only (`dev * _VLOC_GAIN`), so a steady drift produced a steady
 intercept angle that exactly balanced it, i.e. a permanent offset (the GPS
 NAV/GPSS paths already had an integral `_xtk_i`).
 **Fix:** `Autopilot._vloc_intercept` adds an integral wind-drift trim to
-APR/REV and NAV-on-VLOC (shared `_xtk_i`, `_VLOC_I_GAIN` 0.8 deg per
-unit-deflection-second, dt-based so time warp is unaffected), accumulating
-only once the needle is inside the capture band so an uncaptured, pegged
-needle can't wind it up. The sim now converges to a centered needle with a
-settled crab.
+APR/REV and NAV-on-VLOC (shared `_xtk_i`, dt-based so time warp is unaffected). **First cut was
+wrong** ("something is now majorly wrong with the ap"): it integrated
+throughout the capture band (|dev| <= 0.75), so the trim wound up during a
+normal intercept and overshot the localizer even in still air. Now it only
+integrates while nearly centred (|dev| <= 0.2, `_VLOC_I_BAND`), is capped
+at 8 deg, and bleeds off during an intercept. Headless KLNS I08 sims: no wind
+now captures with only a small overshoot; 20 kt crosswind settles at ~0.02
+deflection instead of parking at ~0.4.
 
 ---
 
