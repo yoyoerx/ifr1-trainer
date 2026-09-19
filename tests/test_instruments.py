@@ -267,6 +267,7 @@ def test_nav_head_untuned_is_invalid():
         obs_deg = 123.0
     nh = nav_head(Off(), STN, 0.0, 0.0, 0.0)
     assert not nh.valid and nh.obs_deg == 123.0
+    assert nh.course_deg == 123.0          # card follows the OBS even when off
 
 
 # --------------------------------------------------------------------------- #

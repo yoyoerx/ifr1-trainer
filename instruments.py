@@ -389,7 +389,10 @@ def nav_head(receiver, ac_pos: Point, ac_alt_ft: float, gs_kt: float,
              ac_magvar_deg: float) -> NavHead:
     """Build a :class:`NavHead` from a ``radios.NavReceiver`` (duck-typed)."""
     if receiver is None or not getattr(receiver, "tuned", False):
-        return NavHead(valid=False, obs_deg=getattr(receiver, "obs_deg", 0.0))
+        # untuned/off: the card still shows the pilot's OBS setting (a real
+        # CDI's card follows the OBS knob whether or not a station is received)
+        obs = norm360(getattr(receiver, "obs_deg", 0.0))
+        return NavHead(valid=False, obs_deg=obs, course_deg=obs)
 
     is_loc = bool(getattr(receiver, "is_localizer", False))
     fs = LOC_FULL_SCALE_DEG if is_loc else VOR_FULL_SCALE_DEG

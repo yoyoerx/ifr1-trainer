@@ -592,6 +592,15 @@ is GPS and the tuned NAV2 receiver once FMS2's CDI key selects VLOC, and the
 FMS2 unit's own CDI strip now uses `panel2` too (`_unit2_scene`, also in the
 `dual` layout). FMS1's CDI key has no effect on NAV2.
 
+### F36 — Untuned NAV head's card snapped to north instead of following the OBS
+User report (2026-09-19): "even when off, the VOR OBS should match the
+setting, not just default to north." `instruments.nav_head` returned a bare
+`NavHead(valid=False, obs_deg=...)` for an untuned receiver, leaving
+`course_deg` at its 0 default - so the round head's rotating card showed
+north up (with the OBS readout correct beside it) whatever the OBS was set
+to. **Fix:** an untuned head's `course_deg` now equals the OBS setting, so
+the card follows the OBS knob with the OFF flag showing, like a real CDI.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md
