@@ -672,6 +672,16 @@ silence is whatever remains after the ident (minimum 1.5 s so a long ident
 still gets a gap). The 7.5 s figure is the typical four-per-30-s cadence,
 not a value I looked up in the AIM this session.
 
+
+### F42 — Glideslope was a diamond; now a horizontal needle with a GS flag
+User request (2026-09-19): "i don't like the glide slope as a diamond, i
+would rather have the horizontal needle showing GS and a gs flag when off."
+`render._gs_scale` drew a green diamond (and nothing at all when the GS
+was invalid). It now draws a horizontal needle riding the vertical dot scale
+(above centre = fly up, as before) and a red "GS" flag box in place of the
+needle whenever the glideslope isn't valid (a localizer with no usable GS,
+or GS lost). Applies to `draw_nav_head` and `draw_hsi_head` in every layout.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md
