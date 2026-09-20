@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pygame
 
-from navmath import Point, destination, great_circle_nm, initial_bearing, norm360
+from navmath import Point, arc_points, destination, great_circle_nm, initial_bearing, norm360
 from gpsnav import VARIANT_530
 import instruments as instr
 
@@ -1720,7 +1720,13 @@ class Renderer:
         for i in range(1, len(pts)):
             is_active = i == active and not dto_on   # DTO course owns the magenta
             col = MAGENTA if is_active else (150, 155, 160)
-            pygame.draw.line(self.surf, col, pts[i - 1], pts[i], 2 if is_active else 1)
+            wpi = wps[i]
+            if getattr(wpi, "arc_centre", None) is not None:      # DME arc: draw the curve
+                curve = [project(p) for p in arc_points(
+                    wpi.arc_centre, wps[i - 1].pos, wpi.pos, wpi.arc_turn)]
+                pygame.draw.lines(self.surf, col, False, curve, 2 if is_active else 1)
+            else:
+                pygame.draw.line(self.surf, col, pts[i - 1], pts[i], 2 if is_active else 1)
         gs_kt = getattr(sc.own, "gs_kt", 0.0) or 0.0
         for wp, sp in zip(wps, pts):
             x, yy = int(sp[0]), int(sp[1])

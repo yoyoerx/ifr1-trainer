@@ -281,3 +281,40 @@ def test_hold_entry(inbound, heading, turn, expected):
 def test_hold_entry_rejects_bad_turn():
     with pytest.raises(ValueError):
         hold_entry(360, 90, "X")
+
+
+# --------------------------------------------------------------------------- #
+# constant-radius arcs                                                        #
+# --------------------------------------------------------------------------- #
+def _arc_fixture():
+    from navmath import Point, destination
+    centre = Point(40.0, -74.0)
+    start = destination(centre, 0.0, 15.0)      # north of the navaid
+    end = destination(centre, 90.0, 15.0)       # east of it
+    return centre, start, end
+
+
+def test_arc_sweep_and_length_follow_the_direction_of_travel():
+    from navmath import arc_length_nm, arc_sweep_deg
+    c, s, e = _arc_fixture()
+    assert arc_sweep_deg(c, s, e, "R") == pytest.approx(90.0, abs=0.1)     # clockwise N -> E
+    assert arc_sweep_deg(c, s, e, "L") == pytest.approx(270.0, abs=0.1)    # the long way round
+    assert arc_length_nm(c, s, e, "R") == pytest.approx(math.radians(90.0) * 15.0, abs=0.05)
+
+
+def test_arc_track_is_the_tangent_and_xtk_is_off_the_circle():
+    from navmath import arc_track, arc_xtk_nm, destination
+    c, s, _ = _arc_fixture()
+    assert arc_track(c, "R", s) == pytest.approx(90.0, abs=0.1)     # N of centre, clockwise -> east
+    assert arc_track(c, "L", s) == pytest.approx(270.0, abs=0.1)
+    inside = destination(c, 0.0, 14.0)                              # nearer the navaid
+    assert arc_xtk_nm(c, "R", 15.0, inside) == pytest.approx(1.0, abs=0.01)    # right of a CW arc
+    assert arc_xtk_nm(c, "L", 15.0, inside) == pytest.approx(-1.0, abs=0.01)   # left of a CCW arc
+
+
+def test_arc_points_lie_on_the_circle():
+    from navmath import arc_points, great_circle_nm
+    c, s, e = _arc_fixture()
+    pts = arc_points(c, s, e, "R")
+    assert pts[0] == s and pts[-1] == e and len(pts) > 20
+    assert all(abs(great_circle_nm(c, p) - 15.0) < 0.05 for p in pts)

@@ -36,6 +36,11 @@ from enum import Enum
 from navmath import (
     along_track_nm,
     angle_diff,
+    arc_length_nm,
+    arc_progress_deg,
+    arc_sweep_deg,
+    arc_track,
+    arc_xtk_nm,
     cross_track_nm,
     destination,
     great_circle_nm,
@@ -160,6 +165,11 @@ class PlanWaypoint:
     hold_turn: str = "R"
     hold_leg_min: float | None = None    # time-based outbound leg length
     hold_leg_nm: float | None = None     # DME-based outbound leg length (overrides time)
+    # A DME / constant-radius arc (ARINC AF / RF) ENDING at this fix: the leg from
+    # the previous fix is flown around ``arc_centre`` (``arc_turn`` R = clockwise),
+    # not as a straight line. The radius is centre -> this fix.
+    arc_centre: Point | None = None
+    arc_turn: str = "R"
 
     @classmethod
     def from_entry(cls, entry, **flags) -> "PlanWaypoint":
@@ -761,18 +771,6 @@ class GpsNav:
         e = self._resolve(leg.recnav_ident, ref)
         return e.pos if e is not None else None
 
-    def _arc_points(self, centre: Point, start: Point, end: Point, turn: str, n: int = 4):
-        r = great_circle_nm(centre, start)
-        b0 = initial_bearing(centre, start)
-        b1 = initial_bearing(centre, end)
-        sweep = angle_diff(b1, b0)                 # -180..180
-        if turn == "L" and sweep > 0:
-            sweep -= 360.0
-        elif turn == "R" and sweep < 0:
-            sweep += 360.0
-        for k in range(1, n + 1):
-            yield destination(centre, norm360(b0 + sweep * k / (n + 1)), r)
-
     def _resolve_proc_fix(self, ident: str, anchor, apt):
         """Resolve a procedure-leg fix ident. A runway fix (``RW08``) isn't in
         the navaid stores - take its threshold from the airport."""
@@ -806,9 +804,11 @@ class GpsNav:
             if lt in (LegType.AF, LegType.RF) and anchor is not None:
                 centre = self._recnav_pos(leg)
                 if centre is not None:
-                    for i, p in enumerate(self._arc_points(centre, anchor, entry.pos, leg.turn)):
-                        yield PlanWaypoint(f"{leg.fix_ident.strip().upper()}~{i+1}", p,
-                                           "wpt", synthetic=True), None
+                    wp = replace(wp, arc_centre=centre,
+                                 arc_turn=(leg.turn or "R").strip().upper() or "R")
+            if wp.arc_centre is not None:      # the course leaving an arc is its tangent
+                yield wp, arc_track(wp.arc_centre, wp.arc_turn, entry.pos)
+                return
             yield wp, (initial_bearing(anchor, entry.pos) if anchor is not None else None)
             return
 
@@ -962,7 +962,21 @@ class GpsNav:
         best_i, best_d = self.fpl.active, float("inf")
         for i in range(1, len(self.fpl)):
             a = self.fpl.waypoints[i - 1].pos
-            b = self.fpl.waypoints[i].pos
+            wb = self.fpl.waypoints[i]
+            b = wb.pos
+            if wb.arc_centre is not None:
+                r = great_circle_nm(wb.arc_centre, b)
+                sweep = arc_sweep_deg(wb.arc_centre, a, b, wb.arc_turn)
+                prog = arc_progress_deg(wb.arc_centre, a, wb.arc_turn, pos)
+                if prog < 0.0:
+                    d = great_circle_nm(pos, a)
+                elif prog > sweep:
+                    d = great_circle_nm(pos, b)
+                else:
+                    d = abs(arc_xtk_nm(wb.arc_centre, wb.arc_turn, r, pos))
+                if d < best_d:
+                    best_i, best_d = i, d
+                continue
             seg = great_circle_nm(a, b)
             along = along_track_nm(a, b, pos)
             if along < 0.0:
@@ -1391,10 +1405,24 @@ class GpsNav:
             return None
         if i < self.fpl.active:
             return None
-        dist = great_circle_nm(self._pos, wps[self.fpl.active].pos)
+        act = wps[self.fpl.active]
+        if act.arc_centre is not None:
+            r = great_circle_nm(act.arc_centre, act.pos)
+            flown = math.radians(arc_progress_deg(
+                act.arc_centre, wps[self.fpl.active - 1].pos, act.arc_turn, self._pos)) * r
+            dist = max(0.0, self._leg_nm(wps[self.fpl.active - 1], act) - flown)
+        else:
+            dist = great_circle_nm(self._pos, act.pos)
         for k in range(self.fpl.active, i):
-            dist += great_circle_nm(wps[k].pos, wps[k + 1].pos)
+            dist += self._leg_nm(wps[k], wps[k + 1])
         return dist
+
+    @staticmethod
+    def _leg_nm(a: PlanWaypoint, b: PlanWaypoint) -> float:
+        """Length of the leg a -> b: the arc for a DME arc, else the great circle."""
+        if b.arc_centre is not None:
+            return arc_length_nm(b.arc_centre, a.pos, b.pos, b.arc_turn)
+        return great_circle_nm(a.pos, b.pos)
 
     def vnav_set(self, target_ident: str, target_alt_ft: float,
                  vs_fpm: float = _VNAV_DEFAULT_VS_FPM) -> bool:
@@ -1759,16 +1787,31 @@ class GpsNav:
             self._nav = self._obs_state(b, from_id, to_id, scale)
             return self._nav
 
-        dtk = self.dto.course if is_dto else initial_bearing(a, b)
+        arc = None if is_dto else self._active_arc()     # (centre, turn) | None
         brg = initial_bearing(pos, b)
-        xtk = cross_track_nm(a, b, pos)
-        leg_len = great_circle_nm(a, b)
-        along = along_track_nm(a, b, pos)
-        dtg = max(0.0, leg_len - along)
+        if arc is not None:
+            # DME arc (AF/RF): the path is the circle about the navaid - DTK is its
+            # tangent at ownship, XTK the distance off the circle, DTG the arc left.
+            centre, aturn = arc
+            radius = great_circle_nm(centre, b)
+            dtk = arc_track(centre, aturn, pos)
+            xtk = arc_xtk_nm(centre, aturn, radius, pos)
+            leg_len = arc_length_nm(centre, a, b, aturn)
+            along = math.radians(arc_progress_deg(centre, a, aturn, pos)) * radius
+            dtg = max(0.0, leg_len - along)
+            end_dtk = arc_track(centre, aturn, b)
+        else:
+            dtk = self.dto.course if is_dto else initial_bearing(a, b)
+            xtk = cross_track_nm(a, b, pos)
+            leg_len = great_circle_nm(a, b)
+            along = along_track_nm(a, b, pos)
+            dtg = max(0.0, leg_len - along)
+            end_dtk = dtk
         tke = angle_diff(self._track, dtk)
 
         nxt = self._next_after_active(is_dto)
-        course_change = abs(angle_diff(initial_bearing(b, nxt), dtk)) if nxt else 0.0
+        nxt_course = self._course_out_of(b, is_dto)
+        course_change = abs(angle_diff(nxt_course, end_dtk)) if nxt_course is not None else 0.0
         # turn_anticipation_nm blows up (tan) as course_change -> 180 deg (a near
         # reversal, e.g. into a hold): cap it at a sane lead distance rather than
         # cutting the corner tens of miles early. Also cap it to at most half the
@@ -1826,7 +1869,7 @@ class GpsNav:
             wpt_alert=bool(nxt) and dtg <= alert_dist,
             turn_anticipation=turning and dtg <= alert_dist,
             turn_now=turn_now,
-            next_dtk=initial_bearing(b, nxt) if nxt else None,
+            next_dtk=nxt_course,
             cdi_scale_nm=scale,
             annunciators=self._annunciators(True),
         )
@@ -2058,6 +2101,26 @@ class GpsNav:
             f, t = self.fpl.from_wp, self.fpl.to_wp
             return (f.pos, t.pos, f.ident, t.ident, False)
         return None
+
+    def _active_arc(self):
+        """``(centre, turn)`` when the active flight-plan leg is a DME arc."""
+        if self.dto is not None or not self.fpl.has_active_leg:
+            return None
+        w = self.fpl.to_wp
+        return (w.arc_centre, w.arc_turn) if w.arc_centre is not None else None
+
+    def _course_out_of(self, b: Point, is_dto: bool) -> float | None:
+        """True course of the leg after the active one, at its start ``b`` (the
+        tangent when that next leg is itself an arc), or None if there is none."""
+        if is_dto:
+            nxt = self._next_after_active(True)
+            return initial_bearing(b, nxt) if nxt is not None else None
+        w = self.fpl.wp_after_active()
+        if w is None:
+            return None
+        if w.arc_centre is not None:
+            return arc_track(w.arc_centre, w.arc_turn, b)
+        return initial_bearing(b, w.pos)
 
     def _next_after_active(self, is_dto: bool) -> Point | None:
         if is_dto:

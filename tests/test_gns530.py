@@ -1575,3 +1575,60 @@ def test_parallel_entry_first_inbound_turn_is_opposite_the_hold_direction(db):
     end = destination(char.pos, hs["leg_hdg"], hs["leg_nm"])
     g.update(end, hs["leg_hdg"], 130.0, 1.0)
     assert hs["turn_dir"] == -hs["sign"]
+
+
+# --------------------------------------------------------------------------- #
+# DME arcs (ARINC AF legs) are flown as a circle about the navaid             #
+# --------------------------------------------------------------------------- #
+def _arc_plan(radius_nm=16.0, sweep_deg=178.0, turn="R"):
+    """A plan whose second leg is a DME arc about a navaid, then a fix beyond it."""
+    from navmath import norm360
+    centre = Point(41.0, -74.0)
+    sgn = 1.0 if turn == "R" else -1.0
+    start = destination(centre, 0.0, radius_nm)
+    end = destination(centre, norm360(sgn * sweep_deg), radius_nm)
+    out = destination(end, norm360(sgn * sweep_deg + sgn * 90.0), 5.0)
+    return centre, [PlanWaypoint("STRT", start),
+                    PlanWaypoint("ARCE", end, arc_centre=centre, arc_turn=turn),
+                    PlanWaypoint("OUTF", out)]
+
+
+def _fly_arc(g, pos, gs=110.0, dt=1.0, steps=6000):
+    trk, seen = 0.0, []
+    for _ in range(steps):
+        ns = g.update(pos, trk, gs, dt)
+        seen.append((ns, pos))
+        if g.fpl.active >= 2 or ns.dtk is None:
+            break
+        hdg = ns.dtk - max(-30.0, min(30.0, (ns.xtk_nm or 0.0) * 15.0))
+        trk = hdg % 360.0
+        pos = destination(pos, trk, gs * dt / 3600.0)
+    return seen
+
+
+@pytest.mark.parametrize("turn", ["R", "L"])
+def test_a_long_dme_arc_is_flown_on_the_circle_not_the_chord(db, turn):
+    centre, wps = _arc_plan(turn=turn)
+    g = Gns530(db)
+    g.fpl.waypoints = list(wps)
+    g.fpl.activate_leg(1)
+    seen = _fly_arc(g, wps[0].pos)
+    settled = [pos for ns, pos in seen[len(seen) // 10:-len(seen) // 10]]
+    err = [abs(great_circle_nm(centre, p) - 16.0) for p in settled]
+    assert max(err) < 0.15               # a 178-degree chord approximation was ~0.8 nm off
+    assert g.fpl.active == 2             # ...and it sequenced off the end of the arc
+
+
+def test_arc_leg_reports_the_tangent_dtk_and_arc_dtg(db):
+    centre, wps = _arc_plan(sweep_deg=90.0)
+    g = Gns530(db)
+    g.fpl.waypoints = list(wps)
+    g.fpl.activate_leg(1)
+    ns = g.update(wps[0].pos, 90.0, 110.0, 1.0)
+    assert ns.dtk == pytest.approx(90.0, abs=0.5)                      # tangent at the start
+    assert ns.xtk_nm == pytest.approx(0.0, abs=0.01)
+    assert ns.dtg_nm == pytest.approx(math.radians(90.0) * 16.0, abs=0.1)   # arc length, not chord
+    mid = destination(centre, 45.0, 15.0)                              # inside the circle
+    ns = g.update(mid, 135.0, 110.0, 1.0)
+    assert ns.xtk_nm == pytest.approx(1.0, abs=0.05)                   # right of a clockwise arc
+    assert ns.dtk == pytest.approx(135.0, abs=0.5)

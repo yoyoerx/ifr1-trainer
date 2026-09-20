@@ -20,3 +20,6 @@ octavi.json
 *.swp
 .DS_Store
 Thumbs.db
+
+# vendor reference manual (Garmin copyright; keep locally, don't redistribute)
+/docs/reference/*.pdf

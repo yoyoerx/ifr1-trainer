@@ -158,6 +158,57 @@ def along_track_nm(a: Point, b: Point, p: Point) -> float:
 
 
 # --------------------------------------------------------------------------- #
+# constant-radius arcs (DME arcs, ARINC AF / RF legs)                          #
+# --------------------------------------------------------------------------- #
+# An arc leg is flown around ``centre`` at ``radius`` nm. ``turn`` is the
+# direction of travel: "R" = clockwise (centre on the right), "L" = counter-
+# clockwise. Cross-track keeps the module-wide sign: + == ownship RIGHT of the
+# path, so for a clockwise arc, being inside the arc (nearer the centre) is +.
+def arc_sweep_deg(centre: Point, start: Point, end: Point, turn: str) -> float:
+    """Unsigned angle (0..360) swept from ``start`` to ``end`` about ``centre``
+    in the direction of travel."""
+    b0 = initial_bearing(centre, start)
+    b1 = initial_bearing(centre, end)
+    return norm360(b1 - b0) if turn != "L" else norm360(b0 - b1)
+
+
+def arc_length_nm(centre: Point, start: Point, end: Point, turn: str) -> float:
+    r = great_circle_nm(centre, end)
+    return math.radians(arc_sweep_deg(centre, start, end, turn)) * r
+
+
+def arc_track(centre: Point, turn: str, p: Point) -> float:
+    """True course of the arc at ``p`` (tangent, in the direction of travel)."""
+    return norm360(initial_bearing(centre, p) + (-90.0 if turn == "L" else 90.0))
+
+
+def arc_xtk_nm(centre: Point, turn: str, radius_nm: float, p: Point) -> float:
+    """Cross-track from the arc: + == ownship right of the path."""
+    inside = radius_nm - great_circle_nm(centre, p)
+    return -inside if turn == "L" else inside
+
+
+def arc_progress_deg(centre: Point, start: Point, turn: str, p: Point) -> float:
+    """Angle flown along the arc from ``start`` to the foot of ``p``, -180..180
+    (negative == ``p`` is still short of the start)."""
+    b0 = initial_bearing(centre, start)
+    b = initial_bearing(centre, p)
+    return norm180(b - b0) if turn != "L" else norm180(b0 - b)
+
+
+def arc_points(centre: Point, start: Point, end: Point, turn: str,
+               step_deg: float = 4.0) -> list[Point]:
+    """Points along the arc from ``start`` to ``end`` inclusive (for drawing)."""
+    r = great_circle_nm(centre, end)
+    b0 = initial_bearing(centre, start)
+    sweep = arc_sweep_deg(centre, start, end, turn)
+    n = max(1, int(math.ceil(sweep / step_deg)))
+    sgn = -1.0 if turn == "L" else 1.0
+    return [start] + [destination(centre, norm360(b0 + sgn * sweep * k / n), r)
+                      for k in range(1, n)] + [end]
+
+
+# --------------------------------------------------------------------------- #
 # fixes from navaids                                                         #
 # --------------------------------------------------------------------------- #
 def radial_dme(

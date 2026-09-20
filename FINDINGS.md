@@ -723,6 +723,33 @@ The F38 integral trim stays as a small residual term.
 
 ---
 
+### F45 — DME arcs were flown as 4 straight chords (0.8 nm off on a long arc)
+Playtest (2026-09-19): fly a DME arc and verify it. KLNS D08 (11 nm, 55 deg)
+was within 0.15 nm, but PABR S26 (15.9 nm, 178 deg - the longest arc in the
+2609 CIFP) scalloped **0.8 nm inside the arc** (0.59 nm RMS): `_arc_points`
+replaced every AF/RF leg with a fixed 4 straight chords. **Fix:** the arc is
+now a real constant-radius leg. The fix that ENDS an arc carries
+`PlanWaypoint.arc_centre` / `arc_turn` (no synthetic `~n` points any more);
+`update()` computes DTK as the arc tangent at ownship, XTK as the distance off
+the circle (`navmath.arc_xtk_nm`, + == right of the path, so inside a clockwise
+arc is +), DTG as the arc length remaining, and turn anticipation from the
+tangent at the arc end. `_distance_to_index`, `_closest_leg` and the map
+(`render`: arcs drawn as curves via `navmath.arc_points`) are arc-aware. Same
+runs: PABR S26 0.08-0.13 nm RMS (0.06 nm steady state; the rest is the
+initial capture), KLNS D08 0.01 nm RMS (was 0.10); a coupled AP in NAV holds it
+in a 30 kt wind. **Manual note** (docs/reference/GNS530_Pilots_Guide.pdf, sec.5
+"Flying a DME Arc Approach", p.71-73): this 2003 manual describes the arc as
+Jeppesen-provided *waypoints* along the arc (`D258G`...) flown leg to leg with
+"NEXT DTK"/"TURN TO" and a periodic "Set course to ###" message for an
+external CDI - i.e. the older units approximated the arc with database
+waypoints. The CIFP/ARINC 424 data we load codes it as an AF leg (centre +
+radius), which is what a modern WAAS unit flies as a true arc, so the trainer
+follows the AF leg; the manual's DTK-updates-along-the-arc behaviour is
+preserved (DTK is the live tangent). Not implemented: the "Set course to ###"
+and "Steep turn ahead" (arc turn-anticipation > 90 s) messages.
+
+---
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a
