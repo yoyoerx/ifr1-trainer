@@ -305,9 +305,9 @@ def test_nav_crabs_into_the_wind_from_track_vs_heading():
     own.track_deg = 40.0                 # drifting 10 deg right of heading
     cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), own, 0.0, dt=0.1)
     assert cmd.heading == pytest.approx(30.0)      # DTK 40 - drift 10
-    own.track_deg = 20.0                 # drifting left instead
+    own.track_deg = 20.0                 # 10 deg LEFT of heading (drift -10)
     cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), own, 0.0, dt=0.1)
-    assert cmd.heading == pytest.approx(60.0)      # DTK 40 + 20
+    assert cmd.heading == pytest.approx(50.0)      # DTK 40 + 10
     # no track available (or no drift): unchanged from before
     cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), Own(heading=30.0), 0.0, dt=0.1)
     assert cmd.heading == pytest.approx(40.0)
