@@ -804,6 +804,14 @@ shifts right for a GS scale (`draw_nav_head`, `draw_hsi_head`).
 
 ---
 
+### F48 — CIFP parser dropped localizers whose category is a letter
+
+Found while building `faa2xp`: `_localizer_from_pi_line` parsed the P.I category
+byte with `opt_int`, so the 17 localizers whose category is a letter (e.g. `A`,
+LOC-only/LDA-style) raised `ValueError` and were skipped, silently, as "malformed".
+Now a non-digit category is 0 (LOC-only). Regression coverage: the KBIH LOC-only
+record in `tests/test_faa2xp.py`.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

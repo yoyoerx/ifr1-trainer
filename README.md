@@ -410,6 +410,22 @@ all the actual HTTP work happens off the main thread. If the active
 winds-aloft profile came from `--wx-region`/`--wx-station` (not a hand-typed
 `--winds-aloft`), a fresh fetch is applied to the sim automatically too.
 
+## X-Plane data back-port (optional, `faa2xp`)
+
+X-Plane's bundled nav data is AIRAC 2406. `faa2xp` refreshes the US portion from
+the cached FAA CIFP (after `python -m datasrc.faa update`):
+
+```
+python -m faa2xp build   --xplane "E:/SteamLibrary/steamapps/common/X-Plane 12"
+python -m faa2xp install --xplane "..."          # dry run; add --yes to apply
+python -m faa2xp status  --xplane "..."
+python -m faa2xp restore --xplane "..." --yes    # exact undo (originals put back)
+```
+
+It writes only into `Custom Data/` (`earth_nav/fix/awy/hold.dat` merged over the
+default files, plus `FAACIFP18`, which X-Plane 12 loads procedures from) and never
+touches `Resources/default data`. Unofficial; not for real-world navigation.
+
 ## Approach plates (d-TPP)
 
 Real charts, not a redrawn approximation — FAA d-TPP (digital Terminal

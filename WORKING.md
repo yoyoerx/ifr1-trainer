@@ -169,13 +169,27 @@ any code was written; the decisions below are the spec to build against.
 - `stack` layout: its own playtest round, same structured format as
   `gps`/`steam`/`dual` got (F1-F28) - not yet run
 
-## Side project — "faa2xp": back-port FAA data into X-Plane (separate repo)
+## Side project — "faa2xp": back-port FAA data into X-Plane (done, in-repo)
 
 **Goal:** give a *running X-Plane 12 install* current US nav data (frequencies,
-navaids, approaches) from the free FAA CIFP + NASR, without a Navigraph
-subscription. X-Plane's bundled data is stuck at AIRAC 2406. Not on this
-trainer's milestone path — see `archive/WORKING-2026-09-11.md` for the notes
-if this gets picked up.
+navaids, approaches) from the free FAA CIFP, without a Navigraph subscription.
+X-Plane's bundled data is stuck at AIRAC 2406. Built 2026-09-20 as the `faa2xp/`
+subpackage (not a separate repo); see ARCHITECTURE §5.4 and README "X-Plane
+data back-port". Not validated in a running sim yet - open items below.
+
+- [x] `python -m faa2xp build|install|restore|status` - stage, install (dry run
+      unless `--yes`), reversible via manifest + `.faa2xp-backup/`
+- [x] `earth_nav.dat` (VOR/VORTAC/TACAN/DME/NDB/LOC/GS), `earth_fix.dat`,
+      `earth_awy.dat`, `earth_hold.dat` merged over the default files
+- [x] `FAACIFP18` copied into `Custom Data/` (X-Plane 12 loads procedures from it)
+- [ ] Confirm in the running sim: a 2609-only approach loads (e.g. an amended
+      procedure), an ILS tunes/captures, non-US procedures still load
+      (unverified whether X-Plane falls back to `CIFP/*.dat` for airports
+      absent from `FAACIFP18`)
+- [ ] ILS/LOC elevation is the airport elevation (CIFP P.I has no localizer
+      elevation); ILS-DME, markers, LPV/GLS path points are kept from 2406
+- [ ] Fix type code (7-digit column in `earth_fix.dat`) is a reused constant per
+      enroute/terminal; its meaning is undocumented
 
 ## Done log
 

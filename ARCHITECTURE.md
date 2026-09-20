@@ -171,10 +171,16 @@ data (training tool) but says so, loudly.
 
 ### 5.4 Related side project (separate repo) — see WORKING.md backlog
 
-Back-port the parsed FAA CIFP + NASR into X-Plane's `earth_*.dat` / `CIFP`
-format so a *running X-Plane install* also gets current US nav data without a
-Navigraph subscription. Shares `datasrc/` + the FAA parsers; different output
-writer. Tracked as a backlog item, not part of the trainer's milestones.
+`faa2xp/` (offline CLI, never imported by the runtime loop) back-ports the FAA
+CIFP into an X-Plane 12 install's `Custom Data/`, so the sim also gets current US
+nav data without a Navigraph subscription. `extract.py` reads `FAACIFP18` into
+X-Plane-shaped rows (reusing `navdata.cifp` line parsers); `merge.py` formats
+them and merges over the pristine `Resources/default data/earth_{nav,fix,awy,hold}.dat`
+(a base row is replaced only when the FAA data supplies the same ident+area+
+region; everything else is kept); `install.py` copies into `Custom Data/` with a
+SHA-256 manifest and backups so `restore` is exact. X-Plane 12 loads procedures
+straight from a `FAACIFP18` in `Custom Data/`, so no per-airport `CIFP/*.dat`
+conversion is needed.
 
 ---
 

@@ -116,7 +116,7 @@ def _localizer_from_pi_line(ln: str) -> VhfNavaid:
         loc_bearing_deg=(int(ln[51:55]) / 10.0) if ln[51:55].strip().isdigit() else None,
         runway_ident=ln[27:32].strip(),
         airport_ident=ln[6:10].strip(),
-        ils_category=opt_int(ln[17:18]) or 0,
+        ils_category=int(ln[17:18]) if ln[17:18].isdigit() else 0,  # letter = LOC-only (LDA/SDF/...)
         name=f"ILS {ln[27:32].strip()} {ln[6:10].strip()}",
     )
 
