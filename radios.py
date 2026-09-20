@@ -359,7 +359,12 @@ MORSE_CODE: dict[str, str] = {
 # minute (PARIS standard: dit = 1.2 / wpm ~= 0.17 s). The original 20 wpm was
 # nearly 3x too fast (F40).
 VOR_IDENT_WPM = 7.0
-_MORSE_REPEAT_GAP_S = 1.5   # silence before the ident repeats (collapsed from ~7-10s)
+# A real VOR/localizer sends its ident about four times in a 30 s cycle (FAA
+# requires at least once per 30 s), i.e. one start every ~7.5 s. The loop
+# period is that interval; the silence is whatever is left after the ident
+# (never less than _MORSE_MIN_GAP_S, for a long ident). F41.
+MORSE_REPEAT_PERIOD_S = 7.5
+_MORSE_MIN_GAP_S = 1.5
 
 
 def morse_pattern(ident: str) -> str:
@@ -393,7 +398,8 @@ def morse_is_keyed(ident: str, t: float, *, wpm: float = VOR_IDENT_WPM) -> bool:
     if not segs:
         return False
     dit = 1.2 / wpm
-    period = sum(u for _, u in segs) * dit + _MORSE_REPEAT_GAP_S
+    ident_s = sum(u for _, u in segs) * dit
+    period = max(MORSE_REPEAT_PERIOD_S, ident_s + _MORSE_MIN_GAP_S)
     tt = t % period
     acc = 0.0
     for keyed, units in segs:

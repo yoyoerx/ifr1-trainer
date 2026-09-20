@@ -311,3 +311,15 @@ def test_ident_morse_rate_is_the_faa_seven_wpm():
     """F40: AIM 1-1-3 puts VOR ident at ~7 wpm; it was 20 wpm (3x too fast)."""
     assert VOR_IDENT_WPM == 7.0
     assert 1.2 / VOR_IDENT_WPM == pytest.approx(0.171, abs=0.002)
+
+
+def test_ident_repeats_every_seven_and_a_half_seconds():
+    """F41: the ident loop used a ~1.5 s gap; a real station starts its ident
+    about every 7.5 s (four per 30 s)."""
+    from radios import MORSE_REPEAT_PERIOD_S
+    assert morse_is_keyed("A", 0.0)
+    assert not morse_is_keyed("A", 5.0)                    # long silence, not 1.5 s
+    assert morse_is_keyed("A", MORSE_REPEAT_PERIOD_S)      # next ident starts on the period
+    # an ident longer than the period still gets a gap before it repeats
+    long_ident = "0123456789"
+    assert morse_is_keyed(long_ident, 0.0)

@@ -661,6 +661,17 @@ identification at approximately 7 wpm. **Fix:** `radios.VOR_IDENT_WPM = 7.0`
 dot beside NAV heads/radios keys at the real rate. The gap before the ident
 repeats is unchanged (still shortened from the real ~7-10 s).
 
+
+### F41 — Ident repeat gap was ~1.5 s, real stations repeat every ~7.5 s
+User request (2026-09-19): "lengthen the ident repeat gap to match the real
+interval." The Morse ident looped with a 1.5 s pause (deliberately
+"collapsed" earlier). A real VOR/localizer sends its ident about four times
+per 30 s cycle (FAA: at least once every 30 s). **Fix:**
+`radios.MORSE_REPEAT_PERIOD_S = 7.5` is now the start-to-start interval; the
+silence is whatever remains after the ident (minimum 1.5 s so a long ident
+still gets a gap). The 7.5 s figure is the typical four-per-30-s cadence,
+not a value I looked up in the AIM this session.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md
