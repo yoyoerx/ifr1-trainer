@@ -1692,3 +1692,24 @@ def test_dct_on_the_first_waypoint_row_is_a_plain_direct_to(g):
     assert g._dto_dialog is not None and g._dto_dialog.leg_row is None
     g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))           # 2nd press just cancels
     assert g._dto_dialog is None and g._leg_confirm is None
+
+
+def test_mnu_activate_leg_option_on_a_highlighted_fpl_waypoint(g):
+    """Pilot's Guide sec.4 (manual p.55): highlight the destination waypoint, press
+    MENU, select "Activate Leg?", ENT, then ENT again on the confirmation window."""
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
+    g.update(Point(40.0, -74.0), 0.0, 120.0)
+    _fpl_cursor_on(g, 3)
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("MNU",)))
+    assert g._fpl_menu is not None and g._fpl_menu.current == "ACTIVATE LEG"
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))           # picks the option
+    assert g._leg_confirm == {"row": 3} and g.fpl.active == 1         # confirmation window
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))           # "Activate?" -> ENT
+    assert g.fpl.active == 3
+
+
+def test_mnu_has_no_activate_leg_without_a_highlighted_waypoint(g):
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    g.cursor.go_to_flight_plan()
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("MNU",)))
+    assert g._fpl_menu is not None and "ACTIVATE LEG" not in g._fpl_menu.options

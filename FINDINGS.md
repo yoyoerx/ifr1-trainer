@@ -750,26 +750,46 @@ and "Steep turn ahead" (arc turn-anticipation > 90 s) messages.
 
 ---
 
-### F46 — DCT on a highlighted flight-plan waypoint (Activate Leg?)
+### F46 — DCT on a highlighted flight-plan waypoint / Activate Leg?
 Request (2026-09-20): on the real 530 you select a step in the flight plan and
 press direct-to to jump to that leg, instead of the dialog asking for a new
-waypoint. Pilot's Guide (190-00181-00, docs/reference/GNS530_Pilots_Guide.pdf)
-sec.3 p.47: with a list displayed, "press the small right knob to activate the
-cursor, highlight the desired waypoint, then press direct-to"; sec.4 p.60
-"Flight Plan Leg Selection": "activate the cursor and rotate the large right
-knob to highlight the desired destination waypoint; press direct-to **twice**
-to display an 'Activate Leg?' confirmation window; with 'Activate?'
-highlighted, press ENT" - also for a procedure turn, DME arc or hold leg.
-Before, DCT always opened the dialog pre-filled with the *active* TO waypoint
-whatever the cursor highlighted. **Fix (`gpsnav`):** with the Flight Plan
-cursor on a waypoint, the first DCT opens the Direct-To page pre-filled with
-*that* waypoint (`_fpl_cursor_row`; ENT, ENT = an ordinary Direct-To); a second
-DCT swaps it for the "Activate Leg?" window (`_leg_confirm`, drawn by
-`render._activate_leg_page`), and ENT runs `_activate_leg`: the plan leg
-(previous waypoint -> highlighted one) becomes active, dropping any Direct-To,
-SUSP or hold in progress - the course is the plan's own leg, not present
-position to the fix. CLR (or another DCT) cancels. Row 0 (the departure) has
-no leg ending at it, so it stays a plain Direct-To. Keyboard: `D` twice.
+waypoint. Pilot's Guide text (docs/reference/GNS530_Pilots_Guide.pdf; page
+numbers are the manual's own), quoted rather than paraphrased:
+- **Activate a leg by DCT (sec.4, p.60):** "1. Press the small right knob to
+  activate the cursor and rotate the large right knob to highlight the desired
+  destination waypoint. 2. Press direct-to twice to display an 'Activate Leg?'
+  confirmation window. 3. With 'Activate?' highlighted, press ENT." Applies to
+  procedure legs too (procedure turn, DME arc, hold). Repeated in the Troubleshooting
+  Q&A ("How do I skip a waypoint in an approach...": "highlighting the desired
+  waypoint and pressing the direct-to key twice, then ENT to approve").
+- **Activate a leg by menu (sec.4, p.55):** highlight the destination waypoint,
+  "Press MENU, select the 'Activate Leg?' option ... and press ENT. A
+  confirmation window appears. With 'Activate?' highlighted, press ENT."
+  "'Activate Leg?' selects the highlighted flight plan leg as the leg currently
+  in use for navigation guidance (even if it isn't the closest leg)."
+- **DCT on a list (sec.3, p.47):** "If a list of waypoints is displayed on-screen,
+  press the small right knob to activate the cursor, rotate the large right knob
+  to highlight the desired waypoint, then press direct-to followed by ENT twice."
+  (p.44: "Pressing the direct-to key displays the Select Direct-to Waypoint Page.")
+
+**Not stated by the manual:** what the screen shows between the first and the
+second DCT press when it is used to activate a leg. Only the end state ("Activate
+Leg?" after two presses) is specified. The trainer therefore shows the Direct-To
+page pre-filled with the highlighted waypoint after press 1 (the p.47 list
+behaviour) and swaps it for "Activate Leg?" on press 2; that intermediate frame
+is the trainer's choice, not the manual's.
+
+Before: DCT always opened the dialog pre-filled with the *active* TO waypoint
+whatever the cursor highlighted, and the FPL menu had no "Activate Leg?".
+**Fix (`gpsnav`):** cursor on a flight-plan waypoint -> first DCT pre-fills that
+waypoint (`_fpl_cursor_row`; ENT, ENT is then an ordinary Direct-To); second DCT
+-> the "Activate Leg?" window (`_leg_confirm`, drawn by
+`render._activate_leg_page`); ENT -> `_activate_leg`: the plan leg (previous
+waypoint -> highlighted one) becomes active, dropping any Direct-To, SUSP or
+hold - the course is the plan's own leg, not present position to the fix. The
+MENU path (`ACTIVATE LEG`, first option when a leg is highlighted) reaches the
+same window. CLR cancels. Row 0 (the departure) has no leg ending at it, so it
+stays a plain Direct-To. Keyboard: `D` twice.
 
 ---
 

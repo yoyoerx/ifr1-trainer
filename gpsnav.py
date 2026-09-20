@@ -489,6 +489,7 @@ class FplMenu:
 
     options: list[str] = field(default_factory=lambda: list(_FPL_MENU))
     sel: int = 0
+    leg_row: int | None = None      # the FPL waypoint the cursor was on (ACTIVATE LEG)
 
     def move(self, delta: int) -> None:
         if delta and self.options:
@@ -1102,7 +1103,13 @@ class GpsNav:
                 self._begin_direct_to()
             elif btn == "MNU":
                 if page == "Flight Plan":
-                    self._fpl_menu = FplMenu(list(_FPL_MENU))
+                    row = self._fpl_cursor_row()
+                    if row is not None and row >= 1:
+                        # Pilot's Guide sec.4 p.55: with a leg's waypoint highlighted the
+                        # options window offers "Activate Leg?" (first in its list)
+                        self._fpl_menu = FplMenu(["ACTIVATE LEG"] + list(_FPL_MENU), leg_row=row)
+                    else:
+                        self._fpl_menu = FplMenu(list(_FPL_MENU))
                 elif page == "Flight Plan Catalog":
                     self._fpl_menu = FplMenu(list(_CATALOG_MENU))
                 else:
@@ -1301,7 +1308,9 @@ class GpsNav:
         self._fpl_menu = None
         page = self.cursor.page_name
         if page == "Flight Plan":
-            if choice == "INVERT FLT PLAN":
+            if choice == "ACTIVATE LEG" and menu.leg_row is not None:
+                self._leg_confirm = {"row": menu.leg_row}     # "a confirmation window appears"
+            elif choice == "INVERT FLT PLAN":
                 self.invert_flight_plan()
             elif choice == "COPY FLT PLAN":
                 if not self.catalog_store_first_empty():
