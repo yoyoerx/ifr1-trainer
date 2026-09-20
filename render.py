@@ -2167,20 +2167,24 @@ def _vor_cdi_face(surf, cx, cy, rad, course_deg, deflection, valid, color,
         r._t("OFF", cx, cy - 8, font=r.f_sm, color=RED, center=True)
 
 
-def _gs_scale(surf, rect_right_x, cy, rad, gs_deflection, gs_valid, r=None):
-    """Glideslope scale: a vertical dot scale with a HORIZONTAL needle that
-    rides up/down it (like a real CDI's GS needle, not a diamond), and a red
-    "GS" flag in place of the needle whenever the glideslope isn't valid."""
-    x = rect_right_x - 12
-    pygame.draw.line(surf, DIM, (x, cy - rad * 0.7), (x, cy + rad * 0.7), 1)
+def _gs_scale(surf, cx, cy, rad, gs_deflection, gs_valid, r=None):
+    """Glideslope on the face of the round VOR/LOC head, as on a GA OBS/ILS
+    indicator: a dot scale down the left and right edges of the dial and a
+    HORIZONTAL needle that sweeps across the whole face (above centre = fly
+    up), replaced by a red "GS" flag whenever the glideslope isn't valid."""
+    xl, xr = cx - rad * 0.80, cx + rad * 0.80
     for dot in (-2, -1, 1, 2):
-        pygame.draw.circle(surf, DIM, (x, int(cy + dot * rad * 0.32)), 2)
+        dy = int(cy + dot * rad * 0.32)
+        pygame.draw.circle(surf, WHITE, (int(xl), dy), 2)
+        pygame.draw.circle(surf, WHITE, (int(xr), dy), 2)
+    pygame.draw.circle(surf, WHITE, (int(xl), int(cy)), 3, 1)     # the centre marks
+    pygame.draw.circle(surf, WHITE, (int(xr), int(cy)), 3, 1)
     if gs_valid:
-        gy = int(cy - _clamp(gs_deflection, -1, 1) * rad * 0.64)   # + = fly up: needle rides above centre
-        pygame.draw.line(surf, GPS_GREEN, (x - 11, gy), (x + 11, gy), 4)
+        gy = int(cy - _clamp(gs_deflection, -1, 1) * rad * 0.64)   # + = fly up
+        pygame.draw.line(surf, GPS_GREEN, (int(xl) + 8, gy), (int(xr) - 8, gy), 3)
     else:
         flag = pygame.Rect(0, 0, 26, 16)
-        flag.center = (x, int(cy))
+        flag.center = (int(cx + rad * 0.5), int(cy + rad * 0.42))
         pygame.draw.rect(surf, (66, 40, 40), flag)
         if r is not None:
             r._t("GS", flag.centerx, flag.y + 1, font=r.f_sm, color=RED, center=True)
@@ -2232,10 +2236,10 @@ def draw_nav_head(surf, rect, nh, label, r, radius=None, t=0.0, source_kind=None
                   to_from=getattr(nh, "to_from", "OFF"), is_loc=is_loc, r=r)
     gs = getattr(nh, "gs_valid", False) or is_loc
     if gs:
-        _gs_scale(surf, int(cx + rad + 22), cy, rad, getattr(nh, "gs_deflection", 0.0),
+        _gs_scale(surf, cx, cy, rad, getattr(nh, "gs_deflection", 0.0),
                   getattr(nh, "gs_valid", False), r)
     # info column, right of the card
-    ix = int(cx + rad + (40 if gs else 20))
+    ix = int(cx + rad + 20)
     ident = getattr(nh, "ident", "") or "---"
     kind = source_kind if source_kind is not None else ("LOC" if is_loc else "VOR")
     r._t(f"{kind} {ident}", ix, cy - rad, font=r.f_sm, color=color)
@@ -2267,9 +2271,9 @@ def draw_hsi_head(surf, rect, nh, panel, label, r, radius=None, t=0.0):
                                       (cx + 5, cy - rad - 10)])
     r.lcd(f"{hdg:03.0f}", cx, cy - rad * 0.34, color=WHITE, center=True)
     if nh and (getattr(nh, "gs_valid", False) or getattr(nh, "is_localizer", False)):
-        _gs_scale(surf, int(cx + rad + 22), cy, rad, getattr(nh, "gs_deflection", 0.0),
+        _gs_scale(surf, cx, cy, rad, getattr(nh, "gs_deflection", 0.0),
                   getattr(nh, "gs_valid", False), r)
-        ix = int(cx + rad + 40)
+        ix = int(cx + rad + 20)
         ident = getattr(nh, "ident", "") or "---"
         label_txt = f"{'LOC' if getattr(nh, 'is_localizer', False) else 'VOR'} {ident}"
         r._t(label_txt, ix, cy - rad, font=r.f_sm, color=CYAN)

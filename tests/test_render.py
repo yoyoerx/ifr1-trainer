@@ -1670,18 +1670,19 @@ def test_settings_wind_shows_the_loaded_winds_aloft_not_zero(db):
     assert w.sim.current_wind() == (90.0, 10.0)
 
 
-def test_gs_scale_draws_a_horizontal_needle_and_a_gs_flag_when_invalid():
-    """The glideslope is a horizontal needle (not a diamond) that rides the
-    scale, replaced by a red "GS" flag when the glideslope isn't valid."""
+def test_gs_scale_draws_a_horizontal_needle_across_the_face_and_a_flag_when_invalid():
+    """The glideslope is a horizontal needle sweeping ACROSS the head's face (dots
+    down its left/right edges, as on a GA OBS/ILS indicator), replaced by a red
+    "GS" flag when the glideslope isn't valid."""
     def px(valid, dfl):
-        surf = pygame.Surface((80, 200))
+        surf = pygame.Surface((240, 240))
         r = Renderer(surf)
-        render._gs_scale(surf, 52, 100, 80, dfl, valid, r)
+        render._gs_scale(surf, 120, 120, 80, dfl, valid, r)
         return surf
     up = px(True, 0.5)                  # needle above centre (fly up)
-    row = lambda s, y: [s.get_at((x, y))[:3] for x in range(30, 52)]
-    ys = [y for y in range(200) if row(up, y).count(render.GPS_GREEN) >= 15]
-    assert ys and max(ys) < 100         # a wide horizontal bar, above centre
+    row = lambda s, y: [s.get_at((x, y))[:3] for x in range(60, 180)]
+    ys = [y for y in range(240) if row(up, y).count(render.GPS_GREEN) >= 100]
+    assert ys and max(ys) < 120         # a bar spanning the face, above centre
     off = px(False, 0.0)
-    assert not any(row(off, y).count(render.GPS_GREEN) >= 15 for y in range(200))
-    assert any(c == (66, 40, 40) for c in row(off, 96))      # the GS flag box
+    assert not any(row(off, y).count(render.GPS_GREEN) >= 100 for y in range(240))
+    assert any(c == (66 * 1, 40, 40) for y in range(240) for c in row(off, y))   # the GS flag box

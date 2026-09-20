@@ -793,6 +793,17 @@ stays a plain Direct-To. Keyboard: `D` twice.
 
 ---
 
+### F47 — Glideslope needle on the face of the NAV head
+Request (2026-09-20): put the horizontal GS needle on the head itself, as on a GA
+VOR/OBS/ILS indicator, not in a scale beside it. F42's needle rode a separate
+vertical dot scale to the right of the card. **Fix:** `render._gs_scale` now
+draws on the dial face - dots down the left and right edges and a horizontal
+needle sweeping the full width of the face (above centre = fly up), with the red
+"GS" flag on the face when the glideslope is invalid. The info column no longer
+shifts right for a GS scale (`draw_nav_head`, `draw_hsi_head`).
+
+---
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a
