@@ -355,7 +355,10 @@ MORSE_CODE: dict[str, str] = {
     "0": "-----", "1": ".----", "2": "..---", "3": "...--", "4": "....-",
     "5": ".....", "6": "-....", "7": "--...", "8": "---..", "9": "----.",
 }
-_MORSE_DIT_S = 0.06         # ~20 wpm dit length (PARIS standard: wpm = 1.2/dit)
+# FAA AIM 1-1-3: VOR/localizer ident is Morse at approximately 7 words per
+# minute (PARIS standard: dit = 1.2 / wpm ~= 0.17 s). The original 20 wpm was
+# nearly 3x too fast (F40).
+VOR_IDENT_WPM = 7.0
 _MORSE_REPEAT_GAP_S = 1.5   # silence before the ident repeats (collapsed from ~7-10s)
 
 
@@ -381,7 +384,7 @@ def _morse_timeline(pattern: str) -> list[tuple[bool, int]]:
     return segs
 
 
-def morse_is_keyed(ident: str, t: float, *, wpm: float = 20.0) -> bool:
+def morse_is_keyed(ident: str, t: float, *, wpm: float = VOR_IDENT_WPM) -> bool:
     """True if the ident tone is "on" at time ``t`` seconds, looping the
     pattern plus a trailing silence gap. Pure function of ``t`` so the
     animation is deterministic and needs no per-receiver timer state."""

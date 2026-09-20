@@ -15,6 +15,7 @@ from radios import (  # noqa: E402
     RadioStack,
     Transponder,
     morse_is_keyed,
+    VOR_IDENT_WPM,
     morse_pattern,
 )
 
@@ -287,8 +288,8 @@ def test_morse_pattern_ignores_unknown_characters():
 
 
 def test_morse_is_keyed_follows_the_dot_dash_timeline():
-    # "A" -> ".-": dot(1u) gap(1u) dash(3u); dit = 1.2/20 = 0.06 s
-    dit = 1.2 / 20.0
+    # "A" -> ".-": dot(1u) gap(1u) dash(3u); dit = 1.2/7 ~= 0.17 s (FAA ~7 wpm)
+    dit = 1.2 / VOR_IDENT_WPM
     assert morse_is_keyed("A", 0.0)                       # inside the dot
     assert morse_is_keyed("A", dit * 0.5)
     assert not morse_is_keyed("A", dit * 1.5)              # inside the inter-symbol gap
@@ -296,7 +297,7 @@ def test_morse_is_keyed_follows_the_dot_dash_timeline():
 
 
 def test_morse_is_keyed_silent_during_the_repeat_gap():
-    dit = 1.2 / 20.0
+    dit = 1.2 / VOR_IDENT_WPM
     total = (1 + 1 + 3) * dit                              # "A" pattern length
     assert not morse_is_keyed("A", total + 0.1)            # into the trailing silence
 
@@ -304,3 +305,9 @@ def test_morse_is_keyed_silent_during_the_repeat_gap():
 def test_morse_is_keyed_false_for_an_empty_or_unresolved_ident():
     assert not morse_is_keyed("", 0.0)
     assert not morse_is_keyed("---", 0.0)
+
+
+def test_ident_morse_rate_is_the_faa_seven_wpm():
+    """F40: AIM 1-1-3 puts VOR ident at ~7 wpm; it was 20 wpm (3x too fast)."""
+    assert VOR_IDENT_WPM == 7.0
+    assert 1.2 / VOR_IDENT_WPM == pytest.approx(0.171, abs=0.002)

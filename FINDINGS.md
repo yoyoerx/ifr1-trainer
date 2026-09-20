@@ -651,6 +651,16 @@ headless EMI-KLNS NAV run tracks DTK with ~0.0 nm xtk. Refetch stale caches
 with `python -m datasrc.wx winds-aloft BOS` (the auto-refresh does it on
 launch).
 
+
+### F40 — VOR/LOC ident Morse was ~3x too fast
+User report (2026-09-19): "the morse code character rate seems too fast
+compared to the FAA standard rate on the VORs." `radios.morse_is_keyed`
+defaulted to 20 wpm (0.06 s dit); the FAA AIM (1-1-3) puts VOR/localizer
+identification at approximately 7 wpm. **Fix:** `radios.VOR_IDENT_WPM = 7.0`
+(dit ~= 0.17 s, PARIS standard) is now the default, so the blinking ident
+dot beside NAV heads/radios keys at the real rate. The gap before the ident
+repeats is unchanged (still shortened from the real ~7-10 s).
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md
