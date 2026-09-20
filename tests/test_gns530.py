@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from navmath import Point, destination, great_circle_nm  # noqa: E402
+from navmath import Point, angle_diff, destination, great_circle_nm  # noqa: E402
 from navdata.model import (  # noqa: E402
     Airport,
     LegType,
@@ -1530,3 +1530,48 @@ def test_ent_on_the_charts_page_does_not_raise_gpsnav_has_no_io():
     g = Gns530(d)
     _to_charts_page(g)
     g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))       # must not raise
+
+
+def _left_hold_state(g, turn, entry_arrival):
+    import dataclasses
+    char = next(w for w in g.fpl.waypoints if w.ident == "CHAR")
+    char = dataclasses.replace(char, hold_turn=turn)      # PlanWaypoint is frozen
+    g._start_hold(char, arrival_true=entry_arrival, gs_kt=130.0)
+    return g._hold_state
+
+
+def test_hold_inbound_turn_follows_the_hold_direction_not_the_shortest_way(db):
+    """F43 (KLNS ILS 08 missed, KUPPS left-turn hold): the turn from the
+    outbound/teardrop leg back onto the inbound course took the shortest way,
+    not the hold's direction - a ~150 deg RIGHT turn in a LEFT hold, leaving
+    the aircraft on the far side of the fix flying away from it. The INBOUND
+    phase must steer in the hold's own turn direction."""
+    g = _hold_procedure(db)
+    for turn, want in (("L", -1.0), ("R", 1.0)):
+        hs = _left_hold_state(g, turn, 0.0)
+        assert hs["sign"] == want
+        hs["phase"] = "OUTBOUND"
+        char = next(w for w in g.fpl.waypoints if w.ident == "CHAR")
+        # at the end of the outbound leg, still pointed outbound
+        end = destination(char.pos, hs["leg_hdg"], hs["leg_nm"])
+        ns = g.update(end, hs["leg_hdg"], 130.0, 1.0)
+        assert hs["phase"] == "INBOUND"
+        ns = g.update(end, hs["leg_hdg"], 130.0, 1.0)
+        # commanded course is ahead of the track on the hold's turn side
+        assert angle_diff(ns.dtk, hs["leg_hdg"]) * want > 0
+
+
+def test_parallel_entry_first_inbound_turn_is_opposite_the_hold_direction(db):
+    """AIM 5-3-8: after a parallel entry's outbound leg the first turn is
+    toward the non-holding side (opposite the hold's own direction)."""
+    g = _hold_procedure(db)
+    # right-hand hold, inbound == 0 deg true (see _hold_procedure); arriving
+    # heading 250 is in the parallel sector
+    hs = _left_hold_state(g, "R", 250.0)
+    if hs["entry"] != "parallel":
+        pytest.skip("fixture geometry didn't produce a parallel entry")
+    hs["phase"] = "OUTBOUND"
+    char = next(w for w in g.fpl.waypoints if w.ident == "CHAR")
+    end = destination(char.pos, hs["leg_hdg"], hs["leg_nm"])
+    g.update(end, hs["leg_hdg"], 130.0, 1.0)
+    assert hs["turn_dir"] == -hs["sign"]

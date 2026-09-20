@@ -96,6 +96,7 @@ _WPT_ALERT_SEC = 10.0
 # aircraft is past the fix and moving away - treat the CPA as "reached"
 # rather than waiting indefinitely for an exact _FIX_CAPTURE_NM hit that a
 # wide entry (e.g. a teardrop's ~210 deg return turn) may never quite land.
+_HOLD_TURN_DONE_DEG = 100.0   # inbound turn hands back to normal intercept steering inside this
 _HOLD_CPA_MARGIN_NM = 1.0
 
 # GPS CDI full-scale (each side), by phase of flight - GNS 530 Pilot's Guide
@@ -1856,6 +1857,8 @@ class GpsNav:
             "sign": sign, "leg_nm": leg_nm, "phase": "OUTBOUND", "leg_hdg": leg_hdg,
             "single_circuit": wp.hold_single_circuit, "lap": 1, "exit_requested": False,
             "min_dist_to_fix": None,   # closest approach seen this INBOUND leg - see _step_hold
+            "entry": entry,
+            "turn_dir": sign, "turn_done": True,   # set per lap when the INBOUND leg begins
         }
         self.suspended = True
 
@@ -1889,12 +1892,29 @@ class GpsNav:
         xtk = cross_track_nm(a, b, pos)
         leg_len = great_circle_nm(a, b)
         along = along_track_nm(a, b, pos)
+        if hs["phase"] == "INBOUND" and not hs["turn_done"]:
+            if abs(angle_diff(self._track, hs["inbound"])) > _HOLD_TURN_DONE_DEG:
+                # still swinging round to the inbound course: steer a course
+                # 80 deg ahead of the track IN the hold's turn direction, so
+                # the (shortest-turn) follower keeps turning that way
+                dtk = norm360(self._track + hs["turn_dir"] * 80.0)
+                xtk = 0.0
+            else:
+                hs["turn_done"] = True
         tke = angle_diff(self._track, dtk)
 
         if hs["phase"] == "OUTBOUND":
             dtg = max(0.0, leg_len - along)
             if along >= leg_len - 0.05:
                 hs["phase"] = "INBOUND"
+                # The turn back onto the inbound course goes in the hold's
+                # own direction (a teardrop's ~210 deg return turn, and every
+                # racetrack lap) - except a parallel entry's first turn, which
+                # AIM 5-3-8 flies the OPPOSITE way (toward the non-holding
+                # side). The sim only ever takes the shortest turn, which is
+                # the wrong way round for exactly these cases.
+                hs["turn_dir"] = -hs["sign"] if (hs["entry"] == "parallel" and hs["lap"] == 1)                     else hs["sign"]
+                hs["turn_done"] = False
         else:
             # Capture (and the DTG/DIS readout) on the INBOUND leg uses
             # straight-line distance to the fix itself, not along-track

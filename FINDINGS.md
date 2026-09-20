@@ -682,6 +682,28 @@ was invalid). It now draws a horizontal needle riding the vertical dot scale
 needle whenever the glideslope isn't valid (a localizer with no usable GS,
 or GS lost). Applies to `draw_nav_head` and `draw_hsi_head` in every layout.
 
+
+### F43 — Missed-approach hold at KUPPS (KLNS ILS 08) turned the wrong way
+Playtest (2026-09-19): "when going missed on the ILS 08 at KLNS, the hold at
+KUPPS is incorrectly flown." KUPPS is a left-turn hold (inbound 152.7 mag).
+Flying the missed in a headless sim: the entry choice was right (arriving
+on the outbound course -> teardrop, leg heading outbound+30), but the turn
+from the teardrop/outbound leg back onto the inbound course went
+**right ~150 deg** (352 -> 44 -> 134 -> 162) instead of left ~210 deg. The
+hold is flown as synthetic legs and the sim only ever takes the shortest
+turn, so the return turn ignored the hold's direction; the aircraft ended
+up southeast of the fix flying *away* from it while "inbound", and the lap
+"completed" at the closest point of that bad pass. The same shortest-way
+ambiguity applied to every racetrack lap's 180 deg turn, and to a parallel
+entry's first turn, which AIM 5-3-8 flies opposite the hold direction.
+**Fix:** `GpsNav._step_hold` records `entry`, and when the INBOUND leg
+begins sets `turn_dir` (the hold's direction; opposite for a parallel
+entry's first lap). Until the track is within 100 deg of the inbound course
+(`_HOLD_TURN_DONE_DEG`) it publishes a course 80 deg ahead of the track on
+that side, so the follower keeps turning the correct way, then hands back
+to the normal intercept. Sim now: 352 -> 300 -> 210 -> 141, intercepts
+inbound, and later laps turn left too. Two new tests fail without the fix.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md
