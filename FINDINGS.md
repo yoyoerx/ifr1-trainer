@@ -704,6 +704,23 @@ that side, so the follower keeps turning the correct way, then hands back
 to the normal intercept. Sim now: 352 -> 300 -> 210 -> 141, intercepts
 inbound, and later laps turn left too. Two new tests fail without the fix.
 
+
+### F44 — AP NAV/GPSS/APR wandered slowly about the course in any wind
+Playtest (2026-09-19): "The autopilot does not seem to hold course tightly,
+there is a lot of deviation and slow oscillating compared to holding a
+perfect line." Measured in a headless EMI-KLNS run: still air was perfect
+(0.001 nm), but a 25 kt crosswind gave 0.10 nm RMS / 0.30 nm max cross-track
+in a slow (~5 min) damped oscillation. Cause: the AP commands a *heading*
+(DTK +/- an intercept angle) and knew nothing about wind, so the needed crab
+was learned only by the slow integral trim, overshooting on the way.
+**Fix:** the AP now measures drift (`own.track_deg - own.heading_deg`) and
+subtracts it from the heading command (`Autopilot._drift`, capped at 30 deg)
+in NAV (GPS and VLOC), GPSS and APR/REV - i.e. it steers a desired *track*
+and crabs into the wind immediately, as a real GPS-steering AP effectively
+does. Same runs: 25 kt crosswind 0.003 nm RMS / 0.009 max (NAV), 0.003 /
+0.007 (GPSS), 40 kt crosswind 0.001; the ILS 08 intercept still converges.
+The F38 integral trim stays as a small residual term.
+
 ---
 
 ## Deferred — milestone-scale, tracked in WORKING.md

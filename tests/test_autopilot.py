@@ -292,3 +292,22 @@ def test_apr_builds_wind_drift_trim_for_a_steady_localizer_offset():
         c2 = ap2.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
                         vloc_course_deg=90.0, vloc_deflection=1.0, vloc_valid=True)
     assert c2.heading == pytest.approx(90.0 + 22.0)
+
+
+def test_nav_crabs_into_the_wind_from_track_vs_heading():
+    """F44: NAV/GPSS/APR steer a desired *track*; the heading command must be
+    that track minus the measured drift (track - heading), so a crosswind is
+    crabbed out at once instead of being learned slowly by the integral trim
+    (slow, wide oscillation about the line)."""
+    ap = Autopilot()
+    ap.press_nav()
+    own = Own(heading=30.0)
+    own.track_deg = 40.0                 # drifting 10 deg right of heading
+    cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), own, 0.0, dt=0.1)
+    assert cmd.heading == pytest.approx(30.0)      # DTK 40 - drift 10
+    own.track_deg = 20.0                 # drifting left instead
+    cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), own, 0.0, dt=0.1)
+    assert cmd.heading == pytest.approx(60.0)      # DTK 40 + 20
+    # no track available (or no drift): unchanged from before
+    cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), Own(heading=30.0), 0.0, dt=0.1)
+    assert cmd.heading == pytest.approx(40.0)

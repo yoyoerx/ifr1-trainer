@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from navmath import norm360
+from navmath import norm180, norm360
 
 __all__ = ["Lat", "Vert", "Commands", "Autopilot"]
 
@@ -62,6 +62,7 @@ class Commands:
 _NAV_GAIN = 8.0        # deg intercept / nm XTK  (NAV, analog CDI)
 _APR_GAIN = 13.0       # deg intercept / nm XTK  (APR, tighter)
 _GPSS_GAIN = 12.0      # deg / nm  (digital roll steering, crisp)
+_MAX_DRIFT_DEG = 30.0  # cap on the wind-drift correction applied to a track command
 _VLOC_GAIN = 22.0      # deg / unit-deflection   (localizer)
 _VLOC_I_BAND = 0.2     # only integrate while |deflection| is this small
 _VLOC_I_MAX = 8.0      # deg - drift trim authority
@@ -302,6 +303,19 @@ class Autopilot:
         if live:
             self.armed_lat = None
 
+    @staticmethod
+    def _drift(own) -> float:
+        """Wind-drift angle (deg, + = track is right of heading) measured from
+        the aircraft's own track vs heading. NAV/APR steer a desired *track*;
+        the heading command is that track minus this drift, so a crosswind is
+        crabbed out immediately instead of being learned slowly by the integral
+        trim (which left slow, wide oscillations - "not a perfect line")."""
+        trk = getattr(own, "track_deg", None)
+        hdg = getattr(own, "heading_deg", None)
+        if trk is None or hdg is None:
+            return 0.0
+        return _clamp(norm180(trk - hdg), -_MAX_DRIFT_DEG, _MAX_DRIFT_DEG)
+
     def _vloc_intercept(self, dev: float, dt: float) -> float:
         """Intercept angle (deg, + = turn right of the course) for a VOR/LOC
         needle deflection ``dev`` (+ = fly right): proportional, plus a small
@@ -340,13 +354,13 @@ class Autopilot:
                 if vloc_valid and vloc_course_deg is not None:
                     dev = vloc_deflection or 0.0
                     intercept = self._vloc_intercept(dev, dt)
-                    return norm360(vloc_course_deg + magvar + intercept)
+                    return norm360(vloc_course_deg + magvar + intercept - self._drift(own))
             elif nav_state is not None and getattr(nav_state, "dtk", None) is not None:
                 xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
                 gain = _GPSS_GAIN if self.gpss else _NAV_GAIN
                 self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
                 intercept = _clamp(-xtk * gain + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
-                return norm360(nav_state.dtk + intercept)
+                return norm360(nav_state.dtk + intercept - self._drift(own))
 
         if lat in (Lat.APR, Lat.REV) and vloc_valid and vloc_course_deg is not None:
             dev = (vloc_deflection or 0.0) * (-1.0 if lat is Lat.REV else 1.0)
@@ -355,10 +369,11 @@ class Autopilot:
                 xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
                 self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
                 return norm360(nav_state.dtk + _clamp(-xtk * _GPSS_GAIN + self._xtk_i,
-                                                     -_MAX_INTERCEPT, _MAX_INTERCEPT))
+                                                     -_MAX_INTERCEPT, _MAX_INTERCEPT)
+                               - self._drift(own))
             intercept = self._vloc_intercept(dev, dt)
             crs = vloc_course_deg + (180.0 if lat is Lat.REV else 0.0)
-            return norm360(crs + magvar + intercept)
+            return norm360(crs + magvar + intercept - self._drift(own))
 
         return norm360(hdg)          # LVL / OFF / armed-not-captured: wings level
 
