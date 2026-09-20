@@ -1211,9 +1211,18 @@ def _on_key(e, w: World, ui: dict) -> None:
             g.handle_event(Event(mode=Mode.FMS1, outer=1))
         return
 
+    if getattr(g, "_leg_confirm", None) is not None:     # "Activate Leg?" window
+        if k in (pygame.K_ESCAPE, pygame.K_BACKSPACE, pygame.K_d):
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+        elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+        return
+
     dlg = getattr(g, "_dto_dialog", None)
     if dlg is not None:                       # Direct-To page has the keyboard
-        if k == pygame.K_ESCAPE or k == pygame.K_BACKSPACE:
+        if k == pygame.K_d and dlg.leg_row is not None and not dlg.confirming:
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))   # 2nd DCT -> Activate Leg?
+        elif k == pygame.K_ESCAPE or k == pygame.K_BACKSPACE:
             g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
         elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
             g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))

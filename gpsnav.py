@@ -393,6 +393,9 @@ class DirectToEntry:
     chars: list[str] = field(default_factory=lambda: [" "] * _IDENT_LEN)
     cursor: int = 0
     confirming: bool = False   # True once ENT has confirmed the ident -> "Activate?"
+    # set when DCT was pressed with the Flight Plan cursor on a leg's TO waypoint:
+    # a second DCT press turns this dialog into the "Activate Leg?" window
+    leg_row: int | None = None
 
     @classmethod
     def seeded(cls, ident: str = "") -> "DirectToEntry":
@@ -616,6 +619,7 @@ class GpsNav:
         self.wpt_entry = DirectToEntry.seeded("")   # WPT-page identifier lookup
         self.nrst_sel = 0                            # selection row on a NRST page
         self._fpl_edit: dict | None = None           # {"row": int, "buf": DirectToEntry?}
+        self._leg_confirm: dict | None = None        # "Activate Leg?" window: {"row": int}
         self._pending_menu = False       # MNU pressed; menu content is render-tier
         self._fpl_menu: FplMenu | None = None    # MNU pop-up: Flight Plan / Catalog page
         self.fpl_catalog: list[FlightPlan | None] = [None] * CATALOG_SIZE  # FPL 01-19
@@ -1050,11 +1054,26 @@ class GpsNav:
             self._proc_event(pressed, outer, inner)
             return
 
+        # the "Activate Leg?" window (DCT twice on a highlighted FPL waypoint)
+        if self._leg_confirm is not None:
+            for btn in pressed:
+                if btn == "ENT":
+                    self._activate_leg(self._leg_confirm["row"])
+                    self._leg_confirm = None
+                elif btn in ("CLR", "DCT"):
+                    self._leg_confirm = None
+            return
+
         # the Direct-To dialog is a modal overlay - it owns every input
         if self._dto_dialog is not None:
             for btn in pressed:
                 if btn == "ENT":
                     self._confirm()
+                elif btn == "DCT" and self._dto_dialog is not None                         and self._dto_dialog.leg_row is not None                         and not self._dto_dialog.confirming:
+                    # second DCT press on a highlighted flight-plan leg (Pilot's
+                    # Guide sec.4 p.60): swap to the "Activate Leg?" confirmation
+                    self._leg_confirm = {"row": self._dto_dialog.leg_row}
+                    self._dto_dialog = None
                 elif btn in ("CLR", "DCT"):
                     self._cancel()
             # once "Activate?" is highlighted the identifier is locked in -
@@ -1510,12 +1529,44 @@ class GpsNav:
         TO waypoint (or the current Direct-To target); the knobs then edit the
         identifier and ENT resolves + activates it."""
         seed = ""
-        if self.dto is not None:
+        leg_row = None
+        row = self._fpl_cursor_row()
+        if row is not None:
+            # Flight Plan page, cursor on a waypoint: DCT acts on THAT waypoint
+            # (Pilot's Guide sec.3 p.47 "highlight the desired waypoint, then press
+            # direct-to"); a second DCT press activates its leg (sec.4 p.60).
+            seed = self.fpl.waypoints[row].ident
+            leg_row = row if row >= 1 else None
+        elif self.dto is not None:
             seed = self.dto.target.ident
         elif (self.fpl.has_active_leg and not self.suspended
               and self.fpl.to_wp is not None):
             seed = self.fpl.to_wp.ident
         self._dto_dialog = DirectToEntry.seeded(seed)
+        self._dto_dialog.leg_row = leg_row
+
+    def _fpl_cursor_row(self) -> int | None:
+        """Index of the flight-plan waypoint under the Flight Plan page's cursor
+        (None when that page/cursor isn't up, the cursor is in an entry field, or
+        it sits on the blank end-of-plan row)."""
+        ed = self._fpl_edit
+        if (ed is None or not self.cursor.cursor_on or ed.get("buf") is not None
+                or self.cursor.page_name != "Flight Plan"):
+            return None
+        row = ed.get("row", -1)
+        return row if 0 <= row < len(self.fpl.waypoints) else None
+
+    def _activate_leg(self, row: int) -> None:
+        """Activate Leg? confirmed: navigate the flight-plan leg ending at ``row``
+        (previous waypoint -> row), skipping whatever came before it. Unlike a
+        Direct-To the course is the plan's own leg, not present position -> fix."""
+        if not (1 <= row < len(self.fpl.waypoints)):
+            return
+        self.dto = None
+        self.suspended = False
+        self._susp_at = None
+        self._hold_state = None
+        self.fpl.activate_leg(row)
 
     def _confirm(self) -> None:
         """ENT on the Select Direct-To Waypoint page. Per the Pilot's Guide

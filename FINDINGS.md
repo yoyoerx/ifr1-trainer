@@ -750,6 +750,29 @@ and "Steep turn ahead" (arc turn-anticipation > 90 s) messages.
 
 ---
 
+### F46 — DCT on a highlighted flight-plan waypoint (Activate Leg?)
+Request (2026-09-20): on the real 530 you select a step in the flight plan and
+press direct-to to jump to that leg, instead of the dialog asking for a new
+waypoint. Pilot's Guide (190-00181-00, docs/reference/GNS530_Pilots_Guide.pdf)
+sec.3 p.47: with a list displayed, "press the small right knob to activate the
+cursor, highlight the desired waypoint, then press direct-to"; sec.4 p.60
+"Flight Plan Leg Selection": "activate the cursor and rotate the large right
+knob to highlight the desired destination waypoint; press direct-to **twice**
+to display an 'Activate Leg?' confirmation window; with 'Activate?'
+highlighted, press ENT" - also for a procedure turn, DME arc or hold leg.
+Before, DCT always opened the dialog pre-filled with the *active* TO waypoint
+whatever the cursor highlighted. **Fix (`gpsnav`):** with the Flight Plan
+cursor on a waypoint, the first DCT opens the Direct-To page pre-filled with
+*that* waypoint (`_fpl_cursor_row`; ENT, ENT = an ordinary Direct-To); a second
+DCT swaps it for the "Activate Leg?" window (`_leg_confirm`, drawn by
+`render._activate_leg_page`), and ENT runs `_activate_leg`: the plan leg
+(previous waypoint -> highlighted one) becomes active, dropping any Direct-To,
+SUSP or hold in progress - the course is the plan's own leg, not present
+position to the fix. CLR (or another DCT) cancels. Row 0 (the departure) has
+no leg ending at it, so it stays a plain Direct-To. Keyboard: `D` twice.
+
+---
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

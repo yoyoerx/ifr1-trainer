@@ -1632,3 +1632,63 @@ def test_arc_leg_reports_the_tangent_dtk_and_arc_dtg(db):
     ns = g.update(mid, 135.0, 110.0, 1.0)
     assert ns.xtk_nm == pytest.approx(1.0, abs=0.05)                   # right of a clockwise arc
     assert ns.dtk == pytest.approx(135.0, abs=0.5)
+
+
+# --------------------------------------------------------------------------- #
+# Flight Plan page: DCT on a highlighted waypoint (Pilot's Guide p.47 / p.60)  #
+# --------------------------------------------------------------------------- #
+def _fpl_cursor_on(g, row):
+    """Flight Plan page, small-knob cursor on, big knob moved to ``row``."""
+    g.cursor.go_to_flight_plan()
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
+    assert g._fpl_edit is not None
+    g._fpl_edit["row"] = row
+
+
+def test_dct_on_a_highlighted_fpl_waypoint_prefills_that_waypoint(g):
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    g.update(Point(40.0, -74.0), 0.0, 120.0)
+    _fpl_cursor_on(g, 2)
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    assert g._dto_dialog is not None and g._dto_dialog.ident() == "CHAR"   # not the active TO
+
+
+def test_dct_twice_on_a_fpl_waypoint_activates_that_leg_after_ent(g):
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
+    assert g.fpl.active == 1
+    g.update(Point(40.0, -74.0), 0.0, 120.0)
+    _fpl_cursor_on(g, 3)
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    assert g._dto_dialog is None and g._leg_confirm == {"row": 3}      # "Activate Leg?"
+    assert g.fpl.active == 1                                          # nothing happens yet
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+    assert g._leg_confirm is None and g.dto is None
+    assert g.fpl.active == 3                                          # CHAR -> DELT leg
+    ns = g.update(Point(40.0, -74.0), 0.0, 120.0)
+    assert ns.mode == "LEG" and ns.from_ident == "CHAR" and ns.to_ident == "DELT"
+
+
+def test_activate_leg_can_be_cancelled_and_clears_a_direct_to(g):
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
+    g.update(Point(40.0, -74.0), 0.0, 120.0)
+    g.direct_to("BRAVO")
+    _fpl_cursor_on(g, 3)
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))           # cancel
+    assert g._leg_confirm is None and g.fpl.active == 1 and g.dto is not None
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+    assert g.dto is None and g.fpl.active == 3                        # the leg replaces the D->
+
+
+def test_dct_on_the_first_waypoint_row_is_a_plain_direct_to(g):
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    g.update(Point(40.0, -74.0), 0.0, 120.0)
+    _fpl_cursor_on(g, 0)                                              # the departure: no leg ends there
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    assert g._dto_dialog is not None and g._dto_dialog.leg_row is None
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))           # 2nd press just cancels
+    assert g._dto_dialog is None and g._leg_confirm is None

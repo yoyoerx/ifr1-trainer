@@ -908,12 +908,31 @@ class Renderer:
             self._bezel_key_labels(x0, y0, bw, bh, var)
         if getattr(sc.gns, "_proc_dialog", None) is not None:
             self._proc_page(sc, scr)
+        elif getattr(sc.gns, "_leg_confirm", None) is not None:
+            self._activate_leg_page(sc, scr)
         elif getattr(sc.gns, "_dto_dialog", None) is not None:
             self._direct_to_page(sc, scr)
         elif getattr(sc, "show_messages", False):
             self._message_page(sc, scr)
         elif getattr(sc.gns, "_fpl_menu", None) is not None:
             self._fpl_menu_page(sc, scr)
+
+    def _activate_leg_page(self, sc: Scene, scr: pygame.Rect):
+        """The "Activate Leg?" confirmation (DCT pressed twice on a highlighted
+        flight-plan waypoint): shows the leg that will become active."""
+        wps = sc.gns.fpl.waypoints
+        row = sc.gns._leg_confirm["row"]
+        box = pygame.Rect(scr.x + 8, scr.y + 24, scr.w - 16, min(110, scr.h - 34))
+        pygame.draw.rect(self.surf, (10, 14, 18), box)
+        pygame.draw.rect(self.surf, MAGENTA, box, width=1)
+        self._t("ACTIVATE LEG", box.x + 8, box.y + 6, font=self.f_sm, color=MAGENTA)
+        if 1 <= row < len(wps):
+            self._t(f"{wps[row - 1].ident} -> {wps[row].ident}", box.x + 14, box.y + 30,
+                    font=self.f_md, color=WHITE)
+        self._t("Activate?", box.right - 10, box.bottom - 34, font=self.f_sm,
+                color=AMBER, right=True)
+        self._t("ENT=activate  CLR=cancel", box.x + 14, box.bottom - 18,
+                font=self.f_sm, color=DIM)
 
     def _direct_to_page(self, sc: Scene, scr: pygame.Rect):
         """Select Direct-To Waypoint page: the editable identifier + a live
