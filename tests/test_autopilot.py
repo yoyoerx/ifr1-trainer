@@ -443,3 +443,47 @@ def test_gpss_turn_rate_limit_is_110_percent_of_standard_rate():
     c = ap.update(Nav(dtk=90.0, xtk=0.0), Own(), 0.0, vloc_course_deg=90.0,
                   vloc_deflection=0.0, vloc_valid=True)
     assert c.turn_rate_dps == pytest.approx(3.3)         # GPSS APR flies the GPS course too
+
+
+# --------------------------------------------------------------------------- #
+# NAV flies the HSI course pointer, GPSS flies the GPS (POH sec.3.1.2 / 3.1.3)
+# --------------------------------------------------------------------------- #
+def _gps_nav_run(pointer_offset, gpss=False, n=1500):
+    """Closed loop on a 360-degree leg (magvar 0): the needle is the GPS's own deviation."""
+    import math
+    ap = Autopilot(); ap.press_nav()
+    if gpss:
+        ap.press_nav()
+    x, hdg, gs, dt = 0.0, 360.0, 110.0, 0.5             # x = nm right of the leg
+    for _ in range(n):
+        nav = Nav(dtk=360.0, xtk=x)
+        ptr = None if pointer_offset is None else (360.0 + pointer_offset) % 360.0
+        cmd = ap.update(nav, Own(heading=hdg, gs=gs), 0.0, dt=dt, gps_course_deg=ptr).heading
+        err = (cmd - hdg + 180.0) % 360.0 - 180.0
+        rate = ap._rate_frac and ap._rate_frac * 3.0 or 3.0
+        hdg = (hdg + max(-rate * dt, min(rate * dt, err))) % 360.0
+        x += gs / 3600.0 * dt * math.sin(math.radians(hdg))
+    return x
+
+
+def test_nav_on_gps_flies_the_selected_course_pointer():
+    assert abs(_gps_nav_run(0.0)) < 0.05                         # pointer on the DTK: tracks the leg
+    assert abs(_gps_nav_run(None)) < 0.05                        # slaved to the DTK: same thing
+    # a pointer left 20 deg off parks the aircraft off the leg (5 nm CDI scale here)
+    assert abs(_gps_nav_run(20.0)) > 1.0
+    assert abs(_gps_nav_run(-20.0)) > 1.0
+
+
+def test_gpss_ignores_the_course_pointer():
+    """POH sec.3.1.3: 'the autopilot will not accept any course error input from the Course
+    Pointer (HSI)'."""
+    assert abs(_gps_nav_run(20.0, gpss=True)) < 0.05
+
+
+def test_pointer_only_matters_to_nav_on_a_gps_leg():
+    ap = Autopilot(); ap.press_nav()
+    c = ap.update(Nav(dtk=90.0, xtk=0.0), Own(heading=200.0), 0.0, gps_course_deg=45.0)
+    assert c.heading == pytest.approx(45.0)                      # pointer + 0 deflection
+    ap2 = Autopilot(); ap2.press_nav()
+    c2 = ap2.update(Nav(dtk=90.0, xtk=0.0), Own(heading=200.0), 0.0)
+    assert c2.heading == pytest.approx(90.0)                     # no pointer given: the DTK

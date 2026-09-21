@@ -1686,3 +1686,26 @@ def test_gs_scale_draws_a_horizontal_needle_across_the_face_and_a_flag_when_inva
     off = px(False, 0.0)
     assert not any(row(off, y).count(render.GPS_GREEN) >= 100 for y in range(240))
     assert any(c == (66 * 1, 40, 40) for y in range(240) for c in row(off, y))   # the GS flag box
+
+
+def test_manual_ap_course_shows_the_nav1_pointer_on_a_gps_cdi_and_auto_slaves_it_to_dtk(db):
+    import instruments as instr
+    from navmath import destination
+    w = _bare_world(db)
+    w.magvar = 0.0
+    w.gns.load_flight_plan(["ALFA", "BRAVO"])
+    ac = destination(w.gns.fpl.waypoints[0].pos, 45.0, 3.0)
+    nav = w.gns.update(ac, 0.0, 120.0)
+    own = instr.Ownship(ac, 0.0, 0.0, 120.0, 5000.0, 0.0)
+    w.radios.nav1.set_obs(300.0)
+    w.ap_course = "auto"
+    assert w._gps_pointer() is None
+    assert w._panel(own, nav).cdi.course_deg == pytest.approx(nav.dtk, abs=1.0)
+    w.ap_course = "manual"
+    assert w._gps_pointer() == pytest.approx(300.0)
+    assert w._panel(own, nav).cdi.course_deg == pytest.approx(300.0)   # the pilot's pointer, not the DTK
+
+
+def test_ap_course_defaults_to_manual_and_is_a_cli_flag():
+    assert main_mod.parse_args(["--headless", "--no-device"]).ap_course == "manual"
+    assert main_mod.parse_args(["--headless", "--no-device", "--ap-course", "auto"]).ap_course == "auto"

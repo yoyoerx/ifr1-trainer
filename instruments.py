@@ -318,6 +318,7 @@ def compute_panel(
     adf: TunedAdf | None = None,
     phase: Phase = Phase.ENROUTE,
     markers=(),
+    gps_course_deg: float | None = None,     # HSI course pointer (mag) shown on a GPS CDI; None = the DTK
 ) -> Panel:
     nav1 = nav1 or TunedNav()
     source = getattr(nav, "cdi_source", "GPS") if nav is not None else "GPS"
@@ -340,7 +341,8 @@ def compute_panel(
             full_scale_nm=fs_nm,
             to_from=getattr(nav, "to_from", "TO") or "TO",
             valid=True,
-            course_deg=own.mag(nav.dtk) if nav.dtk is not None else 0.0,
+            course_deg=(norm360(gps_course_deg) if gps_course_deg is not None
+                        else own.mag(nav.dtk) if nav.dtk is not None else 0.0),
         )
     else:
         cdi = CDI(source=source, valid=False)

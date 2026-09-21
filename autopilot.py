@@ -347,6 +347,7 @@ class Autopilot:
         vloc_valid: bool = False,
         gs_deflection: float = 0.0,
         gs_valid: bool = False,
+        gps_course_deg: float | None = None,
     ) -> Commands:
         if not self.engaged:
             self.trim = 0
@@ -360,7 +361,8 @@ class Autopilot:
 
         self._rate_frac = None
         cmd_heading = self._lateral_command(nav_state, own, magvar, dt,
-                                            vloc_course_deg, vloc_deflection, vloc_valid)
+                                            vloc_course_deg, vloc_deflection, vloc_valid,
+                                            gps_course_deg)
         cmd_alt, cmd_vs, clear_vs = self._vertical_command(alt, gs_kt, gs_deflection)
 
         if self.vertical is Vert.VS:
@@ -518,7 +520,8 @@ class Autopilot:
         return norm360(nav_state.dtk + angle - self._drift(own))
 
     def _lateral_command(self, nav_state, own, magvar, dt,
-                         vloc_course_deg, vloc_deflection, vloc_valid) -> float:
+                         vloc_course_deg, vloc_deflection, vloc_valid,
+                         gps_course_deg=None) -> float:
         lat = self.lateral
         hdg = getattr(own, "heading_deg", 0.0)
 
@@ -542,7 +545,12 @@ class Autopilot:
                     return self._gps_track_command(nav_state, own, dt)
                 scale = getattr(nav_state, "cdi_scale_nm", None) or _DEFAULT_CDI_SCALE_NM
                 xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
-                return self._couple(-xtk / scale, nav_state.dtk, own, dt, soft_ok=True, src="NAV/GPS")
+                # POH sec.3.1.2: NAV flies the course *selected on the HSI* against the CDI needle.
+                # The needle is the GPS's deviation from its own leg; the course is the pointer, so a
+                # pointer left off the DTK leaves the aircraft parked off the leg. `None` = the pointer
+                # is slaved to the DTK (the trainer's `--ap-course auto`).
+                course = nav_state.dtk if gps_course_deg is None else norm360(gps_course_deg + magvar)
+                return self._couple(-xtk / scale, course, own, dt, soft_ok=True, src="NAV/GPS")
 
         if lat in (Lat.APR, Lat.REV) and vloc_valid and vloc_course_deg is not None:
             dev = (vloc_deflection or 0.0) * (-1.0 if lat is Lat.REV else 1.0)

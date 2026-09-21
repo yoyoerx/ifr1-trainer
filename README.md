@@ -257,6 +257,15 @@ hardware at all). This is the full list, straight from `main._on_key`.
 | `G` | GPSS toggle |
 | `9` / `0` | AP VS knob −1 / +1 |
 
+**Autopilot NAV and the course pointer (`--ap-course`).** Like the real S-TEC 55X + GNS 530, **NAV on a
+GPS leg flies the course selected on the HSI** (S-TEC POH sec.3.1.2) against the needle, so you must keep
+the pointer on the leg's course - turn it with the NAV1 CRS knob (`O` / `Shift+O`) - and the 530 posts
+**"Set course to ###°"** when it is more than 10° off (Pilot's Guide p.175). Leave it off and the
+aircraft settles parallel to, not on, the leg. **GPSS** (press NAV a second time / `G`) flies the GPS and
+ignores the pointer (POH sec.3.1.3). The default is `--ap-course manual`; `--ap-course auto` slaves the
+pointer to the desired track (use it for unattended scripted runs, which would otherwise wander at every
+turn). Config key `ap_course`.
+
 **While a modal page is open** (these keys are captured, overriding the tables above):
 
 *Direct-To entry page* (opened by `D` or the IFR-1 DCT key):

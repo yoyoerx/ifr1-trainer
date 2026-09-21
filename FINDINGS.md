@@ -882,6 +882,30 @@ sub-45 deg cuts at high closure rate, pilot-selectable intercept angle, NAV flas
 intercept turn-in model (11.5 s of closure + the 15% band) and the stage gains (50/30/22 deg per
 unit) are the trainer's; the POH gives the bounds and the timeline, not the curves.
 
+### F51 — NAV flies the HSI course pointer; GPSS flies the GPS; "Set course to ###"
+
+Third step of the POH review (R11). NAV on a GPS leg used the leg's DTK directly - it behaved as
+GPSS with a different label, and the HSI course card was slaved to the DTK. Per the S-TEC 55X POH
+(4th Ed.) sec.3.1.2 NAV intercepts and tracks the course *set on the HSI* ("Set Course Pointer to
+desired course"), whereas NAV GPSS (sec.3.1.3) "will not accept any course error input from the
+Course Pointer". GNS 530 Pilot's Guide p.175: "Set course to [###] - The course select for the external
+CDI (or HSI) should be set to the specified course. The message only occurs when the current selected
+course is greater than 10 deg different from the desired track" (also p.80 for arcs).
+
+* One HSI pointer, the NAV1 CRS card (unchanged key bindings: `O`/`Shift+O`, IFR-1 shift+knob).
+  `World._gps_pointer()` feeds it to `Autopilot.update(gps_course_deg=...)` and to
+  `compute_panel(gps_course_deg=...)`, so the CDI/HSI card shows the pilot's course.
+* `Autopilot._lateral_command`: NAV/GPS = coupler(deviation = -xtk/scale, course = pointer);
+  GPSS unchanged (DTK). A pointer left off parks the aircraft off the leg: headless 2 nm off,
+  0 wind, 1 nm CDI scale - pointer on DTK 0.01 nm; +8 deg 0.37 nm; +20 deg 0.81 nm; -20 deg 0.20 nm;
+  GPSS with +20 deg 0.00 nm.
+* `GpsNav.check_course_select(pointer, magvar)`: condition-driven message, posted above 10 deg,
+  updated if the required course changes, withdrawn when set right, off in OBS mode / VLOC / slaved.
+* `--ap-course manual|auto` (config `ap_course`), **default manual** (faithful). `auto` keeps the pointer
+  slaved to DTK for unattended scripted runs, which otherwise wander at each turn. FMS2 (`--dual`) is unchanged.
+* Not modelled: the 530's reading of the external selector is assumed to be the NAV1 card at all times
+  (the p.173 "Heading input failure" installation fault is not simulated).
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

@@ -1713,3 +1713,36 @@ def test_mnu_has_no_activate_leg_without_a_highlighted_waypoint(g):
     g.cursor.go_to_flight_plan()
     g.handle_event(Event(mode=Mode.FMS1, pressed=("MNU",)))
     assert g._fpl_menu is not None and "ACTIVATE LEG" not in g._fpl_menu.options
+
+
+# --------------------------------------------------------------------------- #
+# "Set course to ###" (Pilot's Guide p.175)
+# --------------------------------------------------------------------------- #
+def test_set_course_message_only_when_the_selected_course_is_over_10_deg_off(g):
+    """p.175: 'Set course to [###] - The course select for the external CDI (or HSI) should be
+    set to the specified course. The message only occurs when the current selected course is
+    greater than 10 degrees different from the desired track.'"""
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    ns = g.update(Point(40.0, -74.0), 0.0, 120.0)
+    dtk = ns.dtk
+    g.check_course_select(dtk, 0.0)                            # on the DTK
+    assert not any(m.startswith("Set course to") for m in g.peek_messages())
+    g.check_course_select((dtk + 10.0) % 360.0, 0.0)           # exactly 10 deg: not "greater than"
+    assert not any(m.startswith("Set course to") for m in g.peek_messages())
+    g.check_course_select((dtk + 11.0) % 360.0, 0.0)
+    msgs = [m for m in g.peek_messages() if m.startswith("Set course to")]
+    assert msgs == [f"Set course to {dtk:03.0f}°"]
+    g.check_course_select((dtk + 12.0) % 360.0, 0.0)           # still off: no duplicate
+    assert len([m for m in g.peek_messages() if m.startswith("Set course to")]) == 1
+    g.check_course_select(dtk, 0.0)                            # pilot dials it in: withdrawn
+    assert not any(m.startswith("Set course to") for m in g.peek_messages())
+
+
+def test_set_course_message_uses_the_magnetic_desired_track_and_is_off_when_slaved(g):
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    ns = g.update(Point(40.0, -74.0), 0.0, 120.0)
+    g.check_course_select(0.0 if ns.dtk > 60 else 180.0, 10.0)      # magvar 10 E: DTK mag = true - 10
+    msg = [m for m in g.peek_messages() if m.startswith("Set course to")][0]
+    assert msg == f"Set course to {(ns.dtk - 10.0) % 360.0:03.0f}°"
+    g.check_course_select(None, 10.0)                          # pointer slaved / unread
+    assert not any(m.startswith("Set course to") for m in g.peek_messages())

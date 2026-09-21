@@ -117,6 +117,9 @@ class Config:
         self.tas = float(c["tas"])
         self.altitude = float(c["altitude"])
         self.gps_follow = not bool(c["manual"])
+        self.ap_course = str(c.get("ap_course", "manual")).lower()   # manual | auto
+        if self.ap_course not in ("manual", "auto"):
+            raise ValueError(f"ap_course must be 'manual' or 'auto', not {self.ap_course!r}")
         self.layout = str(c["layout"])
         self.unit = str(c["unit"])
         self.dual = bool(c.get("dual", False))
@@ -187,6 +190,11 @@ def parse_args(argv=None) -> Config:
     p.add_argument("--no-device", dest="no_device", action="store_true", default=S)
     p.add_argument("--manual", action="store_true", default=S,
                    help="start with GPS-follow off")
+    p.add_argument("--ap-course", dest="ap_course", choices=("manual", "auto"), default=S,
+                   help="how the autopilot's NAV mode gets its GPS course: 'manual' (default) = the "
+                        "HSI course pointer you set with the NAV1 CRS knob, as on the real S-TEC 55X + "
+                        "GNS 530 (the 530 prompts 'Set course to ###'); 'auto' slaves the pointer to "
+                        "the GPS desired track")
     p.add_argument("--xplane-feed", dest="xplane_feed", action="store_true", default=S,
                    help="take live ownship position from X-Plane over UDP")
     p.add_argument("--xplane-host", dest="xplane_host", default=S,
@@ -342,6 +350,9 @@ class World:
         self.ap.heading_bug = round(hdg)
         self.magvar = _local_magvar(self.db, start)
         self.gps_follow = cfg.gps_follow
+        # "manual": NAV on the GPS flies the course selected on the HSI (S-TEC POH sec.3.1.2) and
+        # the 530 says "Set course to ###" (Pilot's Guide p.175); "auto" slaves the pointer to DTK.
+        self.ap_course = cfg.ap_course
         self.manual_heading = self.sim.heading
         self.show_msg = False                 # Message page visible (MSG key / M)
         self.baro_inhg = 29.92                # altimeter setting (COM2 shift knob)
@@ -450,6 +461,7 @@ class World:
         st = self.sim.state
         self.radios.resolve(self.db, st.pos, st.altitude_ft)
         nav = self.gns.update(st.pos, st.track_deg, st.gs_kt, dt)
+        self.gns.check_course_select(self._gps_pointer(), self.magvar)
         self._auto_vloc(nav)
         if self.gns2 is not None:              # FMS2: stays live, doesn't drive AP/instruments
             self.gns2.update(st.pos, st.track_deg, st.gs_kt, dt)
@@ -462,6 +474,7 @@ class World:
                 vloc_course_deg=self.radios.nav1.course_deg,
                 vloc_deflection=n1.deflection, vloc_valid=n1.valid,
                 gs_deflection=n1.gs_deflection, gs_valid=n1.gs_valid,
+                gps_course_deg=self._gps_pointer(),
             )
             self._apply(cmd)
         elif self.gps_follow:
@@ -537,7 +550,14 @@ class World:
             own_i, nav, phase=_phase_for(nav),
             nav1=_tuned_nav(self.radios.nav1) if vloc else None,
             nav2=_tuned_nav(self.radios.nav2) if vloc else None,
+            gps_course_deg=self._gps_pointer(),
         )
+
+    def _gps_pointer(self) -> float | None:
+        """The HSI course pointer (magnetic) a GPS-sourced CDI/autopilot works from, or None when it
+        is slaved to the DTK (`--ap-course auto`). It is the same NAV1 CRS card the pilot turns for
+        a VOR - one pointer, whichever source is selected."""
+        return self.radios.nav1.obs_deg if getattr(self, "ap_course", "auto") == "manual" else None
 
     def _panel2(self, own_i):
         """FMS2's instrument panel (``--dual`` only): FMS2 drives NAV2 the way

@@ -55,6 +55,7 @@ DEFAULTS: dict[str, object] = {
     "dual": False,         # run a second GNS unit (the other of 530/430) as FMS2
     "no_device": False,
     "manual": False,
+    "ap_course": "manual",  # NAV on the GPS flies the HSI course pointer ("manual") or the DTK ("auto")
     "xplane_feed": False,
     "xplane_host": "127.0.0.1",
     "gdl90": False,

@@ -92,6 +92,7 @@ def _clampf(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+_COURSE_SELECT_MSG_DEG = 10.0   # Pilot's Guide p.175: "Set course to" only if the selected course differs by more than this
 # distance (nm) inside which a fly-over / final fix is considered "reached"
 _FIX_CAPTURE_NM = 0.30
 # how far ahead of a sequence point the "WPT" alert starts (seconds of flight)
@@ -614,6 +615,7 @@ class GpsNav:
         self.cdi_source = "GPS"
         self.cursor = PageCursor()
         self.messages: list[str] = []
+        self._course_msg: str | None = None     # the live "Set course to ###" message, if posted
         self._dto_dialog: DirectToEntry | None = None
         self._proc_dialog: ProcSelect | None = None   # PROC key selector overlay
         self._proc_airport = ""                        # airport of the last-loaded procedure
@@ -1031,6 +1033,28 @@ class GpsNav:
 
     def toggle_cdi_source(self) -> None:
         self.cdi_source = "VLOC" if self.cdi_source == "GPS" else "GPS"
+
+    def check_course_select(self, pointer_mag: float | None, magvar: float) -> None:
+        """GNS 530 Pilot's Guide p.175: "Set course to [###] - The course select for the external
+        CDI (or HSI) should be set to the specified course. The message only occurs when the
+        current selected course is greater than 10 degrees different from the desired track."
+        ``pointer_mag`` is the external course select (None = not read / slaved to the DTK).
+        The message is condition-driven: posted when it starts to apply or the required course
+        changes, withdrawn when the pointer is set right (or the guidance stops applying)."""
+        want = None
+        nav = self._nav
+        if (pointer_mag is not None and self.cdi_source == "GPS" and not self.obs_active
+                and nav is not None and getattr(nav, "valid", False) and nav.dtk is not None):
+            dtk_mag = norm360(nav.dtk - magvar)
+            if abs(angle_diff(pointer_mag, dtk_mag)) > _COURSE_SELECT_MSG_DEG:
+                want = f"Set course to {dtk_mag:03.0f}\u00b0"
+        if want == self._course_msg:
+            return
+        if self._course_msg in self.messages:
+            self.messages.remove(self._course_msg)
+        self._course_msg = want
+        if want is not None:
+            self.messages.append(want)
 
     def ack_messages(self) -> list[str]:
         msgs, self.messages = self.messages, []
