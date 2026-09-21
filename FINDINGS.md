@@ -812,6 +812,47 @@ LOC-only/LDA-style) raised `ValueError` and were skipped, silently, as "malforme
 Now a non-digit category is 0 (LOC-only). Regression coverage: the KBIH LOC-only
 record in `tests/test_faa2xp.py`.
 
+### F49 — Autopilot / GPS-follow intercept of an active leg: 45 deg cut, then roll onto the course
+
+**Symptom:** off a leg, the trainer's autopilot (and the scripted GPS-follow) curved
+gradually toward the next fix instead of cutting to the leg and tracking it. Cause: the
+intercept was purely proportional (`-xtk * 8 deg/nm`, cap 30; follow-leg `12 deg/nm`),
+so the angle shrank continuously as the offset closed - 6 nm off, heading was still
+~5 deg from the bearing to the fix after 7 minutes, reaching the course line only
+asymptotically near the fix.
+
+**What the documents say.** The GNS 530 Pilot's Guide is silent on the autopilot's
+intercept angle: it only says the autopilot follows the course selected on the external
+CDI/HSI (pp.80, 94, 189). The behaviour is the autopilot's. For the S-TEC 55X the POH
+(4th Ed., Nov 30 2007, sec.3.1.2, printed p.3-4) states: "If the Course Deviation
+Indication (CDI) is at full scale (100%) needle deflection from center, then the
+autopilot will establish the aircraft on a 45 degree intercept angle relative to the
+selected course. Even if CDI needle deflection is less than 100%, the autopilot may
+still establish an intercept angle of 45 degrees, provided that the aircraft's closure
+rate to the selected course is sufficiently slow. Otherwise, the intercept angle will
+be less than 45 degrees." ... "the turn will always begin between 100% and 20% CDI
+needle deflection" ... "it limits the aircraft's turn rate to 90% of a standard rate
+turn" ... "When the aircraft arrives at 15% CDI needle deflection, the course is
+captured." Sec.3.1.3.1 gives NAV GPSS the same sequence ("establish the aircraft on the
+selected intercept angle ... until it must turn the aircraft onto the next course segment
+to prevent overshoot"). Source: https://www.flying20club.org/documents/Sys_55_X_POH_(4th_Ed).pdf
+
+**Fix.** `autopilot.nav_intercept_deg(xtk, scale, gs)`: a flat 45 deg cut back toward the
+course until the turn-in distance, then an angle shrinking linearly to zero at the course
+line. Turn-in distance = the lead a 90%-standard-rate turn from 45 deg needs (x1.5
+margin), clamped to 20%..100% of the current CDI full scale (5 / 1 / 0.3 nm). Used by
+NAV and GPSS on GPS legs and by `SimModel.follow_leg` (same function, so the two paths
+agree). The wind-drift integral only accumulates inside the 15% capture band (it wound
+up during the 45 deg cut); the "still intercepting" annunciator clears at 15% of the CDI
+scale instead of a fixed 1.2 nm. Headless: 6 nm off, 110 kt, wind 0 / 270@30 / 120@35 ->
+max overshoot 0.00-0.01 nm, on the course line in 235-380 s; KLNS D08 / PABR S26 arcs
+unchanged (RMS 0.01 / 0.08 nm); ILS 08 (VLOC path) byte-identical.
+
+**Not modelled** (POH-described, not implemented): a sub-45 deg cut at high closure rate,
+the CAP / CAP SOFT gain steps 15 / 30 / 75 s after capture, and the pilot-selectable
+intercept angle (HDG bug + HDG/NAV). The VOR/LOC (VLOC) intercept keeps its own tuned
+law. The 1.5x turn-in margin is the trainer's choice (POH: 20-100%, "variable").
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

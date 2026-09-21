@@ -139,9 +139,13 @@ def test_position_advances_along_track():
 def test_follow_leg_sets_intercept_heading_toward_course():
     sim = SimModel(pos=ORIGIN, heading_deg=360.0, tas_kt=120.0)
     sim.follow_leg(NavState(valid=True, dtk=360.0, xtk_nm=2.0))    # 2 nm right of course
-    assert sim.target_heading == pytest.approx(336.0, abs=0.01)    # cut left to intercept
+    # S-TEC POH sec.3.1.2: a 45 deg cut back to the course while well off it (2 nm >
+    # the 1 nm turn-in point at the default 5 nm CDI scale)
+    assert sim.target_heading == pytest.approx(315.0, abs=0.01)
     sim.follow_leg(NavState(valid=True, dtk=360.0, xtk_nm=-2.0))
-    assert sim.target_heading == pytest.approx(24.0, abs=0.01)
+    assert sim.target_heading == pytest.approx(45.0, abs=0.01)
+    sim.follow_leg(NavState(valid=True, dtk=360.0, xtk_nm=0.5))    # inside the turn-in: shallower
+    assert 315.0 < sim.target_heading < 360.0
 
 
 def test_follow_leg_includes_wind_correction():

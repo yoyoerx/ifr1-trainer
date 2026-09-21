@@ -126,14 +126,58 @@ def test_nav_press_again_engages_gpss():
     assert ap.lateral is Lat.NAV and not ap.gpss
 
 
-def test_gpss_tightens_nav_tracking():
-    soft = Autopilot(); soft.engage(); soft.lateral = Lat.NAV
-    hard = Autopilot(); hard.engage(); hard.lateral = Lat.NAV; hard.gpss = True
-    n = Nav(dtk=360.0, xtk=1.0)                        # 1 nm right of course
-    h_soft = soft.update(n, Own(), 0.0).heading
-    h_hard = hard.update(n, Own(), 0.0).heading
-    # both cut left of 360; GPSS cuts harder
-    assert (360 - h_hard) % 360 > (360 - h_soft) % 360
+def test_gps_leg_full_scale_offset_is_a_45_degree_cut():
+    """S-TEC 55X POH (4th Ed.) sec.3.1.2: at full-scale CDI deflection 'the autopilot
+    will establish the aircraft on a 45 degree intercept angle relative to the
+    selected course' - a cut to the course, NOT a heading toward the next fix."""
+    for gpss in (False, True):                          # sec.3.1.3.1: GPSS intercepts the same way
+        ap = Autopilot(); ap.engage(); ap.lateral = Lat.NAV; ap.gpss = gpss
+        right = ap.update(Nav(dtk=360.0, xtk=5.0), Own(), 0.0).heading    # 5 nm right = full scale
+        assert right == pytest.approx(315.0)
+        ap2 = Autopilot(); ap2.engage(); ap2.lateral = Lat.NAV; ap2.gpss = gpss
+        assert ap2.update(Nav(dtk=360.0, xtk=-12.0), Own(), 0.0).heading == pytest.approx(45.0)
+
+
+def test_intercept_angle_shrinks_to_zero_at_the_course_and_is_symmetric():
+    from autopilot import nav_intercept_deg
+    angles = [nav_intercept_deg(x, 5.0, 110.0) for x in (5.0, 2.0, 1.0, 0.5, 0.1, 0.0)]
+    assert angles[0] == pytest.approx(-45.0) and angles[-1] == 0.0
+    assert angles == sorted(angles)                     # -45 ... 0, monotonic
+    assert nav_intercept_deg(-0.7, 5.0, 110.0) == pytest.approx(-nav_intercept_deg(0.7, 5.0, 110.0))
+
+
+def test_turn_in_starts_between_20_and_100_percent_of_full_scale():
+    """POH sec.3.1.2: 'the turn will always begin between 100% and 20% CDI needle deflection'."""
+    from autopilot import turn_in_distance_nm
+    for scale in (5.0, 1.0, 0.3):
+        for gs in (60.0, 110.0, 250.0, 450.0):
+            d = turn_in_distance_nm(gs, scale)
+            assert 0.20 * scale - 1e-9 <= d <= scale + 1e-9
+    assert turn_in_distance_nm(300.0, 5.0) >= turn_in_distance_nm(80.0, 5.0)   # faster -> earlier
+    assert turn_in_distance_nm(110.0, 5.0) == pytest.approx(1.0)                # 20% floor at 5 nm scale
+
+
+def test_closed_loop_intercept_rolls_onto_the_leg_without_overshoot():
+    """Off a long leg: hold 45 deg to the course, then roll onto it - the heading stays
+    45 deg from the course until the turn-in point (it does not curve toward the fix)."""
+    import math
+    ap = Autopilot(); ap.engage(); ap.lateral = Lat.NAV
+    x, along, hdg, gs, dt = 6.0, 0.0, 360.0, 110.0, 0.5    # course 360; x = nm right of it
+    fix_along, max_left, hdgs = 40.0, 0.0, []
+    for _ in range(1200):
+        cmd = ap.update(Nav(dtk=360.0, xtk=x), Own(heading=hdg, gs=gs), 0.0, dt=dt).heading
+        err = (cmd - hdg + 180.0) % 360.0 - 180.0
+        hdg = (hdg + max(-2.7 * dt, min(2.7 * dt, err))) % 360.0
+        x += gs / 3600.0 * dt * math.sin(math.radians(hdg))
+        along += gs / 3600.0 * dt * math.cos(math.radians(hdg))
+        max_left = max(max_left, -x)
+        hdgs.append((x, (hdg + 180.0) % 360.0 - 180.0))
+        if along > fix_along:
+            break
+    assert max_left < 0.25                                   # crossed the course by well under 0.25 nm
+    assert abs(x) < 0.05                                     # and is on it before the fix
+    far = [h for xx, h in hdgs if xx > 1.5]
+    assert far and all(-46.0 < h < -40.0 for h in far[40:])  # ~45 deg cut while far off (after the initial turn)
 
 
 # --------------------------------------------------------------------------- #

@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from autopilot import nav_intercept_deg
 from navmath import Point, angle_diff, destination, norm360, wind_triangle
 from windsaloft import WindsAloftProfile, isa_temp_c
 
@@ -161,13 +162,13 @@ class SimModel:
         (a ``gns530.NavState``). No-op if there is no valid lateral guidance."""
         if nav is None or not getattr(nav, "valid", False) or nav.dtk is None:
             return
-        xtk = nav.xtk_nm or 0.0
-        # xtk +ve == right of course -> turn left -> subtract the intercept angle
-        intercept = _clamp(xtk * _INTERCEPT_GAIN_DEG_PER_NM,
-                           -_MAX_INTERCEPT_DEG, _MAX_INTERCEPT_DEG)
+        # same S-TEC intercept the coupled autopilot flies (POH sec.3.1.2): a 45 deg cut
+        # back toward the course, rolling onto it before the CDI centres
+        intercept = nav_intercept_deg(nav.xtk_nm or 0.0,
+                                      getattr(nav, "cdi_scale_nm", None), self._gs)
         wind_from, wind_kt = self._wind_here()
         wind_hdg, _, _ = wind_triangle(self.tas, nav.dtk, wind_from, wind_kt)
-        self.target_heading = norm360(wind_hdg - intercept)
+        self.target_heading = norm360(wind_hdg + intercept)
 
     # -- integration ---------------------------------------------
     def step(self, dt_s: float) -> Ownship:

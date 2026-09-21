@@ -7,9 +7,15 @@ attitude reference), so the base engaged roll state is simply "wings level"
     HDG   NAV   APR   REV   ALT   VS        + a VS/ALT knob and TRIM arrows
 
 * NAV / APR / REV steer an active intercept (up to a 45 deg cut) the instant
-  they're pressed - POH sec.4.2.2: "the turn will always begin between 100%
-  (full-scale) needle deflection and 20% of full-scale" - then *capture*
-  (tighten onto the centered needle) once alive. There is no wings-level
+  they're pressed - S-TEC 55X POH (4th Ed.) sec.3.1.2: "If the CDI is at full
+  scale (100%) needle deflection from center, then the autopilot will
+  establish the aircraft on a 45 degree intercept angle relative to the
+  selected course ... the turn will always begin between 100% and 20% CDI
+  needle deflection ... When the aircraft arrives at 15% CDI needle deflection,
+  the course is captured" - then *capture* (tighten onto the centered needle)
+  once alive. On a GPS leg that is `nav_intercept_deg`: a flat 45 deg cut until
+  the turn-in point, then a shrinking angle so the aircraft rolls onto the leg's
+  course line and tracks it (rather than curving asymptotically toward the fix). There is no wings-level
   dead zone while "armed" waiting for the needle; `armed_lat` is only the
   not-yet-captured annunciator flag.
 * **GPSS** (GPS roll steering) is a modifier on NAV/APR: when on, the AP flies
@@ -27,6 +33,7 @@ Pure - only primitives cross the boundary.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -68,7 +75,18 @@ _VLOC_I_BAND = 0.2     # only integrate while |deflection| is this small
 _VLOC_I_MAX = 8.0      # deg - drift trim authority
 _VLOC_I_GAIN = 3.0     # deg of trim per (unit-deflection . s) - wind-drift trim on VOR/LOC
 _MAX_INTERCEPT = 30.0
-_CAPTURE_XTK_NM = 1.2
+_CAPTURE_XTK_NM = 1.2   # fallback capture band when the CDI scale is unknown
+
+# S-TEC 55X POH sec.3.1.2 (4th Ed.): 45 deg intercept at full-scale deflection; the
+# turn onto the course "will always begin between 100% and 20% CDI needle
+# deflection" (variable with closure rate); "at 15% CDI needle deflection, the
+# course is captured"; the intercept turn is limited to 90% of a standard-rate turn.
+_NAV_INTERCEPT_DEG = 45.0
+_TURN_IN_MIN_FRAC = 0.20        # of full-scale CDI deflection
+_TURN_IN_MAX_FRAC = 1.00
+_CAPTURE_FRAC = 0.15
+_INTERCEPT_TURN_RATE_DPS = 3.0 * 0.9
+_DEFAULT_CDI_SCALE_NM = 5.0
 _CAPTURE_DEFLECTION = 0.75
 _VS_KNOB_STEP = 100.0
 
@@ -86,6 +104,24 @@ _XTK_I_MAX = 15.0      # deg - trim authority is modest, capture still leads
 
 def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
+
+
+def turn_in_distance_nm(gs_kt: float, scale_nm: float) -> float:
+    """Distance from the course (nm) at which the turn onto it begins: the lead a
+    90%-standard-rate turn from a 45 deg cut needs (with margin), held within the
+    POH's 100%..20% of full-scale CDI deflection."""
+    scale = scale_nm if scale_nm and scale_nm > 0 else _DEFAULT_CDI_SCALE_NM
+    radius = max(gs_kt, 0.0) / 3600.0 / math.radians(_INTERCEPT_TURN_RATE_DPS)
+    lead = 1.5 * radius * (1.0 - math.cos(math.radians(_NAV_INTERCEPT_DEG)))
+    return _clamp(lead, _TURN_IN_MIN_FRAC * scale, _TURN_IN_MAX_FRAC * scale)
+
+
+def nav_intercept_deg(xtk_nm: float, scale_nm: float, gs_kt: float) -> float:
+    """Angle (deg, + = right) to add to the leg's DTK for a GPS leg ``xtk_nm`` off
+    it (+ = ownship right of course): a flat 45 deg cut back toward the course
+    until the turn-in distance, then shrinking to zero at the course line."""
+    k = _NAV_INTERCEPT_DEG / turn_in_distance_nm(gs_kt, scale_nm)
+    return -_clamp(xtk_nm * k, -_NAV_INTERCEPT_DEG, _NAV_INTERCEPT_DEG)
 
 
 @dataclass
@@ -296,7 +332,9 @@ class Autopilot:
         cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
         if self.armed_lat is Lat.NAV and cdi_source != "VLOC":
             xtk = getattr(nav_state, "xtk_nm", None) if nav_state else None
-            live = xtk is not None and abs(xtk) <= _CAPTURE_XTK_NM
+            scale = getattr(nav_state, "cdi_scale_nm", None)
+            band = _CAPTURE_FRAC * scale if scale else _CAPTURE_XTK_NM
+            live = xtk is not None and abs(xtk) <= band
         else:  # APR / REV, or NAV tracking VLOC: track the localizer/VOR needle
             live = (vloc_valid and vloc_deflection is not None
                     and abs(vloc_deflection) <= _CAPTURE_DEFLECTION)
@@ -335,6 +373,22 @@ class Autopilot:
                 self._xtk_i *= max(0.0, 1.0 - 0.3 * dt)     # bleed off during an intercept
         return _clamp(dev * _VLOC_GAIN + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
 
+    def _gps_track_command(self, nav_state, own, dt) -> float:
+        """Desired track for a GPS leg: DTK plus the S-TEC intercept angle, plus a
+        slow wind-drift trim that only accumulates once inside the capture band
+        (integrating through the 45 deg cut would wind it up and overshoot)."""
+        xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
+        scale = getattr(nav_state, "cdi_scale_nm", None) or _DEFAULT_CDI_SCALE_NM
+        gs = getattr(own, "gs_kt", 0.0) or 0.0
+        if dt:
+            if abs(xtk) <= _CAPTURE_FRAC * scale:
+                self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
+            else:
+                self._xtk_i *= max(0.0, 1.0 - 0.3 * dt)
+        angle = _clamp(nav_intercept_deg(xtk, scale, gs) + self._xtk_i,
+                       -_NAV_INTERCEPT_DEG, _NAV_INTERCEPT_DEG)
+        return norm360(nav_state.dtk + angle - self._drift(own))
+
     def _lateral_command(self, nav_state, own, magvar, dt,
                          vloc_course_deg, vloc_deflection, vloc_valid) -> float:
         lat = self.lateral
@@ -356,21 +410,13 @@ class Autopilot:
                     intercept = self._vloc_intercept(dev, dt)
                     return norm360(vloc_course_deg + magvar + intercept - self._drift(own))
             elif nav_state is not None and getattr(nav_state, "dtk", None) is not None:
-                xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
-                gain = _GPSS_GAIN if self.gpss else _NAV_GAIN
-                self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
-                intercept = _clamp(-xtk * gain + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
-                return norm360(nav_state.dtk + intercept - self._drift(own))
+                return self._gps_track_command(nav_state, own, dt)
 
         if lat in (Lat.APR, Lat.REV) and vloc_valid and vloc_course_deg is not None:
             dev = (vloc_deflection or 0.0) * (-1.0 if lat is Lat.REV else 1.0)
             if self.gpss and lat is Lat.APR and nav_state is not None \
                     and getattr(nav_state, "dtk", None) is not None:
-                xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
-                self._xtk_i = _clamp(self._xtk_i - xtk * _XTK_I_GAIN * dt, -_XTK_I_MAX, _XTK_I_MAX)
-                return norm360(nav_state.dtk + _clamp(-xtk * _GPSS_GAIN + self._xtk_i,
-                                                     -_MAX_INTERCEPT, _MAX_INTERCEPT)
-                               - self._drift(own))
+                return self._gps_track_command(nav_state, own, dt)
             intercept = self._vloc_intercept(dev, dt)
             crs = vloc_course_deg + (180.0 if lat is Lat.REV else 0.0)
             return norm360(crs + magvar + intercept - self._drift(own))
