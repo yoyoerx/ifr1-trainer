@@ -98,6 +98,9 @@ _DEFAULT_CDI_SCALE_NM = 5.0
 _RATE_FRAC = {"INTERCEPT": 0.90, "CAP": 0.90, "CAP SOFT": 0.45, "SOFT": 0.15}
 # deg of course cut per unit deflection by stage: "maximum gain" in CAP, stepping down (POH p.3-4)
 _STAGE_GAIN = {"CAP": 50.0, "CAP SOFT": 30.0, "SOFT": _VLOC_GAIN}
+# sec.3.1.3 / 4.1: GPSS limits the turn rate to 130% (Prog/Comp hardware mod code AM and below),
+# 90% (AN, AP) or 110% (AR and above) of standard rate. The trainer models the newest, AR+.
+_GPSS_RATE_FRAC = 1.10
 _HDG_RATE_FRAC = 0.90           # sec.4.1: HDG, NAV, APR, REV, CWS
 _T_CAP_SOFT = 15.0
 _T_WIND_CORR = 30.0
@@ -501,6 +504,7 @@ class Autopilot:
         """Desired track for a GPS leg: DTK plus the S-TEC intercept angle, plus a
         slow wind-drift trim that only accumulates once inside the capture band
         (integrating through the 45 deg cut would wind it up and overshoot)."""
+        self._rate_frac = _GPSS_RATE_FRAC
         xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
         scale = getattr(nav_state, "cdi_scale_nm", None) or _DEFAULT_CDI_SCALE_NM
         gs = getattr(own, "gs_kt", 0.0) or 0.0

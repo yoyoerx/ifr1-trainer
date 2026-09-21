@@ -428,3 +428,18 @@ def test_hdg_and_wings_level_turn_rates():
     assert ap.update(Nav(), Own(), 0.0).turn_rate_dps == pytest.approx(2.7)     # POH sec.4.1: 90%
     ap.press_hdg()                                                              # -> wings level
     assert ap.update(Nav(), Own(), 0.0).turn_rate_dps is None
+
+
+def test_gpss_turn_rate_limit_is_110_percent_of_standard_rate():
+    """POH sec.3.1.3 / 4.1: GPSS 130% / 90% / 110% by programmer hardware mod code; the
+    trainer models the newest (AR and above) = 110%, vs 90% for NAV/APR/REV/HDG."""
+    gp = Autopilot(); gp.press_nav(); gp.press_nav()
+    assert gp.gpss
+    c = gp.update(Nav(dtk=90.0, xtk=0.0), Own(), 0.0)
+    assert c.turn_rate_dps == pytest.approx(3.3)
+    nv = Autopilot(); nv.press_nav()
+    assert nv.update(Nav(dtk=90.0, xtk=0.0), Own(heading=200.0), 0.0).turn_rate_dps == pytest.approx(2.7)
+    ap = Autopilot(); ap.press_apr(); ap.gpss = True
+    c = ap.update(Nav(dtk=90.0, xtk=0.0), Own(), 0.0, vloc_course_deg=90.0,
+                  vloc_deflection=0.0, vloc_valid=True)
+    assert c.turn_rate_dps == pytest.approx(3.3)         # GPSS APR flies the GPS course too

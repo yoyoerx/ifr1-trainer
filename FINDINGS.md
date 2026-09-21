@@ -874,7 +874,10 @@ NAV on a GPS leg, NAV on VOR/LOC, APR and REV, per S-TEC 55X POH (4th Ed.) sec.3
 Headless: GPS NAV from 0.5/2/6 nm off, wind 0/270@30/120@35 -> overshoot 0.04-0.18 nm on a
 1 nm CDI scale (<=18% of full scale), tracking within ~0.02 nm afterwards (no limit cycle: the
 drift trim is limited to 3 deg and starts 30 s after capture); ILS 08 in 0/270@25/090@30 wind ->
-needle within 2% by ~200 s. Gaps that remain: GPSS turn rate (90/110/130% by hardware code),
+needle within 2% by ~200 s. GPSS turn rate followed (item 2): `_GPSS_RATE_FRAC` = 110% of standard rate, the
+Prog/Comp hardware mod code AR-and-above value (POH sec.3.1.3 / 4.1 list 130% AM and below,
+90% AN/AP, 110% AR and above); GPS-steering headless runs overshoot <= 0.01 nm from 0.5-6 nm off
+in 0/270@30/120@35 wind, arcs unchanged (PABR S26 RMS 0.11 nm in 30 kt). Gaps that remain:
 sub-45 deg cuts at high closure rate, pilot-selectable intercept angle, NAV flashing. The
 intercept turn-in model (11.5 s of closure + the 15% band) and the stage gains (50/30/22 deg per
 unit) are the trainer's; the POH gives the bounds and the timeline, not the curves.
