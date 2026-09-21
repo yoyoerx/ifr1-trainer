@@ -894,6 +894,8 @@ class Renderer:
             self._draw_fpl_catalog(sc, body, rows)
         elif page == "NAV" and sub == "VNAV":
             self._draw_vnav_page(sc, body)
+        elif page == "NAV" and sub == "NAV/COM":
+            self._draw_navcom_page(sc, body)
         elif page == "WPT":
             self._draw_wpt_page(sc, body, sub)
         elif page == "NRST":
@@ -1322,13 +1324,22 @@ class Renderer:
         kind = type(ent).__name__
         self._t(getattr(ent, "name", "") or kind, b.x, y, font=self.f_sm, color=GPS_GREEN)
         y += 16
+        if sub == "Airport Freq":
+            rows = gns.wpt_frequencies(sub)
+            f_on = on and getattr(gns, "wpt_field", 0) == 1
+            self._draw_freq_rows(rows, getattr(gns, "wpt_sel", 0) if f_on else -1, b.x, y, b.bottom, b.right)
+            if on:
+                self._t("ENT = standby" if f_on else "large knob: list", b.right, b.y,
+                        font=self.f_sm, color=DIM, right=True)
+            return
         if kind == "Airport":
             info = [f"ELEV {getattr(ent, 'elev_ft', 0) or 0} ft",
                     f"RWY  {getattr(ent, 'longest_runway_ft', 0) or 0} ft",
                     f"TWR  {ent.comm('TWR') or '---'}",
                     f"ATIS {ent.comm('ATIS', 'ASOS', 'AWOS') or '---'}"]
         elif kind == "VhfNavaid":
-            info = [f"FREQ {ent.freq_mhz:07.3f}", f"VAR  {ent.magvar_deg:+.0f}°"]
+            f_on = on and getattr(gns, "wpt_field", 0) == 1      # frequency field highlighted: ENT -> VLOC standby
+            info = [f"{'>' if f_on else ' '}FREQ {ent.freq_mhz:07.3f}", f"VAR  {ent.magvar_deg:+.0f}°"]
         elif kind == "NdbNavaid":
             info = [f"FREQ {ent.freq_khz:.0f} kHz"]
         else:
@@ -1338,7 +1349,42 @@ class Renderer:
             y += 15
         self._t(f"BRG {brg:03.0f}°   {dis:6.1f} nm", b.x, y + 2, font=self.f_sm, color=CYAN)
         if on:
-            self._t("ENT = Direct-To", b.right, b.y, font=self.f_sm, color=DIM, right=True)
+            hint = "ENT = standby" if (kind == "VhfNavaid" and getattr(gns, "wpt_field", 0) == 1) else "ENT = Direct-To"
+            self._t(hint, b.right, b.y, font=self.f_sm, color=DIM, right=True)
+
+    def _draw_freq_rows(self, rows, sel: int, x: int, y: int, bottom: int, right: int):
+        """A scrolling list of tunable frequencies (Airport Frequency / NAV/COM pages); ``sel`` -1 = none highlighted."""
+        if not rows:
+            self._t("no frequencies", x, y, font=self.f_sm, color=DIM)
+            return
+        room = max(1, (bottom - y) // 15)
+        top = max(0, min(max(0, len(rows) - room), sel - room // 2)) if sel >= 0 else 0
+        for i, fr in enumerate(rows[top:top + room], start=top):
+            hot = i == sel
+            col = AMBER if hot else (CYAN if fr.radio == "VLOC" else TEXT)
+            note = f" {fr.note}" if fr.note else ""
+            self._t(f"{'>' if hot else ' '} {fr.label:<10} {fr.mhz:7.3f}{note}", x, y, font=self.f_sm, color=col)
+            y += 15
+        if len(rows) > room:
+            more = ("^" if top > 0 else " ") + ("v" if top + room < len(rows) else " ")
+            self._t(more, right - 2, bottom - 15, font=self.f_sm, color=AMBER, right=True)
+
+    def _draw_navcom_page(self, sc: Scene, b: pygame.Rect):
+        """NAV/COM page: the frequencies of the flight-plan airports, tunable (Pilot's Guide p.24)."""
+        gns = sc.gns
+        on = getattr(gns.cursor, "cursor_on", False)
+        apt = gns.navcom_airport()
+        self._t("NAV/COM", b.x, b.y, font=self.f_sm, color=DIM)
+        if apt is None:
+            self._t("no airport in flight plan", b.x, b.y + 20, font=self.f_sm, color=DIM)
+            return
+        f_on = on and gns.navcom_sel >= 0
+        self._t(f"{gns.navcom_role()}  {apt.ident}", b.x, b.y + 20, font=self.f_md,
+                color=AMBER if (on and not f_on) else GPS_GREEN)
+        self._draw_freq_rows(gns.navcom_frequencies(), gns.navcom_sel if on else -1, b.x, b.y + 46, b.bottom, b.right)
+        if on:
+            self._t("ENT = standby" if f_on else "small knob: airport", b.right, b.y,
+                    font=self.f_sm, color=DIM, right=True)
 
     def _draw_nrst_page(self, sc: Scene, b: pygame.Rect, sub: str):
         gns = sc.gns
@@ -1347,7 +1393,8 @@ class Renderer:
         sel = getattr(gns, "nrst_sel", 0)
         self._t(sub.upper(), b.x, b.y, font=self.f_sm, color=DIM)
         if on:
-            self._t("ENT = Direct-To", b.right, b.y, font=self.f_sm, color=DIM, right=True)
+            hint = "ENT = standby" if getattr(gns, "nrst_col", 0) == 1 else "ENT = Direct-To"
+            self._t(hint, b.right - 16, b.y, font=self.f_sm, color=DIM, right=True)
         mv = sc.magvar
         y = b.y + 20
         room = max(1, (b.height - 20) // 15)
@@ -1363,10 +1410,19 @@ class Renderer:
         for i, e in enumerate(hits[top:top + room], start=top):
             brg = norm360(initial_bearing(sc.own.pos, e.pos) - mv)
             dis = great_circle_nm(sc.own.pos, e.pos)
-            col = AMBER if (on and i == sel) else TEXT
-            mk = ">" if (on and i == sel) else " "
+            row_on = on and i == sel
+            id_on = row_on and getattr(gns, "nrst_col", 0) == 0
+            mk = ">" if id_on else " "
             self._t(f"{mk} {e.ident:<6} {brg:03.0f}° {dis:6.1f}nm", b.x, y,
-                    font=self.f_sm, color=col)
+                    font=self.f_sm, color=AMBER if id_on else TEXT)
+            fr = gns.nearest_frequency(sub, e) if hasattr(gns, "nearest_frequency") else None
+            if fr is not None:
+                fx = b.right - 64
+                fon = row_on and not id_on
+                self._t(f"{'>' if fon else ' '}{fr.mhz:7.3f}", fx, y, font=self.f_sm,
+                        color=AMBER if fon else (CYAN if fr.radio == "VLOC" else TEXT))
+            elif sub == "Nearest NDB" and getattr(e, "freq_khz", None):
+                self._t(f" {e.freq_khz:.0f}", b.right - 64, y, font=self.f_sm, color=TEXT)
             y += 15
         if len(hits) > room:
             more = ("^" if top > 0 else " ") + ("v" if top + room < len(hits) else " ")

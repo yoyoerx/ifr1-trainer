@@ -2032,3 +2032,127 @@ def test_sbas_state_cycles_and_rejects_unknown_values(db):
     assert [g.cycle_sbas() for _ in range(5)] == ["ADV LOST", "DEGRADED", "LOSS", "OK", "ADV LOST"]
     with pytest.raises(ValueError):
         g.set_sbas("nonsense")
+
+
+# --------------------------------------------------------------------------- #
+# Frequencies from the pages: NRST / WPT / NAV/COM -> standby COM / VLOC (Pilot's Guide sec.1 p.23-25, sec.7 p.116-118)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def fdb(db):
+    from navdata.model import Airport, Runway
+    apt = Airport("KTST", Point(40.26, -74.0), name="TEST FIELD",
+                  runways={"RW08": Runway("RW08", Point(40.26, -74.01), 80.0, ils_ident="ITST", ils_category=1)},
+                  comms={"ATIS": [124.875], "GND": [121.7], "TWR": [118.3], "CTAF": [118.3], "APP": [126.1]})
+    db.add_airport(apt)
+    db.add_vhf(VhfNavaid("ITST", Point(40.26, -74.01), 110.3, nav_class="I"))
+    return db
+
+
+def _knob(g, **kw):
+    g.handle_event(Event(mode=Mode.FMS1, **kw))
+
+
+def _on_page(g, group, page):
+    g.cursor.group = list(PAGE_GROUPS).index(group)
+    g.cursor.page = PAGE_GROUPS[group].index(page)
+
+
+def test_nearest_airport_frequency_goes_to_the_com_standby(fdb):
+    """p.116: highlight the airport's tower/CTAF frequency, ENT places it in the COM standby field."""
+    g = Gns530(fdb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    _on_page(g, "NRST", "Nearest APT")
+    _knob(g, pressed=("KNOB",))                                    # cursor on the airport identifier
+    _knob(g, outer=1)                                              # ... large knob to its frequency
+    assert g.nrst_col == 1
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [("COM", 118.3, "TOWER")]
+    assert g.dto is None                                           # a frequency ENT is not a Direct-To
+    _knob(g, outer=-1)
+    _knob(g, pressed=("ENT",))                                     # back on the identifier: Direct-To as before
+    assert g.dto is not None and g.dto.target.ident == "KTST" and not g.pop_tune_requests()
+
+
+def test_nearest_vor_frequency_goes_to_the_vloc_standby(g):
+    g.update(Point(40.24, -74.0), 0.0, 120.0)
+    _on_page(g, "NRST", "Nearest VOR")
+    _knob(g, pressed=("KNOB",))
+    _knob(g, outer=1)
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [("VLOC", 113.0, "VOR")]
+
+
+def test_airport_frequency_page_lists_com_then_ils_and_tunes_each_radio(fdb):
+    g = Gns530(fdb)
+    _on_page(g, "WPT", "Airport Freq")
+    _knob(g, pressed=("KNOB",))
+    g.wpt_entry = type(g.wpt_entry).seeded("KTST")
+    rows = g.wpt_frequencies("Airport Freq")
+    assert [(r.label, r.mhz, r.radio) for r in rows] == [
+        ("ATIS", 124.875, "COM"), ("GROUND", 121.7, "COM"), ("TOWER", 118.3, "COM"), ("CTAF", 118.3, "COM"),
+        ("APPROACH", 126.1, "COM"), ("ILS 08", 110.3, "VLOC")]
+    assert rows[0].note == "RX"                                    # "RX" next to ATIS: receive only (p.95)
+    _knob(g, outer=1)                                              # off the end of the identifier -> the list
+    assert g.wpt_field == 1
+    _knob(g, outer=5)
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [("VLOC", 110.3, "ILS 08")]
+    _knob(g, outer=-9)                                             # back up past the first row -> identifier again
+    assert g.wpt_field == 0
+
+
+def test_vor_page_frequency_field_tunes_vloc_and_ent_on_the_identifier_stays_direct_to(db):
+    g = Gns530(db)
+    _on_page(g, "WPT", "VOR")
+    _knob(g, pressed=("KNOB",))
+    g.wpt_entry = type(g.wpt_entry).seeded("OOO")
+    _knob(g, outer=1)
+    assert g.wpt_field == 1
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [("VLOC", 113.0, "VOR")]
+
+
+def test_navcom_page_tunes_flight_plan_airport_frequencies(fdb):
+    """p.24: small knob picks the airport, large knob the frequency, ENT -> standby."""
+    g = Gns530(fdb)
+    g.load_flight_plan(["ALFA", "KTST"])
+    assert g.navcom_airports() == ["KTST"] and g.navcom_role() == "Arrival"
+    _on_page(g, "NAV", "NAV/COM")
+    _knob(g, pressed=("KNOB",))
+    assert g.navcom_sel == -1
+    _knob(g, outer=1)
+    _knob(g, outer=1)                                              # GROUND
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [("COM", 121.7, "GROUND")]
+    _knob(g, pressed=("KNOB",))                                    # cursor off: the state is reset for next time
+    assert g.navcom_sel == -1
+
+
+def test_frequency_pages_render(fdb):
+    import pygame
+    from render import Renderer, Scene
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame.init()
+    surf = pygame.display.set_mode((1280, 800))
+    g = Gns530(fdb)
+    g.load_flight_plan(["ALFA", "KTST"])
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    from instruments import compute_panel  # noqa: F401
+    import main as main_mod
+    import sim_model as simmod
+    sim = simmod.SimModel(pos=Point(40.25, -74.0), heading_deg=0.0, tas_kt=120.0)
+    nav, panel, st = main_mod.step_once(g, sim, 0.1, autopilot=False, magvar=0.0)
+    sc = Scene(own=st, nav=nav, panel=panel, gns=g, db=fdb, magvar=0.0, map_range_nm=20.0,
+               autopilot=False, fps=30.0, nearby=[])
+    r = Renderer(surf)
+    for group, page in (("NRST", "Nearest APT"), ("NRST", "Nearest VOR"), ("NAV", "NAV/COM")):
+        _on_page(g, group, page)
+        _knob(g, pressed=("KNOB",))
+        _knob(g, outer=1)
+        r.draw(sc)
+        _knob(g, pressed=("KNOB",))
+    _on_page(g, "WPT", "Airport Freq")
+    g.wpt_entry = type(g.wpt_entry).seeded("KTST")
+    _knob(g, pressed=("KNOB",))
+    _knob(g, outer=1)
+    r.draw(sc)

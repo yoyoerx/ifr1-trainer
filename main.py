@@ -87,6 +87,7 @@ import sim_model as simmod
 import windsaloft
 from autopilot import STD_RATE_DPS as _STD_RATE_DPS, Autopilot
 from radios import RadioStack
+import radios as radios_mod
 
 
 TIME_WARP_LEVELS = (1, 5, 10, 20)   # keyboard 1/2/3/4; see _on_key and run()'s sub-tick loop
@@ -451,6 +452,7 @@ class World:
             self.radios.resolve(self.db, st.pos, st.altitude_ft)
             nav = self.gns.update(st.pos, st.track_deg, st.gs_kt, dt)
             self._auto_vloc(nav)
+            self._apply_tunes()
             if self.gns2 is not None:          # FMS2: stays live, doesn't drive AP/instruments
                 self.gns2.update(st.pos, st.track_deg, st.gs_kt, dt)
             n1 = instr.nav_head(self.radios.nav1, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
@@ -468,6 +470,7 @@ class World:
         nav = self.gns.update(st.pos, st.track_deg, st.gs_kt, dt)
         self.gns.check_course_select(self._gps_pointer(), self.magvar)
         self._auto_vloc(nav)
+        self._apply_tunes()
         if self.gns2 is not None:              # FMS2: stays live, doesn't drive AP/instruments
             self.gns2.update(st.pos, st.track_deg, st.gs_kt, dt)
         n1 = instr.nav_head(self.radios.nav1, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
@@ -504,6 +507,18 @@ class World:
         self.score.sample(nav, st, panel, nav_head=n1,
                           alt_target=self.ap.alt_hold_ft if self.ap.engaged else None)
         return Frame(st, nav, panel, n1, n2, sp, self._panel2(own_i))
+
+    def _apply_tunes(self) -> None:
+        """A frequency picked on a GNS page (NRST / WPT / NAV/COM: ENT on a highlighted frequency) goes to the STANDBY
+        field of that unit's COM or VLOC window - FMS1 to COM1/NAV1, FMS2 to COM2/NAV2 (Pilot's Guide p.23)."""
+        for gns, com, nav in ((self.gns, self.radios.com1, self.radios.nav1),
+                              (self.gns2, self.radios.com2, self.radios.nav2)):
+            for radio, mhz, label in (gns.pop_tune_requests() if gns is not None else []):
+                rx = com if radio == "COM" else nav
+                lo, hi = (radios_mod.COM_MIN, radios_mod.COM_MAX) if radio == "COM" else (radios_mod.NAV_MIN, radios_mod.NAV_MAX)
+                if lo <= mhz <= hi:
+                    rx.standby_mhz = mhz
+                    print(f"{radio} standby -> {mhz:07.3f} ({label})")
 
     def _auto_vloc(self, nav) -> None:
         """Approach VLOC handling. On the real 530W, activating the staged VLOC

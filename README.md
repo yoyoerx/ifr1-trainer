@@ -232,6 +232,7 @@ hardware at all). This is the full list, straight from `main._on_key`.
 |---|---|
 | `PgUp` / `PgDn` | Page within the current group (small knob) |
 | `Shift+PgUp` / `Shift+PgDn` | Page **group**: NAV → WPT → AUX → NRST (large knob) — the only keyboard route to WPT, AUX (incl. Weather), and NRST |
+| GNS pages, cursor on | On Nearest Airport / Nearest VOR, WPT > Airport Freq / VOR and NAV > NAV/COM, the large knob highlights a frequency and **ENT** puts it in the COM or VLOC **standby** field (then flip-flop) - FINDINGS F59 |
 | `Tab` | CRSR (cursor on/off) |
 | `D` | Open the Direct-To entry page |
 | `C` | CLR — cancels an active Direct-To (resumes the nearest flight-plan leg), deletes the selected Flight Plan/Catalog row, or backs out to Default NAV |

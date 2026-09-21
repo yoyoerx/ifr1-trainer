@@ -324,7 +324,7 @@ _MAP_FULL_SCALE_NM = 350.0 / 6076.115   # "CDI scaling continues to tighten from
 PAGE_GROUPS: dict[str, list[str]] = {
     "NAV": ["Default NAV", "Map", "NAV/COM", "Position", "Flight Plan",
             "Flight Plan Catalog", "VNAV"],
-    "WPT": ["Airport", "Intersection", "NDB", "VOR"],
+    "WPT": ["Airport", "Airport Freq", "Intersection", "NDB", "VOR"],
     "AUX": ["Trip Planning", "Utility", "Setup", "Nav Data", "Weather", "Charts"],
     "NRST": ["Nearest APT", "Nearest VOR", "Nearest NDB", "Nearest INT"],
 }
@@ -332,8 +332,48 @@ _GROUP_ORDER = list(PAGE_GROUPS)
 # each WPT sub-page resolves only its own category (Pilot's Guide sec.4.2:
 # the Airport/Intersection/NDB/VOR pages are separate lookups) - the value
 # matches navdata.NavDatabase.find/nearest_fix's ``kind`` argument.
-_WPT_PAGE_KIND = {"Airport": "airport", "Intersection": "waypoint",
+_WPT_PAGES = ("Airport", "Airport Freq", "Intersection", "NDB", "VOR")
+_WPT_PAGE_KIND = {"Airport": "airport", "Airport Freq": "airport", "Intersection": "waypoint",
                   "NDB": "ndb", "VOR": "vhf"}
+
+
+# --------------------------------------------------------------------------- #
+# frequencies the pages can put in the standby COM / VLOC window (Pilot's Guide sec.1 "Auto-Tuning", p.23-25)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class FreqEntry:
+    """One tunable frequency: ``radio`` is "COM" or "VLOC" (which standby field ENT fills)."""
+    label: str
+    mhz: float
+    radio: str
+    note: str = ""            # "RX" = receive only (the guide's ATIS example)
+
+
+# the Airport Frequency page lists "ATIS, clearance delivery, ground control, tower, unicom, approach and departure"
+# (p.95) plus the CTAF the Nearest Airport page shows; ILS / LOC frequencies follow
+_COM_LISTING = (("ATIS", "ATIS"), ("CLNC", "CLEARANCE"), ("GND", "GROUND"), ("TWR", "TOWER"),
+                ("CTAF", "CTAF"), ("UNICOM", "UNICOM"), ("APP", "APPROACH"), ("DEP", "DEPARTURE"))
+
+
+def airport_frequencies(db, apt) -> list[FreqEntry]:
+    """The Airport Frequency / NAV/COM list for one airport: its COM frequencies, then each runway's ILS/LOC."""
+    out: list[FreqEntry] = []
+    for use, label in _COM_LISTING:
+        for mhz in apt.comms.get(use, []):
+            out.append(FreqEntry(label, mhz, "COM", "RX" if use == "ATIS" else ""))
+    for ident, rwy in sorted(apt.runways.items()):
+        if rwy.ils_ident:
+            for n in db.vhf.get(rwy.ils_ident, [])[:1]:
+                out.append(FreqEntry(f"{'ILS' if rwy.ils_category else 'LOC'} {rwy.number}", n.freq_mhz, "VLOC"))
+    return out
+
+
+def airport_com_freq(apt) -> FreqEntry | None:
+    """What the Nearest Airport page shows: "Tower or CTAF Frequency" (p.116)."""
+    for use, label in (("TWR", "TOWER"), ("CTAF", "CTAF"), ("UNICOM", "UNICOM")):
+        if apt.comms.get(use):
+            return FreqEntry(label, apt.comms[use][0], "COM")
+    return None
 
 
 @dataclass
@@ -666,6 +706,12 @@ class GpsNav:
         self._proc_airport = ""                        # airport of the last-loaded procedure
         self.wpt_entry = DirectToEntry.seeded("")   # WPT-page identifier lookup
         self.nrst_sel = 0                            # selection row on a NRST page
+        self.nrst_col = 0                            # 0 = identifier, 1 = frequency (Nearest APT / VOR)
+        self.wpt_field = 0                           # WPT pages: 0 = identifier, 1 = frequency list
+        self.wpt_sel = 0                             # ... the highlighted frequency
+        self.navcom_apt = 0                          # NAV/COM page: which flight-plan airport
+        self.navcom_sel = -1                         # -1 = the airport field, >=0 a frequency row
+        self.tune_requests: list[tuple[str, float, str]] = []   # ("COM"|"VLOC", MHz, label) for main.py
         self._fpl_edit: dict | None = None           # {"row": int, "buf": DirectToEntry?}
         self._leg_confirm: dict | None = None        # "Activate Leg?" window: {"row": int}
         self._pending_menu = False       # MNU pressed; menu content is render-tier
@@ -1256,6 +1302,8 @@ class GpsNav:
                 self.nrst_sel = 0
         else:
             self._fpl_edit = None
+        self.nrst_col = self.wpt_field = self.wpt_sel = 0        # the cursor always (re)starts on the identifier
+        self.navcom_sel = -1
 
     def _page_edit(self, page: str, outer: int, inner: int) -> None:
         if page == "Flight Plan":
@@ -1268,13 +1316,50 @@ class GpsNav:
             elif outer:
                 n = len(self.fpl.waypoints)
                 ed["row"] = max(0, min(n, ed["row"] + outer))
-        elif page in ("Airport", "Intersection", "NDB", "VOR"):
-            self.wpt_entry.move_cursor(outer)
-            self.wpt_entry.scroll_char(inner)
+        elif page in _WPT_PAGES:
+            rows = self.wpt_frequencies(page)
+            if self.wpt_field == 0:
+                # "Rotate the large right knob to highlight the frequency field" (p.105) - off the end of the identifier
+                if (outer > 0 and rows and self.wpt_entry.cursor >= len(self.wpt_entry.ident()) - 1):
+                    self.wpt_field, self.wpt_sel = 1, 0
+                else:
+                    self.wpt_entry.move_cursor(outer)
+                    self.wpt_entry.scroll_char(inner)
+            elif outer:
+                if self.wpt_sel + outer < 0:
+                    self.wpt_field = 0
+                else:
+                    self.wpt_sel = min(len(rows) - 1, self.wpt_sel + outer)
+        elif page == "NAV/COM":
+            rows = self.navcom_frequencies()
+            if self.navcom_sel < 0:
+                idents = self.navcom_airports()
+                if inner and idents:               # "Rotate the small right knob to ... select the desired airport" (p.24)
+                    self.navcom_apt = (self.navcom_apt + inner) % len(idents)
+                if outer > 0 and rows:
+                    self.navcom_sel = 0
+            elif outer:
+                self.navcom_sel = -1 if self.navcom_sel + outer < 0 else min(len(rows) - 1, self.navcom_sel + outer)
         elif page.startswith("Nearest"):
             if outer:
                 hits = self.nearest_for_page(page)
-                self.nrst_sel = max(0, min(max(0, len(hits) - 1), self.nrst_sel + outer))
+                if page in ("Nearest APT", "Nearest VOR") and hits:
+                    # identifier then frequency, row by row: "highlight the COM frequency associated with the desired
+                    # airport" (p.116) / "the frequency associated with the desired VOR" (p.118)
+                    sel, col = self.nrst_sel, self.nrst_col
+                    for _ in range(abs(outer)):
+                        if outer > 0:
+                            if col == 0:
+                                col = 1
+                            elif sel < len(hits) - 1:
+                                sel, col = sel + 1, 0
+                        elif col == 1:
+                            col = 0
+                        elif sel > 0:
+                            sel, col = sel - 1, 1
+                    self.nrst_sel, self.nrst_col = sel, col
+                else:
+                    self.nrst_sel = max(0, min(max(0, len(hits) - 1), self.nrst_sel + outer))
         elif page == "Flight Plan Catalog":
             if outer:
                 self.cat_sel = max(0, min(len(self.fpl_catalog) - 1, self.cat_sel + outer))
@@ -1343,14 +1428,32 @@ class GpsNav:
             wp = PlanWaypoint.from_entry(entry)
             self.fpl.insert(row, wp)
             ed["row"] = row + 1     # cursor follows onto the (now shifted-down) old row
-        elif page in ("Airport", "Intersection", "NDB", "VOR"):
-            entry = self.lookup(self.wpt_entry.ident(), page)
-            if entry is not None:                  # DCT-from-a-WPT-page shortcut
-                self.direct_to(PlanWaypoint.from_entry(entry))
-                self.cursor.go_to_default_nav()
+        elif page in _WPT_PAGES:
+            rows = self.wpt_frequencies(page)
+            if self.wpt_field == 1 and 0 <= self.wpt_sel < len(rows):
+                self._tune(rows[self.wpt_sel])     # ENT on a highlighted frequency: it goes to the standby field
+            elif page == "Airport Freq":
+                if rows and self.cursor.cursor_on:                         # "Press ENT when finished" - on to the frequency list (p.25)
+                    self.wpt_field, self.wpt_sel = 1, 0
+            else:
+                entry = self.lookup(self.wpt_entry.ident(), page)
+                if entry is not None:              # DCT-from-a-WPT-page shortcut
+                    self.direct_to(PlanWaypoint.from_entry(entry))
+                    self.cursor.go_to_default_nav()
+        elif page == "NAV/COM":
+            rows = self.navcom_frequencies()
+            if self.navcom_sel >= 0 and self.navcom_sel < len(rows):
+                self._tune(rows[self.navcom_sel])
+            elif rows and self.cursor.cursor_on:   # ENT on the airport field: on to its frequency list
+                self.navcom_sel = 0
         elif page.startswith("Nearest"):
             hits = self.nearest_for_page(page)
             if hits and 0 <= self.nrst_sel < len(hits):
+                if self.nrst_col == 1:
+                    fr = self.nearest_frequency(page, hits[self.nrst_sel])
+                    if fr is not None:
+                        self._tune(fr)
+                    return
                 self.direct_to(PlanWaypoint.from_entry(hits[self.nrst_sel]))
                 self.cursor.go_to_default_nav()
         elif page == "Flight Plan Catalog":
@@ -1623,6 +1726,52 @@ class GpsNav:
         if page == "Nearest INT":
             return list(self.db.nearest_waypoints(self._pos, 9, max_nm=100.0))
         return []
+
+    # -- frequency auto-tuning (Pilot's Guide sec.1 "Auto-Tuning", p.23-25; sec.7 p.116-118) --
+    def _tune(self, fr: FreqEntry) -> None:
+        """ENT on a highlighted frequency: it goes to the STANDBY field of the COM or VLOC window (the pilot then
+        presses the flip-flop key) - main.py applies the request to the radio stack."""
+        self.tune_requests.append((fr.radio, fr.mhz, fr.label))
+
+    def pop_tune_requests(self) -> list[tuple[str, float, str]]:
+        out, self.tune_requests = self.tune_requests, []
+        return out
+
+    def nearest_frequency(self, page: str, entry) -> FreqEntry | None:
+        """The frequency a Nearest-page row offers: an airport's tower / CTAF, a VOR's frequency."""
+        if page == "Nearest APT":
+            return airport_com_freq(entry)
+        if page == "Nearest VOR" and getattr(entry, "freq_mhz", None):
+            return FreqEntry("VOR", entry.freq_mhz, "VLOC")
+        return None
+
+    def wpt_frequencies(self, page: str) -> list[FreqEntry]:
+        """The tunable rows on a WPT page: the Airport Frequency list, or the VOR page's one frequency field."""
+        ent = self.lookup(self.wpt_entry.ident(), page) if page in ("Airport Freq", "VOR") else None
+        if ent is None:
+            return []
+        if page == "Airport Freq":
+            return airport_frequencies(self.db, ent)
+        return [FreqEntry("VOR", ent.freq_mhz, "VLOC")] if getattr(ent, "freq_mhz", None) else []
+
+    def navcom_airports(self) -> list[str]:
+        """The NAV/COM page's airports: departure, en route and arrival along the flight plan (p.24)."""
+        return self.wx_station_idents(max_n=9)
+
+    def navcom_airport(self):
+        idents = self.navcom_airports()
+        return self.db.airport(idents[self.navcom_apt % len(idents)]) if idents else None
+
+    def navcom_role(self) -> str:
+        idents = self.navcom_airports()
+        if not idents:
+            return ""
+        i = self.navcom_apt % len(idents)
+        return "Departure" if i == 0 and len(idents) > 1 else ("Arrival" if i == len(idents) - 1 else "Enroute")
+
+    def navcom_frequencies(self) -> list[FreqEntry]:
+        apt = self.navcom_airport()
+        return airport_frequencies(self.db, apt) if apt is not None else []
 
     def wx_station_idents(self, *, max_n: int = 6) -> list[str]:
         """Airport idents the Weather page shows: every airport in the active

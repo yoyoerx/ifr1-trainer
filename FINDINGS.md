@@ -1112,6 +1112,28 @@ The three "not modelled" items from F55/F56 (500W Pilot's Guide 190-00357-00 Rev
 Not modelled: the LPV annunciation's yellow background ("safe to continue but a downgrade may occur"), RAIM prediction, the
 message acknowledgement step before the unit "will revert to terminal limits", LOW ALT.
 
+### F59 - Tuning frequencies from the GNS pages (NRST / WPT / NAV/COM)
+
+GNS 530 Pilot's Guide (190-00181-00) sec.1 "Auto-Tuning" p.23-25, sec.6 p.94-95 / p.104-105, sec.7 p.116-118: "highlight
+the desired frequency on any of the main pages and press ENT" puts it in the **standby** field of the COM or VLOC window
+(COM frequencies to COM, navigation frequencies to VLOC); the pilot then presses the flip-flop key.
+
+* **Nearest Airport**: the row shows the tower / CTAF frequency; the large knob steps identifier -> frequency -> next row,
+  ENT on the frequency -> COM standby (p.116). **Nearest VOR**: same, ENT -> VLOC standby (p.118).
+* **WPT > Airport Freq** (new page, third in the guide's WPT group): the airport's ATIS (marked RX, receive only), clearance,
+  ground, tower, CTAF, unicom, approach, departure, then each runway's ILS/LOC (p.94-95). Large knob off the end of the
+  identifier reaches the list; ENT tunes COM or VLOC by the row's type.
+* **WPT > VOR**: the frequency field is highlighted with the large knob; ENT -> VLOC standby (p.105).
+* **NAV > NAV/COM** (the page was only a name before): frequencies for the flight-plan airports, small knob picks the airport
+  (Departure / Enroute / Arrival), large knob the frequency, ENT -> standby (p.24).
+* `GpsNav.tune_requests` -> `main.World._apply_tunes`: FMS1 fills COM1/NAV1, FMS2 COM2/NAV2 (out-of-band values ignored).
+
+Not modelled (guide shows them; the data or the units aren't there): "best available approach" and runway length columns
+on Nearest Airport, the Airport Runway page, "Info?" usage restrictions on frequencies, TX/PT designations, Nearest
+User / ARTCC / FSS / Airspace pages, the 30 s tuning-cursor return timer, 8.33 kHz spacing. NDB frequencies are shown but
+not tunable (no ADF). Trainer choice kept: ENT on a highlighted *identifier* still goes Direct-To; the guide opens the
+waypoint's information pages there and uses the D-> key (p.115).
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a
