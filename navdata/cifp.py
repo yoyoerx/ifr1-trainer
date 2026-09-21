@@ -23,6 +23,7 @@ records (see ``tests/test_cifp.py`` for the fixture lines).
 from __future__ import annotations
 
 import os
+import re
 from typing import Iterable, Iterator
 
 from navmath import Point, great_circle_nm
@@ -43,6 +44,7 @@ from .model import (
     LegType,
     NavDatabase,
     NdbNavaid,
+    PathPoint,
     Procedure,
     ProcedureLeg,
     Runway,
@@ -257,8 +259,50 @@ def _runway_from_line(ln: str) -> tuple[str, Runway]:
         width_ft=opt_int(ln[77:80]),
         ils_ident=ils_ident,
         ils_category=ils_cat,
+        elev_ft=opt_int(ln[66:71]),
     )
     return ln[6:10].strip(), rwy
+
+
+def _path_point_from_line(ln: str) -> PathPoint:
+    """CIFP section P.P primary record (``ln[24:27] == "001"``): an SBAS / GBAS final-approach path
+    point. Offsets verified against 2609 records and, offline, against X-Plane's own LTP/FPAP rows
+    (see ``tests/test_cifp.py``): LTP lat/lon at [37:48]/[48:60] (4-decimal seconds), GPA [66:70]
+    (hundredths of a degree), FPAP [70:81]/[81:93], course width [93:98] (hundredths of a metre),
+    TCH [103:108] (tenths, unit flag at [108]: F feet / M metres)."""
+    tch = int(ln[103:108]) / 10.0
+    if ln[108:109] == "M":
+        tch *= 3.28084
+
+    def lat(f: str) -> float:              # N DD MM SS ssss
+        v = int(f[1:3]) + int(f[3:5]) / 60.0 + int(f[5:11]) / 10000.0 / 3600.0
+        return -v if f[0] == "S" else v
+
+    def lon(f: str) -> float:              # W DDD MM SS ssss
+        v = int(f[1:4]) + int(f[4:6]) / 60.0 + int(f[6:12]) / 10000.0 / 3600.0
+        return -v if f[0] == "W" else v
+
+    return PathPoint(
+        airport=ln[6:10].strip(),
+        approach=ln[13:19].strip(),
+        runway=ln[19:24].strip(),
+        ref_path_id=ln[32:36].strip(),
+        ltp=Point(lat(ln[37:48]), lon(ln[48:60])),
+        gpa_deg=int(ln[66:70]) / 100.0,
+        tch_ft=tch,
+        fpap=Point(lat(ln[70:81]), lon(ln[81:93])),
+        course_width_m=int(ln[93:98]) / 100.0,
+        ellipsoid_height_m=int(ln[60:66]) / 10.0,
+    )
+
+
+_SERVICE_RE = re.compile(r"A(LPV|LP\+V|LP(?![V+])|LNAV/VNAV|LNAV\+V|LNAV(?![/+]))")
+
+
+def _service_from_continuation(ln: str) -> frozenset:
+    """Levels of service an RNAV approach publishes, from the "W" continuation record on its FAF leg
+    (e.g. ``ALPV       ALNAV/VNAV ALNAV``; an ``N`` slot means not available)."""
+    return frozenset(_SERVICE_RE.findall(ln[40:]))
 
 
 # --------------------------------------------------------------------------- #
@@ -316,10 +360,19 @@ def parse_cifp(
                 db.add_waypoint(_wpt_from_line(ln, kind="terminal"))
             elif section == "P" and sub_p == "G":
                 pending_runways.append(_runway_from_line(ln))
+            elif section == "P" and sub_p == "P":
+                if ln[24:27] == "001":          # primary; 002 is the HAL/VAL/channel continuation
+                    pp = _path_point_from_line(ln)
+                    db.path_points[(pp.airport, pp.approach)] = pp
             elif section == "P" and sub_p in _PROC_KIND:
                 if ln[47:49].strip():  # skip continuation records (no path terminator)
                     key = (ln[6:10].strip(), _PROC_KIND[sub_p], ln[13:19].strip())
                     proc_acc.setdefault(key, []).append(ln)
+                elif sub_p == "F" and ln[39:40] == "W" and ln[38:39] in "23456789":
+                    svc = _service_from_continuation(ln)
+                    if svc:
+                        akey = (ln[6:10].strip(), ln[13:19].strip())
+                        db.approach_service[akey] = db.approach_service.get(akey, frozenset()) | svc
             elif section == "E" and sub_de == "R":
                 ident, pt = _airway_point_from_line(ln)
                 airway_acc.setdefault(ident, []).append(pt)

@@ -1795,3 +1795,84 @@ def test_steep_turn_ahead_when_the_lead_available_needs_more_than_25_degrees_of_
     assert msgs == ["Steep turn ahead"]
     g2, a2, b2 = _turn_plan(db, 90.0, leg1_nm=20.0)              # plenty of room: ordinary turn
     assert [_approach_msgs(g2, a2, b2, d, gs=160.0) for d in (5.0, 2.0, 1.0)] == [[], [], []]
+
+
+# --------------------------------------------------------------------------- #
+# GNS 530W: WAAS glidepath, level of service, angular scaling (500W Pilot's Guide)
+# --------------------------------------------------------------------------- #
+def _w_on_final(db, service=frozenset({"LPV", "LNAV/VNAV", "LNAV"}), *, waas=True):
+    """A WAAS unit with an RNAV approach loaded and the FAF leg active: LTP at 40,-74 (elev 100), landing to the
+    south (FPAP 1.2 nm beyond), 3.00 deg / 50 ft TCH; the approach course runs 180 deg true."""
+    from gns530 import Gns530W
+    from navdata.model import Airport, PathPoint, Runway
+    ltp = Point(40.0, -74.0)
+    fpap = destination(ltp, 180.0, 1.2)
+    faf_pos = destination(ltp, 0.0, 5.0)
+    db.add_airport(Airport("KTST", ltp, elev_ft=100,
+                           runways={"RW18": Runway("RW18", ltp, 180.0, elev_ft=100)}))
+    g = (Gns530W if waas else Gns530)(db)
+    g.fpl.waypoints = [PlanWaypoint("IAF", destination(faf_pos, 0.0, 5.0)),
+                       PlanWaypoint("FAF", faf_pos, is_faf=True),
+                       PlanWaypoint("RW18", ltp, is_map=True)]
+    g.fpl.activate_leg(2)
+    g._approach_active = True
+    g._path = PathPoint("KTST", "R18-Z", "RW18", "W18A", ltp, 3.0, 50.0, fpap, 106.75)
+    g._service = frozenset(service)
+    return g, ltp
+
+
+def _on_path(ltp, dist_nm, offset_ft=0.0):
+    import math
+    return (destination(ltp, 0.0, dist_nm),
+            100.0 + 50.0 + dist_nm * 6076.115 * math.tan(math.radians(3.0)) + offset_ft)
+
+
+def test_a_530w_flies_an_lpv_glidepath_and_the_plain_530_has_none(db):
+    g, ltp = _w_on_final(db)
+    pos, alt = _on_path(ltp, 3.0)
+    g.update(pos, 180.0, 110.0, 1.0)
+    on = g.glidepath(alt)
+    assert on.valid and on.service == "LPV" and on.vdev == pytest.approx(0.0, abs=0.01)
+    assert g.glidepath(alt - 150.0).vdev > 0.3            # below the path: fly up (+)
+    assert g.glidepath(alt + 150.0).vdev < -0.3           # above: fly down (-)
+    assert g.nav.service == "LPV"
+    plain, ltp2 = _w_on_final(db, waas=False)
+    plain.update(pos, 180.0, 110.0, 1.0)
+    assert not plain.glidepath(alt).valid and plain.nav.service == ""
+
+
+def test_level_of_service_depends_on_what_the_approach_publishes(db):
+    for svc, want in ((frozenset({"LNAV/VNAV", "LNAV"}), "L/VNAV"), (frozenset({"LNAV"}), "LNAV"),
+                      (frozenset({"LP", "LNAV"}), "LP")):
+        g, ltp = _w_on_final(db, svc)
+        pos, alt = _on_path(ltp, 3.0)
+        g.update(pos, 180.0, 110.0, 1.0)
+        assert g.nav.service == want
+        assert g.glidepath(alt).valid == (want == "L/VNAV")     # LP / LNAV have no vertical guidance
+    g, ltp = _w_on_final(db)
+    pos, alt = _on_path(ltp, 9.0)                               # still outside 2 nm of the FAF
+    g.fpl.activate_leg(1)
+    g.update(pos, 180.0, 110.0, 1.0)
+    assert g.nav.service in ("TERM", "ENR") and not g.glidepath(alt).valid
+
+
+def test_530w_cdi_scaling_is_2nm_enroute_and_angular_on_the_final(db):
+    from gns530 import Gns530W
+    far = Point(45.0, -74.0)
+    w = Gns530W(db)
+    w.load_flight_plan(["ALFA", "BRAVO"])
+    w.update(far, 0.0, 120.0, None)
+    assert w.nav.cdi_scale_nm == pytest.approx(2.0)             # ENR 2.0 nm (the 530 uses 5.0)
+    plain = Gns530(db)
+    plain.load_flight_plan(["ALFA", "BRAVO"])
+    plain.update(far, 0.0, 120.0, None)
+    assert plain.nav.cdi_scale_nm == pytest.approx(5.0)
+    g, ltp = _w_on_final(db)
+    scales = []
+    for d in (4.0, 2.0, 0.6):
+        pos, _ = _on_path(ltp, d)
+        g._cdi_scale_init = False
+        g.update(pos, 180.0, 110.0, None)
+        scales.append(g.nav.cdi_scale_nm)
+    assert scales[0] < 0.3 and scales[0] > scales[1] > scales[2]      # angular: narrows toward the threshold
+    assert scales[2] >= 350.0 / 6076.115 - 1e-6                        # never tighter than 350 ft

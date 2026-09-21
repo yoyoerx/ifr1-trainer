@@ -1645,6 +1645,9 @@ class Renderer:
         valid = getattr(cdi, "valid", False)
         self._t(src, r.x + 2, cy - 8, font=self.f_sm,
                 color=GPS_GREEN if src == "GPS" else CYAN)
+        svc = getattr(cdi, "service", "")
+        if src == "GPS" and svc:                # a WAAS unit's flight-mode annunciation (LPV / LNAV / ENR ...)
+            self._t(svc, r.x + 2, r.bottom - 30, font=self.f_sm, color=GPS_GREEN)
         fs = getattr(cdi, "full_scale_nm", None)
         if src == "GPS" and fs:                 # numeric scale at both ends (sec.3.3)
             lbl = f"{fs:.2f}" if fs < 1.0 else f"{fs:.1f}"

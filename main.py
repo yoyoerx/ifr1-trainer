@@ -181,8 +181,9 @@ def parse_args(argv=None) -> Config:
     p.add_argument("--tas", default=S)
     p.add_argument("--altitude", default=S)
     p.add_argument("--layout", default=S, choices=("gps", "steam", "stack", "dual"))
-    p.add_argument("--unit", default=S, choices=("530", "430"),
-                   help="GPS unit to model (GNS 530 or GNS 430) - the FMS1 unit in --dual")
+    p.add_argument("--unit", default=S, choices=("530", "430", "530w"),
+                   help="GPS unit to model: GNS 530, GNS 430, or the WAAS GNS 530W (LPV / L/VNAV glidepath, "
+                        "angular approach scaling, 2 nm en-route CDI) - the FMS1 unit in --dual")
     p.add_argument("--dual", action="store_true", default=S,
                    help="run a second GNS unit (the other of 530/430) as FMS2, e.g. a real "
                         "530/430 stack: --unit 530 --dual puts a 530 on FMS1, a 430 on FMS2. "
@@ -293,7 +294,9 @@ class World:
     def __init__(self, cfg: Config):
         self.db = navdata.load()
         from datetime import date
-        unit_cls = gns430_mod.Gns430 if getattr(cfg, "unit", "530") == "430" else gns530_mod.Gns530
+        unit = getattr(cfg, "unit", "530")
+        unit_cls = (gns430_mod.Gns430 if unit == "430"
+                    else gns530_mod.Gns530W if unit == "530w" else gns530_mod.Gns530)
         self.gns = unit_cls(self.db, today=date.today())
         if cfg.plan:
             missing = self.gns.load_flight_plan(cfg.plan)
@@ -470,12 +473,17 @@ class World:
         n1 = instr.nav_head(self.radios.nav1, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
         n2 = instr.nav_head(self.radios.nav2, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
 
+        # a WAAS unit's LPV / L/VNAV glidepath is what NAV APR couples to while the CDI is on GPS
+        gp = self.gns.glidepath(st.altitude_ft) if hasattr(self.gns, "glidepath") else None
+        gp_live = bool(gp is not None and gp.valid and getattr(nav, "cdi_source", "GPS") == "GPS")
+        gp_dev = gp.vdev if gp is not None else 0.0
         if self.ap.roll_engaged:                 # RDY (no roll mode yet) leaves the pilot flying
             cmd = self.ap.update(
                 nav, st, self.magvar, dt=dt,
                 vloc_course_deg=self.radios.nav1.card_deg,
                 vloc_deflection=n1.deflection, vloc_valid=n1.valid,
-                gs_deflection=n1.gs_deflection, gs_valid=n1.gs_valid,
+                gs_deflection=gp_dev if gp_live else n1.gs_deflection,
+                gs_valid=gp_live or n1.gs_valid,
                 gps_course_deg=self._gps_pointer(),
                 vloc_is_loc=bool(getattr(self.radios.nav1, "is_localizer", False)),
             )
@@ -554,6 +562,7 @@ class World:
             nav1=_tuned_nav(self.radios.nav1) if vloc else None,
             nav2=_tuned_nav(self.radios.nav2) if vloc else None,
             gps_course_deg=self._gps_pointer(),
+            gps_glidepath=self.gns.glidepath(own_i.altitude_ft) if hasattr(self.gns, "glidepath") else None,
         )
 
     def _gps_pointer(self) -> float | None:

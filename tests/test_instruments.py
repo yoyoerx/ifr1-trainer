@@ -351,3 +351,16 @@ def test_localizer_needle_ignores_the_course_card_but_a_vor_needle_follows_it():
     assert [h.course_deg for h in loc] == [0.0, 90.0, 271.0]  # the CARD shows what the pilot set
     vor = [instr.nav_head(_CardRx(obs, loc=False), ac, 3000.0, 100.0, 0.0) for obs in (0.0, 90.0)]
     assert vor[0].deflection != pytest.approx(vor[1].deflection)
+
+
+def test_a_waas_glidepath_rides_the_gps_cdi_and_feeds_the_nav_head_needle():
+    from gpsnav import GlidePath
+    import instruments as instr
+    nav = NavState(valid=True, dtk=180.0, xtk_nm=0.0, cdi_scale_nm=0.3, service="LPV")
+    own = _own()
+    p = instr.compute_panel(own, nav, gps_glidepath=GlidePath(True, 0.4, "LPV", 3.0, -30.0))
+    assert p.cdi.vdev == pytest.approx(0.4) and p.cdi.vdev_valid and p.cdi.service == "LPV"
+    head = instr.gps_nav_head(nav, p)
+    assert head.gs_valid and head.gs_deflection == pytest.approx(0.4)
+    p2 = instr.compute_panel(own, nav)                       # no glidepath (a plain 530): no vertical needle
+    assert not p2.cdi.vdev_valid and not instr.gps_nav_head(nav, p2).gs_valid

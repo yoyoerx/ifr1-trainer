@@ -436,3 +436,31 @@ def test_strict_reraises():
     broken = JFK_VOR.replace("N40375838", "NXX375838")
     with pytest.raises(ValueError):
         parse_cifp([broken], strict=True)
+
+
+# --------------------------------------------------------------------------- #
+# SBAS path points and level of service (section P.P / the "W" continuation on the FAF leg)
+# --------------------------------------------------------------------------- #
+PP_R23Z = ("SUSAP KFDKK6PR23-Z RW23 001Z0000W23A0N3925138000W07722063800+005340300"
+           "N3924225100W07723028400106750184000500F4005002473B822894260804")
+SVC_Z = "SUSAP KFDKK6FR23-Z R      020SHUEYK6PC2WALPV       ALNAV/VNAV ALNAV                                                   JS   894141310"
+SVC_Y = "SUSAP KFDKK6FR23-Y R      020SHUEYK6PC2WN          N          ALNAV                                                   PS   894002207"
+RWY_23 = "SUSAP KFDKK6GRW23    0058192280 N39251380W077220638         +0053500283000054100IIFDK1                                     894232207"
+
+
+def test_path_point_record_gives_the_glidepath_geometry():
+    """Offsets checked offline against X-Plane's own rows for 4711 approaches: LTP and TCH agree for
+    99%, the rest are amendments between the 2406 and 2609 cycles."""
+    from navdata.cifp import _path_point_from_line
+    pp = _path_point_from_line(PP_R23Z)
+    assert (pp.airport, pp.approach, pp.runway, pp.ref_path_id) == ("KFDK", "R23-Z", "RW23", "W23A")
+    assert pp.ltp.lat == pytest.approx(39.4205) and pp.ltp.lon == pytest.approx(-77.368439, abs=1e-5)
+    assert pp.gpa_deg == 3.0 and pp.tch_ft == 50.0 and pp.course_width_m == pytest.approx(106.75)
+    assert pp.fpap.lat == pytest.approx(39.406253, abs=1e-5)
+
+
+def test_level_of_service_comes_from_the_faf_continuation_and_dispatches_into_the_db():
+    db = parse_cifp([PP_R23Z, SVC_Z, SVC_Y, RWY_23])
+    assert db.path_points[("KFDK", "R23-Z")].gpa_deg == 3.0
+    assert db.approach_service[("KFDK", "R23-Z")] == frozenset({"LPV", "LNAV/VNAV", "LNAV"})
+    assert db.approach_service[("KFDK", "R23-Y")] == frozenset({"LNAV"})        # -Y: no LPV / VNAV

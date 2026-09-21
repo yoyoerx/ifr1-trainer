@@ -1009,6 +1009,39 @@ Still open in the review: R9 pilot-selectable intercept angle (needs a hold-HDG-
 not carry), A8 GPS glideslopes, O1 CWS, O5 yaw damper, O3 power-up/pre-flight tests, R2 (intercept turn-in is a
 model, not the POH's closure-rate curve), R8, R17 (DG heading systems).
 
+### F55 — GNS 530W (WAAS): LPV / L/VNAV glidepath, level of service, angular approach scaling
+
+The plain 530 in this trainer is the non-WAAS unit (Pilot's Guide 190-00181-00; FINDINGS F-early: enroute CDI 5.0 nm),
+which has no vertical guidance from the GPS. LPV needs a WAAS receiver, so it is a **new opt-in unit, `--unit 530w`**
+(`gpsnav.VARIANT_530W`, `gns530.Gns530W`), leaving the validated 530 untouched. References saved beside the others:
+`docs/reference/GNS500W_Pilots_Guide.pdf` (500W Series Pilot's Guide 190-00357-00 Rev K, SHA-256
+`5cb5851c720d8cb6a6d98ec189632efaad21c3c92c538e40530ecaa728720253`, from `wayman.edu/wp-content/uploads/2016/06/GNS530-Pilot-Guide.pdf`).
+
+* **Data.** The FAA CIFP carries the SBAS path point of every RNAV approach: `navdata.cifp._path_point_from_line`
+  reads section P.P (LTP, GPA, TCH, FPAP, course width) and the "W" continuation on the FAF leg gives the levels of
+  service (LPV / LNAV/VNAV / LNAV / LP). Offsets were verified offline against X-Plane's own type-14/16 rows for 4711
+  approaches (LTP position and TCH agree for ~99%, the rest are 2406-vs-2609 amendments); `Runway.elev_ft` (P.G) supplies
+  the threshold elevation. Cache schema 4.
+* **Vertical guidance.** `GpsNav.glidepath(alt_ft)` -> `GlidePath(valid, vdev, service, gpa, error)`: a glidepath of the
+  GPA through TCH above the LTP, valid from 2 nm before the FAF until the MAP, ILS convention (+ = fly up), rides
+  `panel.cdi.vdev` and drives the NAV head's glideslope needle (`gps_nav_head`). Assumption: the needle scale is the
+  ILS-equivalent +/-0.7 deg - the 500W guide says LPV "can be flown identically to a standard ILS" but gives no vertical
+  scale.
+* **Level of service annunciation** (guide p.85): ENR / TERM, then LPV / L/VNAV / LP / LNAV, on `NavState.service` and the
+  CDI strip.
+* **CDI scaling** (guide p.85, sec.5, Appendix C): enroute 2.0 nm (the 530: 5.0), terminal 1.0; inside 2 nm of the FAF
+  0.3 nm or the angular path-point scale (the course width widening with distance from the FPAP, like a localizer -
+  ~0.3 nm at the FAF), tightening to 350 ft at the threshold/MAP; non-LPV approaches tighten 0.3 nm -> 350 ft
+  along the final segment.
+* **Autopilot** (S-TEC POH sec.3.5.1): with the CDI on GPS, `World.tick` feeds NAV APR the GPS glidepath in place of the
+  radio glideslope; the same arm-at-1 s / capture-at-5% logic as an ILS runs on the GPS needle and the GPS lateral
+  deviation (within 50% of its scale). Headless KFDK RNAV (GPS) RWY 23 Z, `--unit 530w`, 0 and 270@25 wind: TERM ->
+  LPV at 2 nm before SHUEY, scale 1.0 -> 0.30 -> 0.13, GS arms below the path, captures at 5%, |GDI| <= 0.05 to 1.5 nm.
+
+Not modelled: LNAV+V / LP+V advisory glidepaths (the CIFP final-leg vertical angle is available but unused), the HAL/VAL
+integrity downgrade ("Approach downgraded - Use LNAV minima"), the KAP 140 "Enable A/P APR Outputs?" prompt, the 530W's
+other differences (SBAS status pages, terrain, etc.), and the LOW ALT annunciation.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

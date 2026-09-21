@@ -78,6 +78,8 @@ __all__ = [
     "FplMenu",
     "VnavProfile",
     "VnavStatus",
+    "GlidePath",
+    "VARIANT_530W",
     "NavState",
     "PageCursor",
     "Variant",
@@ -288,6 +290,26 @@ class NavState:
     next_dtk: float | None = None      # DTK of the leg after the sequence
     cdi_scale_nm: float | None = None  # GPS CDI full-scale each side (5.0/1.0/0.30)
     annunciators: tuple[str, ...] = ()  # SUSP / OBS / WPT / LOI ...
+    service: str = ""                  # WAAS unit only: ENR / TERM / LPV / L/VNAV / LP / LNAV (level of service)
+
+
+@dataclass(frozen=True, slots=True)
+class GlidePath:
+    """The WAAS unit's vertical guidance (an LPV / L/VNAV glidepath), the same convention as an ILS
+    glideslope: ``vdev`` -1..+1, **+ = below the path = fly up**."""
+
+    valid: bool = False
+    vdev: float = 0.0
+    service: str = ""            # "LPV" | "L/VNAV"
+    gpa_deg: float = 0.0
+    height_error_ft: float = 0.0  # + = above the path
+
+
+# vertical full-scale of the GPS glidepath needle: the trainer assumes the ILS-equivalent +/-0.7 deg (the 500W
+# Pilot's Guide says the LPV "can be flown identically to a standard ILS" but gives no vertical scale)
+_GP_FULL_SCALE_DEG = 0.7
+_WAAS_ENROUTE_NM = 2.0             # 500W Pilot's Guide: ENR 2.0 nm, TERM 1.0 nm, approach 0.3 nm
+_MAP_FULL_SCALE_NM = 350.0 / 6076.115   # "CDI scaling continues to tighten from 0.3 NM to 350 feet" at the MAP
 
 
 # --------------------------------------------------------------------------- #
@@ -573,6 +595,10 @@ class Variant:
     bezel_aspect: float             # faceplate width / height
     screen_frac: tuple[float, float, float, float]  # screen cutout (x0,y0,x1,y1)
     pages: dict[str, list[str]] = field(default_factory=lambda: PAGE_GROUPS)
+    # A WAAS/SBAS unit (GNS 530W): en-route CDI 2.0 nm, angular final-approach scaling, LPV / L/VNAV
+    # vertical guidance and level-of-service annunciations (500W Series Pilot's Guide 190-00357-00).
+    # The state machine reads this as a capability flag, not a fork of its logic.
+    waas: bool = False
 
 
 # The real GNS 530 faceplate is 165 x 120 mm; the 430 is 165 x 69 mm (same
@@ -585,6 +611,17 @@ VARIANT_530 = Variant(
     bezel_dir="garmin-gns-530",
     bezel_aspect=165.0 / 120.0,
     screen_frac=(0.163, 0.050, 0.838, 0.765),
+)
+
+VARIANT_530W = Variant(
+    name="GNS 530W",
+    short="530",                    # same faceplate / softkey layout as the 530
+    screen_rows=12,
+    screen_px=(320, 234),
+    bezel_dir="garmin-gns-530",
+    bezel_aspect=165.0 / 120.0,
+    screen_frac=(0.163, 0.050, 0.838, 0.765),
+    waas=True,
 )
 
 VARIANT_430 = Variant(
@@ -650,6 +687,8 @@ class GpsNav:
                                             # read 1.0 nm immediately, not visibly
                                             # ramp 5.0 -> 1.0 over the first few seconds)
         self._nav = NavState()
+        self._path = None                        # PathPoint of the loaded RNAV approach (WAAS vertical data)
+        self._service: frozenset = frozenset()   # the levels of service that approach publishes
         # last ownship sample (set by update())
         self._pos: Point | None = None
         self._track = 0.0
@@ -669,6 +708,7 @@ class GpsNav:
         self._susp_at = None
         self._hold_state = None
         self._proc_airport = ""
+        self._path, self._service = None, frozenset()
         self.vnav = VnavProfile()
         missing: list[str] = []
         anchor = ref
@@ -704,6 +744,8 @@ class GpsNav:
         if is_appr:
             self._approach_active = True
             self._auto_vloc_done = False
+            self._path = getattr(self.db, "path_points", {}).get((airport, ident))
+            self._service = getattr(self.db, "approach_service", {}).get((airport, ident), frozenset())
         apt = self.db.airport(airport)
         anchor = (self.fpl.waypoints[-1].pos if self.fpl.waypoints
                   else (apt.pos if apt is not None else None))
@@ -1872,6 +1914,13 @@ class GpsNav:
     # -- the per-loop update ----------------------------------------
     def update(self, pos: Point, track_deg: float, gs_kt: float,
                dt: float | None = None) -> NavState:
+        nav = self._update_core(pos, track_deg, gs_kt, dt)
+        if self.variant.waas:                       # the level-of-service annunciation (LPV / LNAV / ENR ...)
+            nav = self._nav = replace(nav, service=self.level_of_service())
+        return nav
+
+    def _update_core(self, pos: Point, track_deg: float, gs_kt: float,
+                     dt: float | None = None) -> NavState:
         self._pos, self._track, self._gs = pos, norm360(track_deg), max(0.0, gs_kt)
         self._check_expiry()
 
@@ -2135,6 +2184,69 @@ class GpsNav:
             return great_circle_nm(pos, self.fpl.waypoints[0].pos)
         return None
 
+    def _waas_final_scale(self, dist_to_faf: float) -> float:
+        """CDI full-scale on a WAAS unit once inside 2 nm of the FAF (500W Pilot's Guide sec.5 and
+        Appendix C): 0.3 nm, or the angular scale (an LP/LPV path point's course width, widening
+        with distance from the FPAP like a localizer) if that is smaller, tightening toward
+        350 ft at the MAP."""
+        pos = self._pos
+        pp = self._path if ("LPV" in self._service or "LP" in self._service) else None
+        if pp is not None and pos is not None:
+            width_nm = pp.course_width_m / 1852.0
+            origin_nm = max(great_circle_nm(pp.ltp, pp.fpap), 0.5)
+            angular = width_nm * great_circle_nm(pos, pp.fpap) / origin_nm
+            return max(_MAP_FULL_SCALE_NM, min(_CDI_APPROACH_NM, angular))
+        map_i = next((i for i, w in enumerate(self.fpl.waypoints) if w.is_map), None)
+        faf_i = next((i for i, w in enumerate(self.fpl.waypoints) if w.is_faf), None)
+        if pos is None or map_i is None or faf_i is None or map_i <= faf_i:
+            return _CDI_APPROACH_NM
+        total = great_circle_nm(self.fpl.waypoints[faf_i].pos, self.fpl.waypoints[map_i].pos)
+        left = great_circle_nm(pos, self.fpl.waypoints[map_i].pos)
+        frac = 1.0 if total <= 0.0 else min(1.0, left / total)
+        return _MAP_FULL_SCALE_NM + (_CDI_APPROACH_NM - _MAP_FULL_SCALE_NM) * frac
+
+    def level_of_service(self, dist_nm: float | None = None) -> str:
+        """The WAAS unit's flight-mode annunciation (500W Pilot's Guide p.85): ENR / TERM, then on an
+        approach LPV / L/VNAV / LP / LNAV. Empty on a non-WAAS unit."""
+        if not self.variant.waas:
+            return ""
+        faf_d = self._dist_to_faf(self._pos) if (self._pos is not None and self._approach_active) else None
+        if self._approach_active and faf_d is not None and faf_d <= _CDI_APPROACH_ARM_NM:
+            if self._path is not None and "LPV" in self._service:
+                return "LPV"
+            if self._path is not None and "LNAV/VNAV" in self._service:
+                return "L/VNAV"
+            if "LP" in self._service:
+                return "LP"
+            return "LNAV"
+        scale = self._cdi_scale
+        return "ENR" if scale is None or scale > _CDI_TERMINAL_NM + 0.01 else "TERM"
+
+    def glidepath(self, alt_ft: float) -> GlidePath:
+        """LPV / L/VNAV vertical guidance for the loaded RNAV approach (WAAS unit only): a glidepath of
+        the path point's GPA through its TCH above the landing threshold point, valid from 2 nm before the
+        FAF (when the approach annunciation appears) until the missed approach point."""
+        pos, pp = self._pos, self._path
+        if not (self.variant.waas and self._approach_active and pos is not None and pp is not None):
+            return GlidePath()
+        service = "LPV" if "LPV" in self._service else "L/VNAV" if "LNAV/VNAV" in self._service else ""
+        faf_d = self._dist_to_faf(pos)
+        if not service or faf_d is None or faf_d > _CDI_APPROACH_ARM_NM:
+            return GlidePath(service=service)
+        apt = self.db.airport(pp.airport)
+        rwy = apt.runways.get(pp.runway) if apt is not None else None
+        elev = float(rwy.elev_ft) if rwy is not None and rwy.elev_ft is not None else (
+            float(apt.elev_ft or 0) if apt is not None else 0.0)
+        d_nm = great_circle_nm(pos, pp.ltp)
+        course = initial_bearing(pp.ltp, pp.fpap)            # the landing direction, LTP -> FPAP
+        if d_nm < 0.10 or abs(angle_diff(initial_bearing(pos, pp.ltp), course)) > 90.0:
+            return GlidePath(service=service, gpa_deg=pp.gpa_deg)     # in the flare / past the threshold
+        path_ft = elev + pp.tch_ft + d_nm * 6076.115 * math.tan(math.radians(pp.gpa_deg))
+        err_ft = alt_ft - path_ft
+        angle = math.degrees(math.atan2(alt_ft - (elev + pp.tch_ft), d_nm * 6076.115))
+        dev = _clampf(-(angle - pp.gpa_deg) / _GP_FULL_SCALE_DEG, -1.0, 1.0)
+        return GlidePath(True, dev, service, pp.gpa_deg, err_ft)
+
     def _dist_to_faf(self, pos: Point) -> float | None:
         """Great-circle nm to the loaded approach's FAF while actually flying
         the leg that ends there, or ``0.0`` once it has already been
@@ -2165,10 +2277,13 @@ class GpsNav:
         if (self._approach_active and dist_to_fix is not None
                 and dist_to_fix <= _CDI_APPROACH_ARM_NM):
             auto = _CDI_APPROACH_NM
+            if self.variant.waas:
+                auto = self._waas_final_scale(dist_to_fix)
         else:
             near_dest = dist_to_dest is not None and dist_to_dest <= _CDI_TERMINAL_ARM_NM
             near_dep = dist_to_dep is not None and dist_to_dep <= _CDI_TERMINAL_ARM_NM
-            auto = _CDI_TERMINAL_NM if (near_dest or near_dep) else _CDI_ENROUTE_NM
+            enroute = _WAAS_ENROUTE_NM if self.variant.waas else _CDI_ENROUTE_NM
+            auto = _CDI_TERMINAL_NM if (near_dest or near_dep) else enroute
         # AUX>Setup>CDI/Alarms: a fixed ceiling never widens past, but a
         # tighter phase (e.g. genuinely on an armed approach) still tightens
         # further than it - the selected value caps the scale, it doesn't

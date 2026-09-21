@@ -691,3 +691,23 @@ def test_ap_key_disconnects_to_a_flashing_rdy_then_master_off_then_on():
     assert not ap.engaged
     ap.press_ap()
     assert ap.engaged and ap.lateral is Lat.RDY and "RDY" not in ap.flashing
+
+
+def test_nav_apr_couples_a_gps_glidepath_on_a_gps_source():
+    """POH sec.3.5.1: on a WAAS GPS approach 'the NAV APR mode must be engaged in order to intercept and track
+    the GPS glideslope'; then 'the remainder of the approach should be flown like a Straight-In ILS'."""
+    ap = Autopilot(); ap.press_apr(); ap.press_alt()
+    nav = Nav(dtk=180.0, xtk=0.02, cdi_source="GPS", cdi_scale_nm=0.3)
+
+    def step(gs, dt=1.0, n=1):
+        for _ in range(n):
+            ap.update(nav, Own(altitude=2000.0), 0.0, dt=dt, gs_deflection=gs, gs_valid=True,
+                      gps_course_deg=180.0)
+    step(0.5, n=2)                                      # below the path, on the needle: arms after 1 s
+    assert ap.armed_vert is Vert.GS
+    step(0.05)
+    assert ap.vertical is Vert.GS                       # captured at 5% GDI
+    ap2 = Autopilot(); ap2.press_apr(); ap2.press_alt()
+    ap2.update(Nav(dtk=180.0, xtk=0.2, cdi_source="GPS", cdi_scale_nm=0.3), Own(), 0.0, dt=2.0,
+               gs_deflection=0.5, gs_valid=True, gps_course_deg=180.0)
+    assert ap2.armed_vert is None                       # 0.2 of 0.3 nm = 67% off the course: not within 50%

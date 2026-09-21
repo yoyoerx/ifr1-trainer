@@ -19,6 +19,7 @@ from gpsnav import (
     PageCursor,
     PlanWaypoint,
     VARIANT_530,
+    VARIANT_530W,
     Variant,
     PAGE_GROUPS,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "PageCursor",
     "Variant",
     "Gns530",
+    "Gns530W",
     "PAGE_GROUPS",
 ]
 
@@ -40,3 +42,11 @@ class Gns530(GpsNav):
 
     def __init__(self, db, *, today: date | None = None):
         super().__init__(db, today=today, variant=VARIANT_530)
+
+
+class Gns530W(GpsNav):
+    """The WAAS/SBAS GNS 530W: the same faceplate and state machine, with LPV / L/VNAV vertical
+    guidance, angular final-approach scaling and level-of-service annunciations (`Variant.waas`)."""
+
+    def __init__(self, db, *, today: date | None = None):
+        super().__init__(db, today=today, variant=VARIANT_530W)

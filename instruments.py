@@ -143,6 +143,9 @@ class CDI:
     to_from: str = "OFF"            # TO | FROM | OFF
     valid: bool = False
     course_deg: float = 0.0         # selected course / DTK, magnetic (HSI pointer)
+    vdev: float = 0.0               # WAAS unit: LPV / L/VNAV glidepath deviation, -1..+1, + = fly up
+    vdev_valid: bool = False
+    service: str = ""               # WAAS unit: level-of-service annunciation (ENR / TERM / LPV ...)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +323,7 @@ def compute_panel(
     phase: Phase = Phase.ENROUTE,
     markers=(),
     gps_course_deg: float | None = None,     # HSI course pointer (mag) shown on a GPS CDI; None = the DTK
+    gps_glidepath=None,                      # gpsnav.GlidePath from a WAAS unit, or None
 ) -> Panel:
     nav1 = nav1 or TunedNav()
     source = getattr(nav, "cdi_source", "GPS") if nav is not None else "GPS"
@@ -344,6 +348,9 @@ def compute_panel(
             valid=True,
             course_deg=(norm360(gps_course_deg) if gps_course_deg is not None
                         else own.mag(nav.dtk) if nav.dtk is not None else 0.0),
+            vdev=getattr(gps_glidepath, "vdev", 0.0),
+            vdev_valid=bool(getattr(gps_glidepath, "valid", False)),
+            service=getattr(nav, "service", "") or "",
         )
     else:
         cdi = CDI(source=source, valid=False)
@@ -455,6 +462,8 @@ def gps_nav_head(nav, panel) -> NavHead:
         deflection=getattr(cdi, "deflection", 0.0),
         to_from=getattr(cdi, "to_from", "TO") or "TO",
         full_scale_deg=VOR_FULL_SCALE_DEG,
+        gs_deflection=getattr(cdi, "vdev", 0.0),          # a WAAS unit's glidepath drives the same needle
+        gs_valid=bool(getattr(cdi, "vdev_valid", False)),
         dme_nm=getattr(nav, "dist_nm", None),
     )
 

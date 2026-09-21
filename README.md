@@ -19,6 +19,7 @@ See `WORKING.md` for the detailed task tracker and `ARCHITECTURE.md` for the map
 python main.py --plan "KBOS PVD KJFK" --wind 300/25       # 530 + moving map
 python main.py --approach "KLNS I08"                      # CIFP approach: synth legs, SUSP at the MAP, ILS staged to VLOC standby
 python main.py --unit 430                                 # GNS 430 (shorter unit, 5-row screen)
+python main.py --unit 530w                                # GNS 530W (WAAS): LPV / L/VNAV glidepath, angular scaling
 python main.py --layout steam                             # six-pack + CDIs + autopilot
 python main.py --layout stack                             # one-page IFR panel, mouse-driven (see below)
 python main.py --dual                                     # a 530 on FMS1 + a 430 on FMS2, stacked

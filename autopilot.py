@@ -693,13 +693,20 @@ class Autopilot:
         aircraft is *below* the beam while it is positive."""
         cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
         loc_ok = (cdi_source == "VLOC" and vloc_valid and vloc_is_loc and vloc_deflection is not None)
+        loc_dev = vloc_deflection
+        if cdi_source == "GPS" and gs_valid and nav_state is not None:
+            # a WAAS GPS glidepath (POH sec.3.5.1): the lateral needle is the GPS deviation on its own scale
+            scale = getattr(nav_state, "cdi_scale_nm", None) or _DEFAULT_CDI_SCALE_NM
+            xtk = getattr(nav_state, "xtk_nm", None)
+            loc_ok = getattr(nav_state, "dtk", None) is not None and xtk is not None
+            loc_dev = (xtk or 0.0) / scale
         self._gs_defl = gs_deflection
         self._gs_ok = bool(loc_ok and gs_valid)
         apr = self.lateral is Lat.APR
         if self.armed_vert is Vert.GS and not (apr and self.vertical is Vert.ALT):
             self.armed_vert = None                  # arming needs NAV APR + ALT engaged
         if apr and self.vertical is Vert.ALT and self.armed_vert is None and not self.gs_disabled:
-            ready = (self._gs_ok and abs(vloc_deflection) <= _GS_ARM_LOC_DEV
+            ready = (self._gs_ok and abs(loc_dev) <= _GS_ARM_LOC_DEV
                      and gs_deflection > _GS_ARM_MIN_BELOW)
             self._gs_arm_t = self._gs_arm_t + dt if ready else 0.0
             if self._gs_arm_t >= _GS_ARM_S:

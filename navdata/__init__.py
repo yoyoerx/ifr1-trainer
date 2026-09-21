@@ -28,6 +28,7 @@ from .model import (
     LegType,
     NavDatabase,
     NdbNavaid,
+    PathPoint,
     Procedure,
     ProcedureLeg,
     Runway,
@@ -54,7 +55,7 @@ __all__ = [
 
 CIFP_FILENAME = "FAACIFP18"
 # bump when the model / parser output shape changes so stale pickles are ignored
-_CACHE_SCHEMA = 3
+_CACHE_SCHEMA = 4
 
 
 def _cache_path(cdir: Path, cifp_path: Path, *, areas, comms: bool) -> Path:

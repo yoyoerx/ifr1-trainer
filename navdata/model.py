@@ -23,6 +23,7 @@ __all__ = [
     "LegType",
     "ProcedureLeg",
     "Procedure",
+    "PathPoint",
     "AirwayPoint",
     "Airway",
     "NavDatabase",
@@ -97,6 +98,7 @@ class Runway:
     width_ft: int | None = None
     ils_ident: str = ""       # e.g. "IHIQ" (blank if none)
     ils_category: int = 0     # 0 none/LOC, 1 CAT I, 2 CAT II, 3 CAT III
+    elev_ft: int | None = None    # threshold elevation, MSL (CIFP section P.G)
 
     @property
     def number(self) -> str:
@@ -238,6 +240,24 @@ class Procedure:
 
 
 @dataclass(frozen=True, slots=True)
+class PathPoint:
+    """A GPS approach's final-approach path point (CIFP section P.P, ARINC 424 "path point" records)
+    - the geometry an SBAS receiver flies for LPV / LNAV/VNAV: a glidepath of ``gpa_deg`` through
+    ``tch_ft`` above the landing threshold point, along the course from ``ltp`` to ``fpap``."""
+
+    airport: str
+    approach: str                 # CIFP approach ident, e.g. "R23-Z"
+    runway: str                   # "RW23"
+    ref_path_id: str              # e.g. "W23A"
+    ltp: Point                    # landing threshold point
+    gpa_deg: float                # glidepath angle
+    tch_ft: float                 # threshold crossing height above the LTP
+    fpap: Point                   # flight path alignment point (beyond the far end)
+    course_width_m: float = 0.0   # lateral full-scale width at the threshold
+    ellipsoid_height_m: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class AirwayPoint:
     seq: int
     fix_ident: str
@@ -289,6 +309,10 @@ class NavDatabase:
     ndb: dict[str, list[NdbNavaid]] = field(default_factory=dict)
     airports: dict[str, Airport] = field(default_factory=dict)  # ICAO idents are unique
     airways: dict[str, Airway] = field(default_factory=dict)  # ident -> Airway
+    # GPS approach vertical data, keyed (airport, approach ident): the SBAS path point, and which
+    # levels of service the procedure publishes ("LPV", "LNAV/VNAV", "LNAV", "LP")
+    path_points: dict[tuple[str, str], PathPoint] = field(default_factory=dict)
+    approach_service: dict[tuple[str, str], frozenset] = field(default_factory=dict)
 
     # Procedures are parsed lazily: raw CIFP record lines are kept here, keyed by
     # (airport, kind, ident), and turned into `Procedure` objects on first

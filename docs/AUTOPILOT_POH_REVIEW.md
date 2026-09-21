@@ -59,7 +59,7 @@ Status: **OK** matches the text - **PARTIAL** right idea, wrong numbers or missi
 | A5 | p.3-12: pressing **APR** with GS armed disables it (GS flashes); again re-arms (1 s / 10 s). Pressing **ALT** above the beam engages GS manually; caution >20% above - "aggressive". | F53: APR press with GS armed disarms it (GS flashes), the next press re-arms it (back after 1 s); ALT press with APR+ALT and a usable beam engages GS at once, ALT again leaves it. The >20%-above caution is not enforced (the descent is just rate-clamped). | **OK** |
 | A6 | p.3-13: GS annunciation **flashes** at >50% GDI or flag (with FAIL). | F53: the GS annunciation flashes at >50% GDI or a flag (`flashing`, blinking in the panel). | **OK** |
 | A7 | p.3-12: at DH disconnect - the AP does not level off (sec.3.5.1 caution for WAAS at DH/MDA). | No automatic level-off at DH/MDA - the pilot disconnects (POH sec.3.2.1, 3.5.1 caution); the trainer does the same. | **OK** |
-| A8 | Sec.3.5.1 p.3-34: with a WAAS GPS, GPSS flies the lateral approach; **NAV APR on the FAC** captures the GPS glideslope (LPV, LNAV/VNAV, LNAV+V). | No GPS-vertical GS coupling (GS only from a tuned ILS). | **N/M** |
+| A8 | Sec.3.5.1 p.3-34: with a WAAS GPS, GPSS flies the lateral approach; **NAV APR on the FAC** captures the GPS glideslope (LPV, LNAV/VNAV, LNAV+V). | F55: on a `--unit 530w` the GPS LPV / L/VNAV glidepath drives NAV APR while the CDI is on GPS (same arm / 5% capture logic as an ILS). LNAV+V / LP+V advisory glidepaths are not modelled. | **OK** (LPV, L/VNAV) |
 | A9 | Sec.3.2.1: GS holds via closure rate on the beam. | F53: 3.00 deg nominal descent (5.31 fpm/kt) plus a 400 fpm/unit correction; flown headless to 1 nm in 3 winds within 0.05 GDI. | **OK** |
 
 ## 3. Pitch axis
