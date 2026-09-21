@@ -1066,6 +1066,24 @@ glidepath, similar to an ILS glideslope"; the pilot is still responsible for the
 Not modelled: LP+V's silent removal of advisory guidance when out of tolerance (p.115), the "Approach downgraded" message,
 MAPR/TERM after the missed approach point.
 
+### F57 — Closing out the modelled autopilot items (R2, R8, FAIL) and what stays the trainer's own
+
+* **R8 (built from the POH).** POH p.3-5 (and the Cirrus 2nd Ed. POH, sec.3.1.2): APR pressed "while tracking in the SOFT
+  condition and within 50% CDI needle deflection" raises authority to the higher CAP SOFT condition - it does not restart
+  the intercept. `press_apr` now carries the captured course over (SOFT -> CAP SOFT) when NAV was past capture and
+  within 50%; otherwise APR starts a fresh intercept as before.
+* **FAIL (built from the POH).** "The NAV annunciation will flash whenever CDI needle deflection exceeds 50%, or the NAV
+  Flag is in view. In the latter event, the FAIL annunciation will also appear" (p.3-5); NAV GPSS with no course: FAIL, NAV
+  and GPSS flash, wings level (p.3-7). `Autopilot.fail` + a red FAIL in the S-TEC panel.
+* **R2 stays a model.** The manuals give bounds and a sequence, not curves: the turn begins between 100% and 20% of full
+  scale (enforced), earlier at higher closure rate (measured in needle units, so distance from the station counts), and
+  the cut is "gradually" shallowed onto the course (Cirrus 2nd Ed.). Inside those bounds the turn-in point (11.5 s of closure
+  plus the 15% band), the 50 / 30 / 22 deg-per-unit stage gains, the 15 s SOFT needle filter and the 3 deg drift-trim
+  limit are the trainer's numbers, tuned against the behaviour the documents do specify (no overshoot beyond ~18% of full
+  scale, settling within a few % in SOFT, ILS within 2% by ~200 s). Nothing published lets them be pinned down further.
+* Also unresolved, undocumented in all three POHs read: what a repeat press of an engaged mode's button does (HDG, APR,
+  REV), and a third NAV press after GPSS - both stay trainer choices.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

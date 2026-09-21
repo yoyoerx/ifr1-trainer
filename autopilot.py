@@ -215,6 +215,7 @@ class Autopilot:
     _gs_ok: bool = False              # NAV APR could couple a glideslope right now
     _gs_angle: float = 3.0            # the path angle being flown (feed-forward descent rate)
     _flash_nav: bool = False
+    _fail: bool = False
     _flash_gpss: bool = False
     _gs_needle_flash: bool = False
     # pitch-axis bookkeeping
@@ -327,12 +328,24 @@ class Autopilot:
                 return
             self._release_roll()            # (trainer's choice: the POH is silent on a plain repeat press)
             return
+        # POH p.3-5: "While tracking in the SOFT condition and within 50% CDI needle deflection, should it be
+        # desired to track in the higher authority CAP SOFT condition instead, press the APR mode selector switch
+        # to engage the navigation approach (NAV APR) mode": the captured course is kept, only the authority
+        # rises - the intercept does not start over.
+        carry = (self.lateral is Lat.NAV and not self.gpss and self.stage != "INTERCEPT"
+                 and self._dev_prev is not None and abs(self._dev_prev) <= _FLASH_DEV
+                 and self._src.startswith("NAV/"))
         self.lateral = Lat.APR
         self.armed_lat = Lat.APR
         self.armed_vert = None              # GS arms itself when the conditions hold (`_track_glideslope`)
         self.gs_disabled, self._gs_arm_t = False, 0.0
         self.gpss = False                   # NAV APR replaces NAV GPSS (POH sec.3.2.2)
-        self._reset_coupler()
+        if carry:
+            self._src = "APR/" + self._src[4:]
+            if self.stage == "SOFT":
+                self.stage = "CAP SOFT"
+        else:
+            self._reset_coupler()
 
     def press_rev(self) -> None:
         self.engage()
@@ -721,16 +734,18 @@ class Autopilot:
         """Annunciations that flash: NAV / APR / REV at >50% needle deflection or a flag (POH p.3-5,
         p.3-13), GS at >50% GDI or its flag, NAV+GPSS with no course programmed (p.3-7)."""
         cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
-        self._flash_nav = self._flash_gpss = False
+        self._flash_nav = self._flash_gpss = self._fail = False
         if self.lateral in (Lat.NAV, Lat.APR, Lat.REV):
             if cdi_source == "VLOC":
                 self._flash_nav = (not vloc_valid) or abs(vloc_deflection or 0.0) > _FLASH_DEV
+                self._fail = not vloc_valid                   # NAV flag in view: "the FAIL annunciation will also appear"
             elif nav_state is not None:
                 dtk = getattr(nav_state, "dtk", None)
                 scale = getattr(nav_state, "cdi_scale_nm", None) or _DEFAULT_CDI_SCALE_NM
                 xtk = getattr(nav_state, "xtk_nm", None)
                 self._flash_nav = dtk is None or (xtk is not None and abs(xtk) / scale > _FLASH_DEV)
                 self._flash_gpss = self.gpss and self.lateral is Lat.NAV and dtk is None
+                self._fail = dtk is None                      # no course programmed (p.3-7 / Cirrus POH 3.1.3)
         if self.vertical is Vert.GS or self.armed_vert is Vert.GS:
             self._gs_needle_flash = (not self._gs_ok) or abs(self._gs_defl) > _FLASH_DEV
         else:
@@ -754,6 +769,11 @@ class Autopilot:
         lagging = (self.vertical is Vert.VS and self.vs_target > _VS_LAG_FPM
                    and self._own_vs < self.vs_target - _VS_LAG_FPM)
         self._vs_lag_t = self._vs_lag_t + dt if lagging else 0.0
+
+    @property
+    def fail(self) -> bool:
+        """The FAIL annunciation: a NAV flag in view, or NAV GPSS with no course programmed (POH p.3-5, p.3-7)."""
+        return self.engaged and self._fail
 
     @property
     def flashing(self) -> frozenset:

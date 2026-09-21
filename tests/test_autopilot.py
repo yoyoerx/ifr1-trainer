@@ -723,3 +723,38 @@ def test_the_glideslope_descent_rate_follows_the_path_angle_being_flown():
     v3, v341 = vs_for(3.0), vs_for(3.41)
     assert v3 == pytest.approx(-120.0 * 5.31, abs=1.0)
     assert v341 / v3 == pytest.approx(0.05954 / 0.05241, abs=0.01)         # tan(3.41) / tan(3.00)
+
+
+def test_apr_pressed_while_tracking_keeps_the_captured_course_and_raises_the_authority():
+    """POH p.3-5: 'While tracking in the SOFT condition and within 50% CDI needle deflection, ... press the APR mode
+    selector switch to engage the navigation approach (NAV APR) mode' - CAP SOFT tracking, not a new intercept."""
+    ap = Autopilot(); ap.press_nav()
+    _vloc(ap, 0.05, heading=92.0)                       # engaged on course: straight to SOFT
+    assert ap.stage == "SOFT"
+    ap.press_apr()
+    c = _vloc(ap, 0.05, heading=92.0)
+    assert ap.lateral is Lat.APR and ap.stage == "CAP SOFT" and c.turn_rate_dps == pytest.approx(1.35)
+    far = Autopilot(); far.press_nav()
+    _vloc(far, 0.9)                                     # still intercepting: APR starts the sequence afresh
+    far.press_apr()
+    _vloc(far, 0.9)
+    assert far.stage == "INTERCEPT"
+    off = Autopilot(); off.press_nav()
+    _vloc(off, 0.05, heading=92.0)
+    _vloc(off, 0.7)                                     # tracking but beyond 50%: not carried over
+    off.press_apr()
+    _vloc(off, 0.7)
+    assert off.stage == "INTERCEPT"
+
+
+def test_fail_shows_with_a_nav_flag_or_gpss_with_no_course():
+    """POH p.3-5: 'The NAV annunciation will flash whenever ... the NAV Flag is in view. In the latter event, the FAIL
+    annunciation will also appear'; p.3-7: NAV GPSS with no course -> FAIL, NAV and GPSS flash."""
+    nv = Autopilot(); nv.press_nav()
+    nv.update(Nav(cdi_source="VLOC"), Own(), 0.0, vloc_course_deg=90.0, vloc_deflection=0.2, vloc_valid=False)
+    assert nv.fail and "NAV" in nv.flashing
+    nv.update(Nav(cdi_source="VLOC"), Own(), 0.0, vloc_course_deg=90.0, vloc_deflection=0.2, vloc_valid=True)
+    assert not nv.fail
+    gp = Autopilot(); gp.press_nav(); gp.press_nav()
+    gp.update(Nav(cdi_source="GPS", dtk=None), Own(), 0.0)
+    assert gp.fail and {"NAV", "GPSS"} <= gp.flashing

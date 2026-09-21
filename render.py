@@ -2383,6 +2383,8 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None, *, show_info=True):
     elif avert == "GS" or gs_blink:
         ann.append(("GS ARM", AMBER))
     tr = getattr(ap, "trim", 0)
+    if getattr(ap, "fail", False):
+        ann.append(("FAIL", RED))
     if tr and not ("TRIM" in flashing and blink_off):
         ann.append((f"TRIM {'UP' if tr > 0 else 'DN'}", AMBER))
     ax = ap_rect.x + 92
