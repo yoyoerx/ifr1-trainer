@@ -264,7 +264,12 @@ the pointer on the leg's course - turn it with the NAV1 CRS knob (`O` / `Shift+O
 aircraft settles parallel to, not on, the leg. **GPSS** (press NAV a second time / `G`) flies the GPS and
 ignores the pointer (POH sec.3.1.3). The default is `--ap-course manual`; `--ap-course auto` slaves the
 pointer to the desired track (use it for unattended scripted runs, which would otherwise wander at every
-turn). Config key `ap_course`.
+turn). Config key `ap_course`. The same applies to a localizer: NAV APR flies **your** course card, so set
+it to the front course (POH sec.3.3.3) - the needle itself is always the beam.
+
+**Autopilot states.** Master (`A`) brings up **RDY** and nothing steers; `F1`/`F2`/`F3`/`F4` (HDG/NAV/APR/REV)
+engage a roll mode; ALT/VS (`F5`/`F6`) are ignored until one is engaged (S-TEC POH sec.3.1.4/3.1.5). Pressing
+the engaged mode's button again releases it back to RDY. NAV APR replaces GPSS.
 
 **While a modal page is open** (these keys are captured, overriding the tables above):
 

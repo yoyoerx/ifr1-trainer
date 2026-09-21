@@ -12,6 +12,13 @@ comparison with the manual, written so gaps are fixed against the text and not a
 gitignored (`/docs/reference/*.pdf`, third-party copyright), so a fresh clone must re-download it.
 Page numbers below are the POH's printed ones ("3-4"), section numbers are its own.
 
+**Other references saved beside it** (all gitignored): `GNS500_Installation_Manual_190-00181-02_RevJ.pdf`
+(Garmin 500 Series Installation Manual: OBS/course-select input, GPSS roll-steering label 121, CDI switching;
+SHA-256 `7c4b5ad94a5b9d2820e4f8f6dca56f3ccda227d7121f3bfd6858ed4eca5770e2`, from
+`aeroelectric.com/Installation_Data/Garmin/GNS530_IM.pdf`) and `STEC_55X_Cirrus_Transition_Training.pdf`
+(36-slide S-TEC 55X training deck, NAV vs GPSS, roll-before-pitch; SHA-256
+`4a2a3e1d562c09fa11621c9bb9e68c02d45444c6d7309d9c424748bf814ce78e`, from `befa.org`).
+
 **The GNS 530 Pilot's Guide is silent on autopilot behaviour** - it only says the autopilot follows the
 course selected on the external CDI/HSI (pp.80, 94, 189). Everything about *how* the autopilot flies is
 this POH.
@@ -38,7 +45,7 @@ Status: **OK** matches the text - **PARTIAL** right idea, wrong numbers or missi
 | R13 | Sec.3.1.3 p.3-7: the AP will not accept course-error input from the HSI in GPSS. | Consistent (GPSS ignores OBS). | **OK** |
 | R14 | Sec.3.1.3, 3.5.2 p.3-34: GPSS + a GPS with the missed approach loaded flies it, including the hold; sec.3.3.7 the whole lateral approach incl. procedure turn. | Works through the `gpsnav` legs (flown-hold, arcs, missed approach SUSP). | **OK** |
 | R15 | Sec.3.1.1 p.3-3: HDG mode turns to the bug and holds it. | `heading_bug + magvar`. Pressing HDG a second time drops to **LVL** (wings level) - the POH describes no such toggle. | **OK / PARTIAL** |
-| R16 | The POH's *roll modes* are the mode buttons themselves - **HDG, NAV, NAV APR, REV, REV APR, NAV GPSS** (sec.3.1.4: "a roll mode (HDG, NAV, NAV APR, REV, REV APR, NAV GPSS)"). There is **no separate roll button**. AP master on -> display reads **RDY** (no roll servo engaged, pilot flying, p.2-3); pressing HDG/NAV/APR/REV engages the roll axis; ALT/VS/CWS then "can only be engaged" with one of those already engaged (sec.3.1.4, 3.1.5, 4.2). | Master press engages an invented **LVL** roll base; ALT/VS press engages the AP by themselves (`press_alt` -> `engage()`). Trainer should show RDY, fly nothing until HDG/NAV/APR/REV, and ignore ALT/VS before that. | **GAP** |
+| R16 | The POH's *roll modes* are the mode buttons themselves - **HDG, NAV, NAV APR, REV, REV APR, NAV GPSS** (sec.3.1.4: "a roll mode (HDG, NAV, NAV APR, REV, REV APR, NAV GPSS)"). There is **no separate roll button**. AP master on -> display reads **RDY** (no roll servo engaged, pilot flying, p.2-3); pressing HDG/NAV/APR/REV engages the roll axis; ALT/VS/CWS then "can only be engaged" with one of those already engaged (sec.3.1.4, 3.1.5, 4.2). | Master press engages an invented **LVL** roll base; ALT/VS press engages the AP by themselves (`press_alt` -> `engage()`). Trainer should show RDY, fly nothing until HDG/NAV/APR/REV, and ignore ALT/VS before that. | **OK** (F52: `Lat.RDY`, `Autopilot.roll_engaged`, ALT/VS ignored before a roll mode) |
 | R17 | Sec.3.1.2 note: the DG/HSI heading system differences (bug set to course on DG). | Trainer assumes an HSI. | **N/M** (acceptable) |
 
 ## 2. Approach modes

@@ -353,6 +353,8 @@ class World:
         # "manual": NAV on the GPS flies the course selected on the HSI (S-TEC POH sec.3.1.2) and
         # the 530 says "Set course to ###" (Pilot's Guide p.175); "auto" slaves the pointer to DTK.
         self.ap_course = cfg.ap_course
+        for rx in (self.radios.nav1, self.radios.nav2):
+            rx.manual_course = self.ap_course == "manual"
         self.manual_heading = self.sim.heading
         self.show_msg = False                 # Message page visible (MSG key / M)
         self.baro_inhg = 29.92                # altimeter setting (COM2 shift knob)
@@ -468,10 +470,10 @@ class World:
         n1 = instr.nav_head(self.radios.nav1, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
         n2 = instr.nav_head(self.radios.nav2, st.pos, st.altitude_ft, st.gs_kt, self.magvar)
 
-        if self.ap.engaged:
+        if self.ap.roll_engaged:                 # RDY (no roll mode yet) leaves the pilot flying
             cmd = self.ap.update(
                 nav, st, self.magvar, dt=dt,
-                vloc_course_deg=self.radios.nav1.course_deg,
+                vloc_course_deg=self.radios.nav1.card_deg,
                 vloc_deflection=n1.deflection, vloc_valid=n1.valid,
                 gs_deflection=n1.gs_deflection, gs_valid=n1.gs_valid,
                 gps_course_deg=self._gps_pointer(),
@@ -600,6 +602,7 @@ def _tuned_nav(rx):
         pos=rx.station_pos,
         station_magvar_deg=getattr(rx, "station_magvar", 0.0),
         course_deg=rx.course_deg,
+        card_deg=getattr(rx, "card_deg", None),
         is_localizer=getattr(rx, "is_localizer", False),
         has_dme=getattr(rx, "has_dme", False),
     )

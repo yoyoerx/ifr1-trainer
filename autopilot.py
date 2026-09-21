@@ -44,7 +44,7 @@ __all__ = ["Lat", "Vert", "Commands", "Autopilot"]
 
 class Lat(str, Enum):
     OFF = "OFF"
-    LVL = "LVL"     # engaged, wings level (turn-coordinator hold) - the S-TEC base
+    RDY = "RDY"     # master on, NO roll mode engaged: the pilot is still flying (POH p.2-3)
     HDG = "HDG"
     NAV = "NAV"
     APR = "APR"
@@ -192,7 +192,18 @@ class Autopilot:
     def engage(self) -> None:
         self.engaged = True
         if self.lateral is Lat.OFF:
-            self.lateral = Lat.LVL
+            self.lateral = Lat.RDY
+
+    @property
+    def roll_engaged(self) -> bool:
+        """A roll mode (HDG, NAV, NAV APR, REV, NAV GPSS) is engaged - the only state in which the
+        autopilot steers, and the precondition for a pitch mode (POH sec.3.1.4, 3.1.5, 4.2)."""
+        return self.engaged and self.lateral not in (Lat.OFF, Lat.RDY)
+
+    def _release_roll(self) -> None:
+        """Back to RDY. A pitch mode cannot outlive its roll mode."""
+        self.lateral, self.armed_lat, self.gpss = Lat.RDY, None, False
+        self.vertical, self.armed_vert, self.alt_hold_ft, self.trim = Vert.OFF, None, None, 0
 
     def _reset_coupler(self) -> None:
         self.stage = "INTERCEPT"
@@ -218,19 +229,24 @@ class Autopilot:
     # still tracks not-yet-captured (needle not yet alive/centered) purely
     # for the annunciator - `_lateral_command` steers on `self.lateral`
     # itself throughout, armed or captured.
+    # Pressing the button of the mode that is already engaged releases it (back to RDY). The POH
+    # does not say what a repeat press does; this is the trainer's choice (see the review file).
     def press_hdg(self) -> None:
         self.engage()
-        self.lateral = Lat.LVL if self.lateral is Lat.HDG else Lat.HDG
-        self.armed_lat = None
+        if self.lateral is Lat.HDG:
+            self._release_roll()
+            return
+        self.lateral, self.armed_lat, self.gpss = Lat.HDG, None, False
 
     def press_nav(self) -> None:
         self.engage()
         if self.lateral is Lat.NAV:
-            # POH sec.4.2.5: "push the NAV button twice" enters GPSS mode;
-            # "push the NAV button again" (a further press) deletes it -
-            # NAV mode itself stays engaged either way. To fully leave NAV,
-            # select HDG (or disconnect the AP), same as the real unit.
+            # POH sec.3.1.3: "Press the NAV mode selector switch twice to engage the [GPSS] mode,
+            # unless the navigation mode is already engaged. In the latter event, only press the
+            # NAV mode selector switch once." Nothing in the POH says what a further press does;
+            # the trainer toggles GPSS back off (NAV stays engaged).
             self.gpss = not self.gpss
+            self._reset_coupler()
             return
         self.lateral = Lat.NAV
         self.armed_lat = Lat.NAV
@@ -241,32 +257,36 @@ class Autopilot:
     def press_apr(self) -> None:
         self.engage()
         if self.lateral is Lat.APR:
-            self.armed_lat = self.armed_vert = None
-            self.lateral = Lat.LVL
-            if self.vertical is Vert.GS:
-                self.vertical = Vert.OFF
+            self._release_roll()
             return
         self.lateral = Lat.APR
         self.armed_lat = Lat.APR
         self.armed_vert = Vert.GS
+        self.gpss = False                   # NAV APR replaces NAV GPSS (POH sec.3.2.2)
         self._reset_coupler()
 
     def press_rev(self) -> None:
         self.engage()
         if self.lateral is Lat.REV:
-            self.lateral, self.armed_lat = Lat.LVL, None
+            self._release_roll()
             return
         self.lateral = Lat.REV
         self.armed_lat = Lat.REV
+        self.gpss = False
         self._reset_coupler()
 
+    # ALT / VS "can only be engaged if a roll mode (HDG, NAV, NAV APR, REV, REV APR, NAV GPSS) is
+    # already engaged" (POH sec.3.1.4, 3.1.5; sec.4.2). Before that the press is ignored, and it
+    # does not switch the autopilot on.
     def press_alt(self) -> None:
-        self.engage()
+        if not self.roll_engaged:
+            return
         self.vertical = Vert.ALT
         self.alt_hold_ft = None          # grab present altitude next update
 
     def press_vs(self) -> None:
-        self.engage()
+        if not self.roll_engaged:
+            return
         self.vertical = Vert.VS
 
     def toggle_gpss(self) -> None:
@@ -294,7 +314,8 @@ class Autopilot:
     # -- annunciator text --------------------------------------
     @property
     def ready(self) -> bool:
-        return self.engaged and self.lateral not in (Lat.OFF,)
+        """The RDY annunciation state: master on, no roll mode yet."""
+        return self.engaged and self.lateral is Lat.RDY
 
     def led_bitmask(self) -> int:
         """IFR-1 AP-row LEDs: bit0 AP, bit1 HDG, bit2 NAV, bit3 APR, bit4 ALT, bit5 VS.
@@ -349,7 +370,7 @@ class Autopilot:
         gs_valid: bool = False,
         gps_course_deg: float | None = None,
     ) -> Commands:
-        if not self.engaged:
+        if not self.roll_engaged:            # off, or RDY: nothing steers and no pitch mode can run
             self.trim = 0
             return Commands()
 
@@ -386,7 +407,7 @@ class Autopilot:
         if self.armed_lat not in (Lat.NAV, Lat.APR, Lat.REV):
             return
         cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
-        if self.armed_lat is Lat.NAV and cdi_source != "VLOC":
+        if self.armed_lat in (Lat.NAV, Lat.APR) and cdi_source != "VLOC":
             xtk = getattr(nav_state, "xtk_nm", None) if nav_state else None
             scale = getattr(nav_state, "cdi_scale_nm", None)
             band = _CAPTURE_FRAC * scale if scale else _CAPTURE_XTK_NM
@@ -552,15 +573,22 @@ class Autopilot:
                 course = nav_state.dtk if gps_course_deg is None else norm360(gps_course_deg + magvar)
                 return self._couple(-xtk / scale, course, own, dt, soft_ok=True, src="NAV/GPS")
 
-        if lat in (Lat.APR, Lat.REV) and vloc_valid and vloc_course_deg is not None:
-            dev = (vloc_deflection or 0.0) * (-1.0 if lat is Lat.REV else 1.0)
-            if self.gpss and lat is Lat.APR and nav_state is not None \
-                    and getattr(nav_state, "dtk", None) is not None:
-                return self._gps_track_command(nav_state, own, dt)
-            crs = vloc_course_deg + (180.0 if lat is Lat.REV else 0.0)
-            return self._couple(dev, crs + magvar, own, dt, soft_ok=False, src=lat.value)
+        if lat in (Lat.APR, Lat.REV):
+            cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
+            if cdi_source == "VLOC":
+                if vloc_valid and vloc_course_deg is not None:
+                    dev = (vloc_deflection or 0.0) * (-1.0 if lat is Lat.REV else 1.0)
+                    crs = vloc_course_deg + (180.0 if lat is Lat.REV else 0.0)
+                    return self._couple(dev, crs + magvar, own, dt, soft_ok=False, src=lat.value + "/VLOC")
+            elif lat is Lat.APR and nav_state is not None and getattr(nav_state, "dtk", None) is not None:
+                # NAV APR on a GPS source (a GPS approach, POH sec.3.5.1): the same coupler, the GPS
+                # needle against the HSI pointer - APR is the higher-authority tracking, never SOFT
+                scale = getattr(nav_state, "cdi_scale_nm", None) or _DEFAULT_CDI_SCALE_NM
+                xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
+                course = nav_state.dtk if gps_course_deg is None else norm360(gps_course_deg + magvar)
+                return self._couple(-xtk / scale, course, own, dt, soft_ok=False, src="APR/GPS")
 
-        return norm360(hdg)          # LVL / OFF / armed-not-captured: wings level
+        return norm360(hdg)          # RDY / OFF / no valid needle: no steering (holds heading)
 
     # -- vertical -----------------------------------------
     def _maybe_capture_gs(self, gs_deflection, gs_valid) -> None:

@@ -28,10 +28,55 @@ class Nav:
 # --------------------------------------------------------------------------- #
 # master + base modes
 # --------------------------------------------------------------------------- #
-def test_master_engages_wings_level_no_vertical():
+def test_master_engages_rdy_with_no_roll_mode_and_no_vertical():
+    """S-TEC POH p.2-3: the master brings up RDY alone; a roll mode is engaged by HDG/NAV/APR/REV."""
     ap = Autopilot()
     ap.press_ap()
-    assert ap.engaged and ap.lateral is Lat.LVL and ap.vertical is Vert.OFF
+    assert ap.engaged and ap.lateral is Lat.RDY and ap.ready and not ap.roll_engaged
+    assert ap.vertical is Vert.OFF
+    assert ap.update(Nav(dtk=90.0, xtk=0.0), Own(), 0.0) == Commands()      # nothing steers
+
+
+def test_alt_and_vs_need_a_roll_mode_first():
+    """POH sec.3.1.4 / 3.1.5 / 4.2: 'can only be engaged if a roll mode (HDG, NAV, NAV APR, REV,
+    REV APR, NAV GPSS) is already engaged'. Before that the press does nothing - not even engage."""
+    ap = Autopilot()
+    ap.press_alt(); ap.press_vs()
+    assert not ap.engaged and ap.vertical is Vert.OFF
+    ap.press_ap()                                                            # RDY
+    ap.press_alt(); ap.press_vs()
+    assert ap.vertical is Vert.OFF
+    ap.press_hdg()                                                           # a roll mode
+    ap.press_alt()
+    assert ap.vertical is Vert.ALT
+
+
+def test_releasing_the_roll_mode_returns_to_rdy_and_drops_the_pitch_mode():
+    ap = Autopilot(); ap.press_hdg(); ap.press_vs()
+    assert ap.vertical is Vert.VS
+    ap.press_hdg()                                                           # the engaged mode's button
+    assert ap.lateral is Lat.RDY and ap.vertical is Vert.OFF and not ap.roll_engaged
+
+
+def test_apr_and_hdg_replace_gpss():
+    """POH sec.3.2.2: with GPSS flying the procedure, pressing NAV APR engages NAV APR instead."""
+    ap = Autopilot(); ap.press_nav(); ap.press_nav()
+    assert ap.gpss
+    ap.press_apr()
+    assert ap.lateral is Lat.APR and not ap.gpss
+    ap.press_nav(); ap.press_nav(); ap.press_hdg()
+    assert ap.lateral is Lat.HDG and not ap.gpss
+
+
+def test_apr_on_a_gps_source_flies_the_pointer_against_the_gps_needle():
+    """POH sec.3.5.1: on a GPS approach 'the NAV APR mode must be engaged' once on the front
+    inbound course - lateral tracking is the coupler on the GPS needle and the HSI pointer."""
+    ap = Autopilot(); ap.press_apr()
+    c = ap.update(Nav(dtk=90.0, xtk=0.0, cdi_source="GPS"), Own(heading=200.0), 0.0,
+                  gps_course_deg=70.0)
+    assert c.heading == pytest.approx(70.0)                                  # the pointer, zero deflection
+    assert ap.update(Nav(dtk=90.0, xtk=0.0, cdi_source="GPS"), Own(heading=200.0), 0.0
+                     ).heading == pytest.approx(90.0)                        # no pointer given: the DTK
 
 
 def test_disengaged_issues_no_commands():
@@ -39,10 +84,11 @@ def test_disengaged_issues_no_commands():
     assert ap.update(Nav(), Own(), 0.0) == Commands()
 
 
-def test_wings_level_holds_present_heading():
+def test_a_roll_mode_with_no_usable_guidance_holds_the_present_heading():
+    """POH sec.3.1.3: NAV GPSS with no course programmed 'will hold the aircraft's wings level'."""
     ap = Autopilot()
-    ap.engage()
-    assert ap.update(Nav(), Own(heading=123.0), 0.0).heading == pytest.approx(123.0)
+    ap.press_nav()
+    assert ap.update(Nav(dtk=None), Own(heading=123.0), 0.0).heading == pytest.approx(123.0)
 
 
 def test_hdg_button_engages_and_flies_the_bug_true():
@@ -52,7 +98,7 @@ def test_hdg_button_engages_and_flies_the_bug_true():
     ap.set_heading_bug(90.0)
     assert ap.update(Nav(), Own(), magvar=-13.0).heading == pytest.approx(77.0)
     ap.press_hdg()
-    assert ap.lateral is Lat.LVL
+    assert ap.lateral is Lat.RDY
 
 
 # --------------------------------------------------------------------------- #
@@ -209,15 +255,15 @@ def test_apr_cancel_drops_gs():
     ap.press_apr()
     ap.lateral, ap.vertical, ap.armed_lat = Lat.APR, Vert.GS, None
     ap.press_apr()
-    assert ap.lateral is Lat.LVL and ap.vertical is Vert.OFF
+    assert ap.lateral is Lat.RDY and ap.vertical is Vert.OFF
 
 
 def test_rev_reverses_localizer_sensing():
     fwd = Autopilot(); fwd.engage(); fwd.lateral = Lat.APR
     rev = Autopilot(); rev.engage(); rev.lateral = Lat.REV
     kw = dict(vloc_course_deg=90.0, vloc_deflection=0.4, vloc_valid=True)
-    hf = fwd.update(Nav(), Own(), 0.0, **kw).heading
-    hr = rev.update(Nav(), Own(), 0.0, **kw).heading
+    hf = fwd.update(Nav(cdi_source="VLOC"), Own(), 0.0, **kw).heading
+    hr = rev.update(Nav(cdi_source="VLOC"), Own(), 0.0, **kw).heading
     # forward course ~090, reverse course ~270; intercepts go opposite ways (a 45 deg cut, POH 3.1.2)
     assert ((hf - 90) + 180) % 360 - 180 == pytest.approx(45.0)
     assert ((hr - 270) + 180) % 360 - 180 == pytest.approx(-45.0)
@@ -228,6 +274,7 @@ def test_rev_reverses_localizer_sensing():
 # --------------------------------------------------------------------------- #
 def test_vs_knob_sets_target_and_is_commanded():
     ap = Autopilot()
+    ap.press_hdg()                                      # a roll mode first (POH sec.3.1.4)
     ap.press_vs()
     ap.turn_vs_knob(-5)                                 # -500 fpm
     assert ap.vs_target == pytest.approx(-500.0)
@@ -236,6 +283,7 @@ def test_vs_knob_sets_target_and_is_commanded():
 
 def test_alt_hold_grabs_present_altitude_once():
     ap = Autopilot()
+    ap.press_hdg()                                      # a roll mode first (POH sec.3.1.4)
     ap.press_alt()
     c1 = ap.update(Nav(), Own(altitude=5432.0), 0.0)
     assert c1.altitude == pytest.approx(5430.0) and c1.clear_vs
@@ -245,6 +293,7 @@ def test_alt_hold_grabs_present_altitude_once():
 
 def test_vs_knob_nudges_alt_hold_when_in_alt():
     ap = Autopilot()
+    ap.press_hdg()                                      # a roll mode first (POH sec.3.1.4)
     ap.press_alt()
     ap.update(Nav(), Own(altitude=4000.0), 0.0)         # captures 4000
     ap.turn_vs_knob(2)                                  # +200 ft
@@ -253,6 +302,7 @@ def test_vs_knob_nudges_alt_hold_when_in_alt():
 
 def test_preselect_captures_out_of_vs():
     ap = Autopilot()
+    ap.press_hdg()                                      # a roll mode first (POH sec.3.1.4)
     ap.press_vs()
     ap.set_vs_target(700.0)
     ap.set_preselect(6000.0)
@@ -264,6 +314,7 @@ def test_preselect_captures_out_of_vs():
 
 def test_trim_annunciator_follows_commanded_vs():
     ap = Autopilot()
+    ap.press_hdg()                                      # a roll mode first (POH sec.3.1.4)
     ap.press_vs()
     ap.set_preselect(20000.0)                           # keep the preselect out of the way
     ap.set_vs_target(600.0)
@@ -439,10 +490,7 @@ def test_gpss_turn_rate_limit_is_110_percent_of_standard_rate():
     assert c.turn_rate_dps == pytest.approx(3.3)
     nv = Autopilot(); nv.press_nav()
     assert nv.update(Nav(dtk=90.0, xtk=0.0), Own(heading=200.0), 0.0).turn_rate_dps == pytest.approx(2.7)
-    ap = Autopilot(); ap.press_apr(); ap.gpss = True
-    c = ap.update(Nav(dtk=90.0, xtk=0.0), Own(), 0.0, vloc_course_deg=90.0,
-                  vloc_deflection=0.0, vloc_valid=True)
-    assert c.turn_rate_dps == pytest.approx(3.3)         # GPSS APR flies the GPS course too
+
 
 
 # --------------------------------------------------------------------------- #

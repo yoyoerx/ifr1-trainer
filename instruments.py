@@ -104,7 +104,8 @@ class TunedNav:
     ident: str = ""
     pos: Point | None = None
     station_magvar_deg: float = 0.0   # station declination (VOR); 0 for a localizer
-    course_deg: float = 0.0           # selected course, MAGNETIC (OBS, or the ILS front course)
+    course_deg: float = 0.0           # course the needle deviates from, MAGNETIC (OBS, or the ILS front course)
+    card_deg: float | None = None     # the HSI card as set by the pilot, if it can differ from `course_deg`
     is_localizer: bool = False
     has_dme: bool = False
     elev_ft: float = 0.0
@@ -331,7 +332,7 @@ def compute_panel(
         )
         cdi = CDI(
             source="VLOC", deflection=dfl, full_scale_deg=fs, to_from=tf, valid=ok,
-            course_deg=norm360(nav1.course_deg),
+            course_deg=norm360(nav1.course_deg if nav1.card_deg is None else nav1.card_deg),
         )
     elif nav is not None and getattr(nav, "valid", False) and nav.xtk_nm is not None:
         fs_nm = getattr(nav, "cdi_scale_nm", None) or GPS_FULL_SCALE_NM[phase]
@@ -416,7 +417,7 @@ def nav_head(receiver, ac_pos: Point, ac_alt_ft: float, gs_kt: float,
         valid=ok,
         is_localizer=is_loc,
         ident=getattr(receiver, "station_ident", ""),
-        course_deg=norm360(course),
+        course_deg=norm360(getattr(receiver, "card_deg", course)),   # the card; the needle used `course`
         obs_deg=norm360(getattr(receiver, "obs_deg", 0.0)),
         deflection=dfl,
         to_from="OFF" if is_loc else tf,          # a localizer has no TO/FROM

@@ -140,8 +140,18 @@ class NavReceiver:
     @property
     def course_deg(self) -> float:
         """The course the CDI/HSI is deviating from: the localizer front course
-        if we have it, otherwise the OBS setting."""
+        if we have it, otherwise the OBS setting. (A localizer's needle is the beam itself; it
+        does not move with the OBS card - only a VOR's does.)"""
         return self.loc_course_deg if self.loc_course_deg is not None else self.obs_deg
+
+    manual_course: bool = False     # True: the HSI card is only what the pilot sets (see `card_deg`)
+
+    @property
+    def card_deg(self) -> float:
+        """The course pointer (the HSI/CDI card) - what the autopilot's NAV/APR mode flies.
+        With `manual_course` it is always the pilot's OBS setting: S-TEC POH sec.3.3.3 has the pilot
+        "Set Course Pointer to FRONT INBOUND LOC course". Otherwise it follows the beam."""
+        return self.obs_deg if self.manual_course else self.course_deg
 
     @property
     def has_gs(self) -> bool:

@@ -1746,3 +1746,52 @@ def test_set_course_message_uses_the_magnetic_desired_track_and_is_off_when_slav
     assert msg == f"Set course to {(ns.dtk - 10.0) % 360.0:03.0f}°"
     g.check_course_select(None, 10.0)                          # pointer slaved / unread
     assert not any(m.startswith("Set course to") for m in g.peek_messages())
+
+
+# --------------------------------------------------------------------------- #
+# "Steep turn ahead" (Pilot's Guide p.175)
+# --------------------------------------------------------------------------- #
+def _turn_plan(db, change_deg, leg2_nm=20.0, leg1_nm=20.0):
+    """A ``leg1_nm`` leg north, then a leg turning right by ``change_deg`` at BRAVO."""
+    from navmath import norm360
+    a = Point(40.0, -74.0)
+    b = destination(a, 0.0, leg1_nm)
+    c = destination(b, norm360(change_deg), leg2_nm)
+    g = Gns530(db)
+    g.fpl.waypoints = [PlanWaypoint("ALFA", a), PlanWaypoint("BRAVO", b), PlanWaypoint("CHAR", c)]
+    g.fpl.activate_leg(1)
+    return g, a, b
+
+
+def _approach_msgs(g, a, b, dist_out_nm, gs=120.0):
+    pos = destination(b, 180.0, dist_out_nm)
+    g.update(pos, 0.0, gs, 1.0)
+    return [m for m in g.peek_messages() if m.startswith("Steep")]
+
+
+def test_steep_turn_ahead_for_a_course_change_over_175_degrees(db):
+    """p.175 condition 2: 'the turn requires a course change greater than 175 degrees'; it comes
+    'approximately one minute' before the turn."""
+    g, a, b = _turn_plan(db, 178.0)
+    assert _approach_msgs(g, a, b, 8.0) == []              # far out: not yet within a minute of the turn
+    assert _approach_msgs(g, a, b, 4.0) == ["Steep turn ahead"]
+    assert _approach_msgs(g, a, b, 3.5) == ["Steep turn ahead"]     # once, not repeatedly
+
+
+def test_no_steep_turn_message_for_an_ordinary_turn(db):
+    g, a, b = _turn_plan(db, 60.0)
+    for d in (8.0, 4.0, 2.0, 1.0):
+        assert _approach_msgs(g, a, b, d) == []
+
+
+def test_steep_turn_ahead_when_the_lead_available_needs_more_than_25_degrees_of_bank(db):
+    """p.175 condition 1: 'the turn requires a bank angle in excess of 25 degrees in order to stay
+    on course'. A 90-degree turn at 160 kt at the end of a 1 nm leg cannot be led by the full
+    25-degree anticipation (the lead is held to half the leg), so it needs a steeper bank."""
+    g, a, b = _turn_plan(db, 90.0, leg1_nm=1.0)
+    msgs = []
+    for d in (0.9, 0.7, 0.5):
+        msgs = _approach_msgs(g, a, b, d, gs=160.0)
+    assert msgs == ["Steep turn ahead"]
+    g2, a2, b2 = _turn_plan(db, 90.0, leg1_nm=20.0)              # plenty of room: ordinary turn
+    assert [_approach_msgs(g2, a2, b2, d, gs=160.0) for d in (5.0, 2.0, 1.0)] == [[], [], []]

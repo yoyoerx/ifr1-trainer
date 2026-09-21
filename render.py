@@ -2246,7 +2246,8 @@ def draw_nav_head(surf, rect, nh, label, r, radius=None, t=0.0, source_kind=None
     if not is_gps:
         _ident_dot(surf, ix + r.f_sm.size(f"{kind} {ident}")[0] + 8, cy - rad + 4, ident, t, color)
     num = f"{(getattr(nh,'obs_deg',0) if not is_loc else course):03.0f}"
-    r._t("DTK" if is_gps else ("OBS" if not is_loc else "CRS"), ix, cy - rad + 18,
+    # a GPS head's number is the selected course (the pointer); the 530 shows the DTK itself
+    r._t("CRS" if is_gps else ("OBS" if not is_loc else "CRS"), ix, cy - rad + 18,
         font=r.f_sm, color=DIM)
     r.lcd(num, ix + 34, cy - rad + 16, color=TEXT)
     tf = getattr(nh, "to_from", "OFF")

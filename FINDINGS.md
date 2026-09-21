@@ -906,6 +906,54 @@ course is greater than 10 deg different from the desired track" (also p.80 for a
 * Not modelled: the 530's reading of the external selector is assumed to be the NAV1 card at all times
   (the p.173 "Heading input failure" installation fault is not simulated).
 
+### F52 — RDY / roll-mode interlock, NAV APR on GPS, LOC pointer, "Steep turn ahead"
+
+Fourth step of the POH review (R16) plus the six "not faithful / unverified" items from the F51 follow-up.
+
+**RDY and the roll-mode interlock (POH p.2-3, sec.3.1.4, 3.1.5, 4.2).** The POH has no roll button:
+"roll mode" is the category HDG / NAV / NAV APR / REV / REV APR / NAV GPSS. The master brings up **RDY**
+alone (no roll servo); HDG/NAV/APR/REV engage the roll axis; ALT and VS "can only be engaged if a roll mode
+... is already engaged" (the S-TEC Cirrus transition deck agrees: "A roll mode must be selected prior to
+engaging a pitch mode"). `Lat.LVL` (an invented wings-level base) is replaced by `Lat.RDY`;
+`Autopilot.roll_engaged` gates `update()` and the World tick (RDY leaves the pilot / demo follower flying);
+ALT/VS presses before a roll mode are ignored and do not switch the AP on; the RDY lamp is lit only in RDY.
+*Trainer choice, unverified:* pressing the button of the mode that is already engaged releases it to RDY
+(and drops the pitch mode); the POH does not say what a repeat press does. The GPSS "third press
+deletes it" step is likewise not in this POH (sec.3.1.3 only says press NAV once if NAV is engaged).
+
+**Follow-up on F51's list:**
+1. *LOC pointer was auto-set.* `NavReceiver.course_deg` (the beam) fed both the needle and the AP.
+   Now `NavReceiver.card_deg` is the pilot's OBS card when `--ap-course manual` and the AP/HSI use it, while
+   a localizer's needle stays on the beam (a localizer does not move with the OBS card). S-TEC POH sec.3.3.3:
+   "Set Course Pointer to FRONT INBOUND LOC course". Headless KLNS ILS 08: pointer on the course centres the
+   needle; +10 deg leaves 0.28 deflection; +30 deg pins it; left at 0 deg the needle is pegged.
+2. *How the AP senses the course.* POH sec.1.3: it "senses turn rate, as well as closure rate to the selected
+   course, along with the non-rate quantities of heading error, course error, and course deviation
+   indication"; the Cirrus 55X deck: in NAV "it will determine what guidance corrections are needed by
+   reference to what is happening on the HSI". Consistent with pointer-as-course-datum + needle; the exact mixing
+   is unpublished, so the coupler's track-based form stays the trainer's model.
+3. *GPSS.* The same deck says GPSS also "will command a default 45 deg intercept angle" at full-scale CDI
+   (so the shared 45 deg law is right) and that it "allows turn anticipation" (the HSI cannot know groundspeed or
+   the course change). The 530 sends roll steering on ARINC 429 label 121 "Horizontal Command (to
+   Autopilot)" (500 Series Installation Manual 190-00181-02 Rev J); bank-limited roll-steering dynamics are not
+   modelled beyond the 110% rate limit. Implemented from Pilot's Guide p.175: **"Steep turn ahead"** ~60 s
+   before a turn needing >25 deg of bank, a course change >175 deg, or (DME arc) an anticipation >90 s.
+4. *GPSS with the CDI on VLOC.* POH sec.3.2.2: after switching to VLOC "press the NAV mode selector switch to
+   engage the NAV APR mode" - APR replaces GPSS. `press_apr/rev/hdg` now clear GPSS, and NAV APR on a **GPS**
+   source (sec.3.5.1 GPS approaches) flies the coupler on the GPS needle and the pointer (it previously
+   held heading). Unverified: what a real installation does with the GPSS flag while the CDI is on VLOC (the
+   trainer flies the VOR).
+5. *Does the 530 read the pointer?* 500 Series Installation Manual: the manual course device "is required for
+   the GNS 530 VOR receiver, and optional for the 500/530 GPS receiver"; "An OBS resolver connection to the GPS is
+   preferred, but not required." So "Set course to" exists only where that input is wired; the trainer assumes
+   it is. The p.173 "Heading input failure" fault is not simulated.
+6. *Pointer on the HSI.* Rendered and checked: with the pointer 25 deg off DTK the NAV1 card shows the pointer,
+   the needle is the GPS deviation, MSG lights with "Set course to 220"; the info label now reads **CRS**
+   (it said DTK over a value that was the pointer).
+
+Not modelled / open: REV on a GPS source; the ILS/GPS-approach output that raises autopilot gain
+(Installation Manual 4.5.1.11); the CAP/SOFT gain numbers remain the trainer's.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

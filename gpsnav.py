@@ -92,6 +92,7 @@ def _clampf(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+_STEEP_TURN_LEAD_S = 60.0         # Pilot's Guide p.175: the message comes "approximately one minute" ahead
 _COURSE_SELECT_MSG_DEG = 10.0   # Pilot's Guide p.175: "Set course to" only if the selected course differs by more than this
 # distance (nm) inside which a fly-over / final fix is considered "reached"
 _FIX_CAPTURE_NM = 0.30
@@ -616,6 +617,7 @@ class GpsNav:
         self.cursor = PageCursor()
         self.messages: list[str] = []
         self._course_msg: str | None = None     # the live "Set course to ###" message, if posted
+        self._steep_key: tuple | None = None    # the leg "Steep turn ahead" was last posted for
         self._dto_dialog: DirectToEntry | None = None
         self._proc_dialog: ProcSelect | None = None   # PROC key selector overlay
         self._proc_airport = ""                        # airport of the last-loaded procedure
@@ -1033,6 +1035,34 @@ class GpsNav:
 
     def toggle_cdi_source(self) -> None:
         self.cdi_source = "VLOC" if self.cdi_source == "GPS" else "GPS"
+
+    def _check_steep_turn(self, has_next: bool, change: float, anticip_nm: float, dtg: float,
+                          on_arc: bool, is_dto: bool, to_id: str) -> None:
+        """GNS 530 Pilot's Guide p.175: "Steep turn ahead - This message appears approximately one
+        minute prior to a turn in one of the following three conditions: 1) the turn requires a
+        bank angle in excess of 25 degrees in order to stay on course, 2) the turn requires a
+        course change greater than 175 degrees, or 3) during a DME arc approach the turn
+        anticipation distance exceeds 90 seconds." Posted once per leg."""
+        gs = self._gs
+        if not has_next or gs < 30.0 or change < 1.0:
+            return
+        if max(0.0, dtg - anticip_nm) / gs * 3600.0 > _STEEP_TURN_LEAD_S:
+            return
+        key = (self.fpl.active, to_id, is_dto)
+        if key == self._steep_key:
+            return
+        steep = change > 175.0
+        if not steep and on_arc:
+            steep = anticip_nm / gs * 3600.0 > 90.0
+        if not steep and anticip_nm > 0.0:
+            # the bank that fits this turn into the lead actually available (25 deg is the
+            # unconstrained lead `turn_anticipation_nm` assumes)
+            radius_m = anticip_nm / math.tan(math.radians(change / 2.0)) * 1852.0
+            bank = math.degrees(math.atan((gs * 0.514444) ** 2 / (9.80665 * radius_m)))
+            steep = bank > 25.5
+        if steep:
+            self._steep_key = key
+            self.messages.append("Steep turn ahead")
 
     def check_course_select(self, pointer_mag: float | None, magvar: float) -> None:
         """GNS 530 Pilot's Guide p.175: "Set course to [###] - The course select for the external
@@ -1905,6 +1935,8 @@ class GpsNav:
         anticip = min(turn_anticipation_nm(self._gs, course_change), 5.0, leg_len * 0.5) \
             if nxt else 0.0
         alert_dist = anticip + self._gs / 3600.0 * _WPT_ALERT_SEC
+        self._check_steep_turn(bool(nxt), course_change, anticip, dtg, arc is not None,
+                               is_dto, to_id)
 
         # a MAP / hold / manual-termination fix: stop here (GNS 530 Pilot's Guide
         # sec.6.2 - 'SUSP' at the MAP / after a hold circuit) instead of running on.
