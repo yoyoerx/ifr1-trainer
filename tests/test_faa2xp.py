@@ -137,3 +137,36 @@ def test_restore_keeps_a_file_the_user_edited_after_install(tmp_path):
 def test_not_an_xplane_folder(tmp_path):
     with pytest.raises(inst.InstallError):
         inst.custom_dir(tmp_path)
+
+
+def test_restamp_changes_only_the_cycle_in_the_version_line(tmp_path):
+    from faa2xp.merge import restamp
+    src = tmp_path / "msa.dat"
+    src.write_bytes(b"I\r\n1150 Version - data cycle 2406, build 1, metadata MSAXP1150.\r\n\r\nrow \xe9 1\r\n99\r\n")
+    restamp(src, tmp_path / "o.dat", "2609")
+    assert (tmp_path / "o.dat").read_bytes() == \
+        b"I\r\n1150 Version - data cycle 2609, build 1, metadata MSAXP1150.\r\n\r\nrow \xe9 1\r\n99\r\n"
+
+
+def test_install_copies_a_tree_and_restore_removes_only_what_it_copied(tmp_path):
+    xp = _fake_xp(tmp_path)
+    tree = tmp_path / "CIFPsrc"
+    (tree / "sub").mkdir(parents=True)
+    (tree / "KBOS.dat").write_text("a")
+    (tree / "sub" / "x.dat").write_text("b")
+    (tmp_path / "f").write_text("v")
+    plan = inst.install(xp, {"FAACIFP18": tmp_path / "f"}, "2609", apply=True, dirs={"CIFP": tree})
+    cd = xp / "Custom Data"
+    assert (cd / "CIFP" / "sub" / "x.dat").read_text() == "b" and "copytree" in plan[0]
+    (cd / "CIFP" / "mine.dat").write_text("user file")
+    inst.restore(xp, apply=True)
+    assert not (cd / "CIFP" / "KBOS.dat").exists() and not (cd / "CIFP" / "sub").exists()
+    assert (cd / "CIFP" / "mine.dat").read_text() == "user file"
+
+
+def test_install_refuses_to_merge_into_an_existing_tree(tmp_path):
+    xp = _fake_xp(tmp_path)
+    (xp / "Custom Data" / "CIFP").mkdir(parents=True)
+    (tmp_path / "f").write_text("v")
+    with pytest.raises(inst.InstallError):
+        inst.install(xp, {"FAACIFP18": tmp_path / "f"}, "2609", apply=True, dirs={"CIFP": tmp_path})

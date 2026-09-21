@@ -178,9 +178,14 @@ X-Plane-shaped rows (reusing `navdata.cifp` line parsers); `merge.py` formats
 them and merges over the pristine `Resources/default data/earth_{nav,fix,awy,hold}.dat`
 (a base row is replaced only when the FAA data supplies the same ident+area+
 region; everything else is kept); `install.py` copies into `Custom Data/` with a
-SHA-256 manifest and backups so `restore` is exact. X-Plane 12 loads procedures
-straight from a `FAACIFP18` in `Custom Data/`, so no per-airport `CIFP/*.dat`
-conversion is needed.
+SHA-256 manifest and backups so `restore` is exact. Per Laminar's "Navdata in
+X-Plane 11 and 12" article (developer.x-plane.com), `Custom Data/earth_*.dat`
+*completely replace* the base layer (default `CIFP/` included) and must all share
+one cycle, so install also copies `CIFP/` and restamps `earth_mora/msa` to the
+cycle; a `FAACIFP18` there then overrides terminal procedures per US airport
+(and its cycle must match the layer below). Non-US procedures therefore keep the
+bundled 2406 files. 2026-09-20 first attempt omitted `CIFP/` -> "No Procedures
+found in 'CIFP' folder" at startup.
 
 ---
 

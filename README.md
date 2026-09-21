@@ -423,7 +423,8 @@ python -m faa2xp restore --xplane "..." --yes    # exact undo (originals put bac
 ```
 
 It writes only into `Custom Data/` (`earth_nav/fix/awy/hold.dat` merged over the
-default files, plus `FAACIFP18`, which X-Plane 12 loads procedures from) and never
+default files, plus a copy of the default `CIFP/` and `FAACIFP18`, which X-Plane overrides US
+procedures from) and never
 touches `Resources/default data`. Unofficial; not for real-world navigation.
 
 ## Approach plates (d-TPP)

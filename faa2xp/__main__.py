@@ -10,9 +10,12 @@ from datasrc import faa as faa_src
 
 from . import install as inst
 from .extract import extract
-from .merge import build_all
+from .merge import build_all, restamp
 
 _TABLE = ("earth_nav.dat", "earth_fix.dat", "earth_awy.dat", "earth_hold.dat")
+# copied unchanged apart from the cycle in the header: X-Plane requires every file
+# in the Custom Data layer to carry the same cycle (see faa2xp/merge.py restamp)
+_PASSTHRU = ("earth_mora.dat", "earth_msa.dat")
 
 
 def _cycle_dir(root: Path, cycle: str | None) -> tuple[str, Path]:
@@ -34,6 +37,9 @@ def cmd_build(args) -> Path:
     stats = build_all(inst.default_dir(Path(args.xplane)), ex, out, cycle)
     for name, s in stats.items():
         print(f"{name:16} kept {s['kept']:>7}  replaced {s['dropped']:>7}  added {s['added']:>7}")
+    default = inst.default_dir(Path(args.xplane))
+    for n in _PASSTHRU:
+        restamp(default / n, out / n, cycle)
     for n in ex.notes[:5]:
         print("note:", n)
     print(f"staged in {out}")
@@ -43,11 +49,14 @@ def cmd_build(args) -> Path:
 def cmd_install(args) -> None:
     cycle, d = _cycle_dir(Path(args.data), args.cycle)
     out = Path(args.out) if args.out else Path(args.data) / "xplane_out" / cycle
-    if not all((out / n).exists() for n in _TABLE):
+    if not all((out / n).exists() for n in _TABLE + _PASSTHRU):
         out = cmd_build(args)
-    files = {n: out / n for n in _TABLE}
+    files = {n: out / n for n in _TABLE + _PASSTHRU}
     files["FAACIFP18"] = d / "FAACIFP18"
-    for line in inst.install(Path(args.xplane), files, cycle, apply=args.yes):
+    # Custom Data's earth_* files *replace* the base layer wholesale, CIFP/ included; X-Plane
+    # then applies FAACIFP18 over it per airport (US), so the non-US procedures must come along
+    dirs = {"CIFP": inst.default_dir(Path(args.xplane)) / "CIFP"}
+    for line in inst.install(Path(args.xplane), files, cycle, apply=args.yes, dirs=dirs):
         print(line)
 
 

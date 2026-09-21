@@ -9,6 +9,7 @@ until the base file itself drops it.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 
@@ -126,6 +127,15 @@ def merge_hold(base: Path, ex: Extracted, out: Path, cycle: str, built: date) ->
             kept.append(ln)
     _write(out, header("hold", cycle, built), kept + [fmt_hold(r) for r in ex.hold], trailer=True)
     return {"kept": len(kept), "dropped": dropped, "added": len(ex.hold)}
+
+
+def restamp(base: Path, out: Path, cycle: str) -> None:
+    """Copy a data file unchanged except the ``data cycle NNNN`` in its version line."""
+    raw = base.read_bytes()                       # bytes: the body must stay byte-identical
+    first, nl1, rest = raw.partition(b"\n")       # "I"
+    ver, nl2, body = rest.partition(b"\n")        # version line
+    ver = re.sub(rb"data cycle \d+", f"data cycle {cycle}".encode(), ver, count=1)
+    out.write_bytes(first + nl1 + ver + nl2 + body)
 
 
 FILES = {
