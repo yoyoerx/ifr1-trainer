@@ -175,23 +175,35 @@ any code was written; the decisions below are the spec to build against.
 navaids, approaches) from the free FAA CIFP, without a Navigraph subscription.
 X-Plane's bundled data is stuck at AIRAC 2406. Built 2026-09-20 as the `faa2xp/`
 subpackage (not a separate repo); see ARCHITECTURE §5.4 and README "X-Plane
-data back-port". Not validated in a running sim yet - open items below.
+data back-port". Installed on the author's X-Plane 12 on 2026-09-21: it starts
+cleanly, no navdata errors in `Log.txt`, and FDK shows the new 116.85 MHz.
+Accepted as good; open items below were not checked.
 
 - [x] `python -m faa2xp build|install|restore|status` - stage, install (dry run
       unless `--yes`), reversible via manifest + `.faa2xp-backup/`
 - [x] `earth_nav.dat` (VOR/VORTAC/TACAN/DME/NDB/LOC/GS), `earth_fix.dat`,
       `earth_awy.dat`, `earth_hold.dat` merged over the default files
-- [x] `FAACIFP18` copied into `Custom Data/` (X-Plane 12 loads procedures from it)
-- [ ] Confirm in the running sim: a 2609-only approach loads (e.g. an amended
-      procedure), an ILS tunes/captures, non-US procedures still load
-      (unverified whether X-Plane falls back to `CIFP/*.dat` for airports
-      absent from `FAACIFP18`)
+- [x] `FAACIFP18` copied into `Custom Data/`; X-Plane overrides terminal
+      procedures per US airport from it. Per Laminar's "Navdata in X-Plane 11
+      and 12", `Custom Data/earth_*.dat` replace the base layer wholesale, so
+      install also copies the default `CIFP/` (non-US procedures) and restamps
+      `earth_mora/msa` to the cycle (first attempt omitted `CIFP/` and X-Plane
+      refused to start: "No Procedures found in 'CIFP' folder")
+- [ ] Not confirmed in the sim: the FAA procedures actually win (e.g. HADCI
+      hold at 0G7 reads 7.4 deg / 3900 ft, old data 7.0 / 3400), an ILS
+      tunes/captures, a non-US airport (CYYZ/EGLL) still lists procedures
+- [ ] `earth_mora/msa` are still 2406 data with only the header cycle changed
 - [ ] ILS/LOC elevation is the airport elevation (CIFP P.I has no localizer
       elevation); ILS-DME, markers, LPV/GLS path points are kept from 2406
 - [ ] Fix type code (7-digit column in `earth_fix.dat`) is a reused constant per
       enroute/terminal; its meaning is undocumented
 
 ## Done log
+
+- **2026-09-20/21** — `faa2xp/` built and installed (see the side-project
+  section above): FAA CIFP -> X-Plane 12 `Custom Data`, reversible. F48 fixed a
+  trainer CIFP parser bug found on the way (letter-category localizers dropped).
+  807 -> 830+ tests.
 
 See `archive/WORKING-2026-09-11.md` for the full dated log through M0–M16 and
 the "gps"/"steam"/"dual" layouts' initial build, and `FINDINGS.md` for every
