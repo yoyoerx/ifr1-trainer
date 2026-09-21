@@ -198,6 +198,15 @@ Accepted as good; open items below were not checked.
 - [ ] Fix type code (7-digit column in `earth_fix.dat`) is a reused constant per
       enroute/terminal; its meaning is undocumented
 
+## Backlog - autopilot fidelity vs the S-TEC 55X POH
+
+`docs/AUTOPILOT_POH_REVIEW.md` compares the POH (local copy `docs/reference/STEC_System55X_POH_4thEd.pdf`,
+gitignored) with `autopilot.py` and lists 30+ gaps in priority order. The big ones: VOR/LOC intercept is a
+22 deg proportional law rather than the POH's 45 deg / CAP -> CAP SOFT -> SOFT sequence; one 3 deg/s turn rate
+for every mode (POH: 90%, GPSS 90-130%); NAV silently flies the GPS DTK (that is GPSS); GS arms on the APR press
+and captures at 75% deflection (POH: 5%); no RDY/roll-mode interlock; ALT knob 100 ft (POH 20 ft, +/-360).
+Not scheduled - awaiting a decision on order (review sec.5).
+
 ## Done log
 
 - **2026-09-20/21** — `faa2xp/` built and installed (see the side-project
