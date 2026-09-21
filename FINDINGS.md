@@ -853,6 +853,32 @@ the CAP / CAP SOFT gain steps 15 / 30 / 75 s after capture, and the pilot-select
 intercept angle (HDG bug + HDG/NAV). The VOR/LOC (VLOC) intercept keeps its own tuned
 law. The 1.5x turn-in margin is the trainer's choice (POH: 20-100%, "variable").
 
+### F50 — NAV / APR / REV coupler follows the S-TEC 55X intercept-capture-track timeline
+
+Second step of the POH review (`docs/AUTOPILOT_POH_REVIEW.md`, items R1-R8, R10). The VOR/LOC
+path was a 22 deg/unit proportional law capped at 30 deg, one authority level throughout,
+and every mode turned at 100% of standard rate. Now one coupler (`Autopilot._couple`) serves
+NAV on a GPS leg, NAV on VOR/LOC, APR and REV, per S-TEC 55X POH (4th Ed.) sec.3.1.2, pp.3-4/3-5:
+
+* **INTERCEPT** - flat 45 deg cut to the course ("full scale ... 45 intercept angle"), rolling
+  out over the last stretch before the 15% band; the turn-in deflection is closure-rate based,
+  held to the POH's 20-100% ("the turn will always begin between 100% and 20%").
+* **CAP** at 15% deflection ("the course is captured"), turn-rate limit 90% of standard rate,
+  gain stepping down; **CAP SOFT** at +15 s (45%); crosswind correction from +30 s; **SOFT** at
+  +75 s (15%, NAV only - APR "engage[s] ... the higher authority CAP SOFT"), which filters short needle
+  excursions and falls back to CAP SOFT after >50% for 60 s; a new course >= 10 deg reverts to
+  CAP; engaging <10% off and within 5 deg of the course goes straight to SOFT.
+* HDG turns at 90% (sec.4.1); `Commands.turn_rate_dps` -> `SimModel.turn_rate_limit`
+  (main resets it to the standard rate when the AP is off).
+
+Headless: GPS NAV from 0.5/2/6 nm off, wind 0/270@30/120@35 -> overshoot 0.04-0.18 nm on a
+1 nm CDI scale (<=18% of full scale), tracking within ~0.02 nm afterwards (no limit cycle: the
+drift trim is limited to 3 deg and starts 30 s after capture); ILS 08 in 0/270@25/090@30 wind ->
+needle within 2% by ~200 s. Gaps that remain: GPSS turn rate (90/110/130% by hardware code),
+sub-45 deg cuts at high closure rate, pilot-selectable intercept angle, NAV flashing. The
+intercept turn-in model (11.5 s of closure + the 15% band) and the stage gains (50/30/22 deg per
+unit) are the trainer's; the POH gives the bounds and the timeline, not the curves.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

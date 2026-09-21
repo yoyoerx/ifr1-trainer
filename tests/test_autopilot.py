@@ -85,13 +85,15 @@ def test_nav_trims_out_steady_crosswind_offset():
     ap.press_nav()
     xtk = 0.0
     drift_per_s = 0.1                    # a stand-in constant crosswind drift
-    for _ in range(900):                 # ample time for the trim to wind in
+    for _ in range(1800):                # ample time for the (slow, POH-staged) trim to wind in
         cmd = ap.update(Nav(dtk=180.0, xtk=xtk), Own(), 0.0, dt=1.0)
         intercept = angle_diff(cmd.heading, 180.0)   # + = cutting toward the right
         # toy plant: flying right of track (+intercept) drifts xtk further
         # right over time; the simulated crosswind adds a constant push
         xtk += intercept * 0.02 + drift_per_s
-    assert abs(xtk) < 0.3
+    # 0.1 nm/s is a ~360 kt crosswind; the small residual trim (3 deg max - the measured
+    # track-vs-heading drift does the real work) holds the offset well inside one dot
+    assert abs(xtk) < 0.6 and abs(ap._xtk_i) > 2.5
 
 
 def test_nav_tracks_vloc_once_cdi_source_switches():
@@ -110,7 +112,7 @@ def test_nav_tracks_vloc_once_cdi_source_switches():
     cmd = ap.update(Nav(dtk=360.0, xtk=0.0, cdi_source="VLOC"), Own(heading=90.0), 0.0,
                      vloc_course_deg=90.0, vloc_deflection=1.0, vloc_valid=True)
     assert cmd.heading != pytest.approx(360.0)
-    assert cmd.heading == pytest.approx(90.0 + 1.0 * 22.0)     # _VLOC_GAIN
+    assert cmd.heading == pytest.approx(90.0 + 45.0)     # full-scale needle: POH sec.3.1.2 45 deg cut
 
 
 def test_nav_press_again_engages_gpss():
@@ -216,12 +218,9 @@ def test_rev_reverses_localizer_sensing():
     kw = dict(vloc_course_deg=90.0, vloc_deflection=0.4, vloc_valid=True)
     hf = fwd.update(Nav(), Own(), 0.0, **kw).heading
     hr = rev.update(Nav(), Own(), 0.0, **kw).heading
-    # forward course ~090, reverse course ~270; intercepts go opposite ways
-    assert abs(((hf - 90) + 180) % 360 - 180) < _MAX
-    assert abs(((hr - 270) + 180) % 360 - 180) < _MAX
-
-
-_MAX = 31.0
+    # forward course ~090, reverse course ~270; intercepts go opposite ways (a 45 deg cut, POH 3.1.2)
+    assert ((hf - 90) + 180) % 360 - 180 == pytest.approx(45.0)
+    assert ((hr - 270) + 180) % 360 - 180 == pytest.approx(-45.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -310,32 +309,25 @@ def test_mode_line_smoke():
 
 
 def test_apr_builds_wind_drift_trim_for_a_steady_localizer_offset():
-    """F38 (KLNS ILS 08 playtest): APR was proportional-only, so a steady
-    needle offset (crosswind drift) never got a stronger correction - the AP
-    parked off-centre. A captured, off-centre needle must integrate trim
-    toward the course side, and the trim must be dt-based."""
+    """F38 (KLNS ILS 08 playtest): a steady needle offset (crosswind drift) must eventually
+    get a stronger correction, or the AP parks off-centre. With the POH timeline the trim only
+    learns from 30 s after capture (sec.3.1.2: the crosswind correction is established then),
+    once the needle has stopped closing, and must be dt-based."""
     ap = Autopilot()
     ap.press_apr()
-    base = ap.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
-                     vloc_course_deg=90.0, vloc_deflection=0.15, vloc_valid=True).heading
-    for _ in range(20):
-        cmd = ap.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
-                        vloc_course_deg=90.0, vloc_deflection=0.15, vloc_valid=True)
-    assert cmd.heading > base                    # turning harder toward the needle
+    kw = dict(vloc_course_deg=90.0, vloc_deflection=0.10, vloc_valid=True)
+    early = ap.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0, **kw).heading
+    for _ in range(90):
+        cmd = ap.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0, **kw)
+    assert cmd.heading > 90.0 + 30.0 * 0.10 + 0.5        # CAP SOFT gain x deflection, plus trim
     # a large (intercept-in-progress) deflection must not wind the trim up
     ap3 = Autopilot()
     ap3.press_apr()
     for _ in range(50):
         c3 = ap3.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
                         vloc_course_deg=90.0, vloc_deflection=0.5, vloc_valid=True)
-    assert c3.heading == pytest.approx(90.0 + 0.5 * 22.0)
-    # a pegged (uncaptured) needle must not wind the trim up
-    ap2 = Autopilot()
-    ap2.press_apr()
-    for _ in range(50):
-        c2 = ap2.update(Nav(cdi_source="VLOC"), Own(heading=90.0), 0.0, dt=1.0,
-                        vloc_course_deg=90.0, vloc_deflection=1.0, vloc_valid=True)
-    assert c2.heading == pytest.approx(90.0 + 22.0)
+    assert c3.heading == pytest.approx(90.0 + 45.0) and ap3._xtk_i == 0.0
+    assert ap3.stage == "INTERCEPT"
 
 
 def test_nav_crabs_into_the_wind_from_track_vs_heading():
@@ -347,11 +339,92 @@ def test_nav_crabs_into_the_wind_from_track_vs_heading():
     ap.press_nav()
     own = Own(heading=30.0)
     own.track_deg = 40.0                 # drifting 10 deg right of heading
-    cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), own, 0.0, dt=0.1)
+    n = Nav(dtk=40.0, xtk=0.0, cdi_source="GPS")
+    cmd = ap.update(n, own, 0.0, dt=0.1)
+    assert cmd.heading == pytest.approx(40.0)      # POH 3.1.2: no crosswind correction until 30 s after capture
+    for _ in range(320):
+        cmd = ap.update(n, own, 0.0, dt=0.1)
     assert cmd.heading == pytest.approx(30.0)      # DTK 40 - drift 10
     own.track_deg = 20.0                 # 10 deg LEFT of heading (drift -10)
-    cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), own, 0.0, dt=0.1)
+    cmd = ap.update(n, own, 0.0, dt=0.1)
     assert cmd.heading == pytest.approx(50.0)      # DTK 40 + 10
     # no track available (or no drift): unchanged from before
-    cmd = ap.update(Nav(dtk=40.0, xtk=0.0, cdi_source="GPS"), Own(heading=30.0), 0.0, dt=0.1)
+    cmd = ap.update(n, Own(heading=30.0), 0.0, dt=0.1)
     assert cmd.heading == pytest.approx(40.0)
+
+
+# --------------------------------------------------------------------------- #
+# S-TEC 55X POH sec.3.1.2 coupler timeline: 45 deg cut, 15% capture, CAP -> CAP SOFT (+15 s)
+# -> SOFT (+75 s, NAV only), turn-rate limits 90% / 45% / 15% of standard rate
+# --------------------------------------------------------------------------- #
+def _vloc(ap, dev, *, heading=90.0, dt=1.0, n=1, course=90.0):
+    cmd = None
+    for _ in range(n):
+        cmd = ap.update(Nav(cdi_source="VLOC"), Own(heading=heading), 0.0, dt=dt,
+                        vloc_course_deg=course, vloc_deflection=dev, vloc_valid=True)
+    return cmd
+
+
+def test_coupler_stages_and_turn_rate_limits_follow_the_pohs_timeline():
+    ap = Autopilot(); ap.press_nav()
+    c = _vloc(ap, 1.0)
+    assert ap.stage == "INTERCEPT" and c.turn_rate_dps == pytest.approx(2.7)      # 90% of 3 deg/s
+    c = _vloc(ap, 0.14)                                                            # inside 15%: captured
+    assert ap.stage == "CAP" and c.turn_rate_dps == pytest.approx(2.7)
+    c = _vloc(ap, 0.14, n=15)
+    assert ap.stage == "CAP SOFT" and c.turn_rate_dps == pytest.approx(1.35)      # 45%
+    c = _vloc(ap, 0.02, n=60)
+    assert ap.stage == "SOFT" and c.turn_rate_dps == pytest.approx(0.45)          # 15%
+
+
+def test_apr_tracks_in_cap_soft_never_soft():
+    """POH p.3-5: APR is the way to track in the higher-authority CAP SOFT instead of SOFT."""
+    ap = Autopilot(); ap.press_apr()
+    _vloc(ap, 1.0)
+    _vloc(ap, 0.05, n=200)
+    assert ap.stage == "CAP SOFT"
+
+
+def test_engaging_on_the_course_goes_straight_to_soft():
+    ap = Autopilot(); ap.press_nav()
+    c = _vloc(ap, 0.05, heading=92.0)          # <10% and heading within 5 deg of the course
+    assert ap.stage == "SOFT" and c.turn_rate_dps == pytest.approx(0.45)
+
+
+def test_a_new_course_10_degrees_off_reverts_to_cap():
+    ap = Autopilot(); ap.press_nav()
+    _vloc(ap, 0.05, heading=92.0)
+    assert ap.stage == "SOFT"
+    c = _vloc(ap, 0.05, heading=92.0, course=105.0)
+    assert ap.stage == "CAP" and c.turn_rate_dps == pytest.approx(2.7)
+
+
+def test_soft_falls_back_to_cap_soft_after_60_s_beyond_50_percent():
+    ap = Autopilot(); ap.press_nav()
+    _vloc(ap, 0.05, heading=92.0)
+    _vloc(ap, 0.6, n=59)
+    assert ap.stage == "SOFT"
+    _vloc(ap, 0.6, n=3)
+    assert ap.stage == "CAP SOFT"
+
+
+def test_crosswind_correction_waits_30_s_after_capture():
+    ap = Autopilot(); ap.press_nav()
+    own = Own(heading=80.0); own.track_deg = 90.0            # 10 deg of right drift
+    first = ap.update(Nav(cdi_source="VLOC"), own, 0.0, dt=1.0, vloc_course_deg=90.0,
+                      vloc_deflection=0.5, vloc_valid=True).heading
+    ap.update(Nav(cdi_source="VLOC"), own, 0.0, dt=1.0, vloc_course_deg=90.0,
+              vloc_deflection=0.10, vloc_valid=True)          # captured
+    early = ap.update(Nav(cdi_source="VLOC"), own, 0.0, dt=1.0, vloc_course_deg=90.0,
+                      vloc_deflection=0.0, vloc_valid=True).heading
+    for _ in range(31):
+        late = ap.update(Nav(cdi_source="VLOC"), own, 0.0, dt=1.0, vloc_course_deg=90.0,
+                         vloc_deflection=0.0, vloc_valid=True).heading
+    assert early == pytest.approx(90.0) and late == pytest.approx(80.0)   # 30 s later: - drift
+
+
+def test_hdg_and_wings_level_turn_rates():
+    ap = Autopilot(); ap.press_hdg(); ap.set_heading_bug(120.0)
+    assert ap.update(Nav(), Own(), 0.0).turn_rate_dps == pytest.approx(2.7)     # POH sec.4.1: 90%
+    ap.press_hdg()                                                              # -> wings level
+    assert ap.update(Nav(), Own(), 0.0).turn_rate_dps is None

@@ -64,6 +64,7 @@ class Commands:
     altitude: float | None = None
     vs: float | None = None
     clear_vs: bool = False
+    turn_rate_dps: float | None = None      # roll-axis turn-rate limit (POH sec.4.1); None = pilot's
 
 
 _NAV_GAIN = 8.0        # deg intercept / nm XTK  (NAV, analog CDI)
@@ -85,8 +86,38 @@ _NAV_INTERCEPT_DEG = 45.0
 _TURN_IN_MIN_FRAC = 0.20        # of full-scale CDI deflection
 _TURN_IN_MAX_FRAC = 1.00
 _CAPTURE_FRAC = 0.15
-_INTERCEPT_TURN_RATE_DPS = 3.0 * 0.9
+STD_RATE_DPS = 3.0
+_INTERCEPT_TURN_RATE_DPS = STD_RATE_DPS * 0.9
 _DEFAULT_CDI_SCALE_NM = 5.0
+
+# The NAV / APR / REV coupler's timeline (POH sec.3.1.2, p.3-4/3-5). After the 15% capture the
+# turn-rate authority steps down: CAP (90% of standard rate) -> +15 s CAP SOFT (45%) -> +30 s the
+# crosswind correction is established -> +75 s SOFT (15%, NAV only: APR is the higher-authority
+# CAP SOFT tracking, p.3-5). In SOFT short-term needle excursions are ignored, and >50% deflection
+# for 60 s falls back to CAP SOFT.
+_RATE_FRAC = {"INTERCEPT": 0.90, "CAP": 0.90, "CAP SOFT": 0.45, "SOFT": 0.15}
+# deg of course cut per unit deflection by stage: "maximum gain" in CAP, stepping down (POH p.3-4)
+_STAGE_GAIN = {"CAP": 50.0, "CAP SOFT": 30.0, "SOFT": _VLOC_GAIN}
+_HDG_RATE_FRAC = 0.90           # sec.4.1: HDG, NAV, APR, REV, CWS
+_T_CAP_SOFT = 15.0
+_T_WIND_CORR = 30.0
+_T_SOFT = 75.0
+_SOFT_FILTER_S = 15.0
+_SOFT_REVERT_DEV = 0.50
+_SOFT_REVERT_S = 60.0
+_IMMEDIATE_SOFT_DEV = 0.10      # engaged nearly on course: skip straight to tracking (p.3-4)
+_COURSE_CHANGE_DEG = 10.0       # a new course this different reverts to CAP (p.3-5)
+# The POH gives only bounds for where the turn onto the course begins (100%..20% of full scale,
+# earlier at higher closure rate). The trainer's model: begin when the time to reach the course at
+# the closure rate held during the 45 deg cut falls to the time a 90%-rate roll-out needs
+# (~8.8 s of closure, +30% margin), inside those bounds.
+_T_TURN_IN_S = 11.5
+_CLOSURE_FILTER_S = 3.0
+_TRIM_MAX_CLOSURE = 0.01         # deflection-fraction / s
+# the drift correction is measured (track vs heading); this trim only mops up the residual, and
+# is kept small so the slow SOFT/CAP SOFT authority doesn't limit-cycle around the course
+_COUPLER_I_GAIN = 0.6
+_COUPLER_I_MAX = 3.0
 _CAPTURE_DEFLECTION = 0.75
 _VS_KNOB_STEP = 100.0
 
@@ -139,6 +170,17 @@ class Autopilot:
     alt_hold_ft: float | None = None  # captured on ALT engage
     trim: int = 0                     # -1 / 0 / +1 - TRIM annunciator arrow
     _xtk_i: float = 0.0               # lateral integral trim (deg), see _XTK_I_GAIN
+    # NAV/APR/REV coupler state (see `_couple`)
+    stage: str = "INTERCEPT"          # INTERCEPT | CAP | CAP SOFT | SOFT (POH sec.3.1.2)
+    _cap_t: float = 0.0               # seconds since course capture
+    _closure: float = 0.0             # filtered closure rate, deflection-fraction / s
+    _closure_peak: float = 0.0
+    _dev_prev: float | None = None
+    _dev_soft: float = 0.0            # low-passed deflection used in SOFT
+    _over50_t: float = 0.0
+    _course_ref: float | None = None
+    _rate_frac: float | None = None   # turn-rate limit (fraction of standard rate) this frame
+    _src: str = ""                    # what the coupler is flying: mode + needle source
 
     # -- master (yoke AP/disconnect) --------------------------------
     def press_ap(self) -> None:
@@ -148,6 +190,12 @@ class Autopilot:
         self.engaged = True
         if self.lateral is Lat.OFF:
             self.lateral = Lat.LVL
+
+    def _reset_coupler(self) -> None:
+        self.stage = "INTERCEPT"
+        self._cap_t = self._closure = self._closure_peak = self._dev_soft = self._over50_t = 0.0
+        self._dev_prev = self._course_ref = None
+        self._xtk_i = 0.0
 
     def disengage(self) -> None:
         self.engaged = False
@@ -185,7 +233,7 @@ class Autopilot:
         self.armed_lat = Lat.NAV
         self.armed_vert = None
         self.gpss = False
-        self._xtk_i = 0.0
+        self._reset_coupler()
 
     def press_apr(self) -> None:
         self.engage()
@@ -198,7 +246,7 @@ class Autopilot:
         self.lateral = Lat.APR
         self.armed_lat = Lat.APR
         self.armed_vert = Vert.GS
-        self._xtk_i = 0.0
+        self._reset_coupler()
 
     def press_rev(self) -> None:
         self.engage()
@@ -207,7 +255,7 @@ class Autopilot:
             return
         self.lateral = Lat.REV
         self.armed_lat = Lat.REV
-        self._xtk_i = 0.0
+        self._reset_coupler()
 
     def press_alt(self) -> None:
         self.engage()
@@ -307,6 +355,7 @@ class Autopilot:
         self._maybe_capture_lateral(nav_state, vloc_deflection, vloc_valid)
         self._maybe_capture_gs(gs_deflection, gs_valid)
 
+        self._rate_frac = None
         cmd_heading = self._lateral_command(nav_state, own, magvar, dt,
                                             vloc_course_deg, vloc_deflection, vloc_valid)
         cmd_alt, cmd_vs, clear_vs = self._vertical_command(alt, gs_kt, gs_deflection)
@@ -319,7 +368,9 @@ class Autopilot:
                 cmd_alt, cmd_vs, clear_vs = self.alt_preselect, None, True
 
         self.trim = 1 if (cmd_vs or 0) > 200 else -1 if (cmd_vs or 0) < -200 else 0
-        return Commands(heading=cmd_heading, altitude=cmd_alt, vs=cmd_vs, clear_vs=clear_vs)
+        rate = None if self._rate_frac is None else self._rate_frac * STD_RATE_DPS
+        return Commands(heading=cmd_heading, altitude=cmd_alt, vs=cmd_vs, clear_vs=clear_vs,
+                        turn_rate_dps=rate)
 
     # -- lateral --------------------------------------------
     def _maybe_capture_lateral(self, nav_state, vloc_deflection, vloc_valid) -> None:
@@ -337,7 +388,7 @@ class Autopilot:
             live = xtk is not None and abs(xtk) <= band
         else:  # APR / REV, or NAV tracking VLOC: track the localizer/VOR needle
             live = (vloc_valid and vloc_deflection is not None
-                    and abs(vloc_deflection) <= _CAPTURE_DEFLECTION)
+                    and abs(vloc_deflection) <= _CAPTURE_FRAC)     # POH: captured at 15%
         if live:
             self.armed_lat = None
 
@@ -354,7 +405,9 @@ class Autopilot:
             return 0.0
         return _clamp(norm180(trk - hdg), -_MAX_DRIFT_DEG, _MAX_DRIFT_DEG)
 
-    def _vloc_intercept(self, dev: float, dt: float) -> float:
+    def _vloc_intercept(self, dev: float, dt: float, integrate: bool = True,
+                        gain: float = _VLOC_GAIN, i_gain: float = _VLOC_I_GAIN,
+                        i_max: float = _VLOC_I_MAX) -> float:
         """Intercept angle (deg, + = turn right of the course) for a VOR/LOC
         needle deflection ``dev`` (+ = fly right): proportional, plus a small
         integral wind-drift trim (`_xtk_i`, shared with the GPS paths).
@@ -366,12 +419,83 @@ class Autopilot:
         Without any trim, a steady crosswind leaves a permanent offset (KLNS
         ILS 08 playtest)."""
         if dt:
-            if abs(dev) <= _VLOC_I_BAND:
-                self._xtk_i = _clamp(self._xtk_i + dev * _VLOC_I_GAIN * dt,
-                                     -_VLOC_I_MAX, _VLOC_I_MAX)
+            if integrate and abs(dev) <= _VLOC_I_BAND:
+                self._xtk_i = _clamp(self._xtk_i + dev * i_gain * dt, -i_max, i_max)
             else:
                 self._xtk_i *= max(0.0, 1.0 - 0.3 * dt)     # bleed off during an intercept
-        return _clamp(dev * _VLOC_GAIN + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
+        return _clamp(dev * gain + self._xtk_i, -_MAX_INTERCEPT, _MAX_INTERCEPT)
+
+    def _couple(self, dev: float, course_deg: float, own, dt: float, *, soft_ok: bool,
+                src: str = "") -> float:
+        """The S-TEC NAV / APR / REV coupler (POH sec.3.1.2). ``dev`` is the needle
+        deflection as a fraction of full scale, + = fly right; ``course_deg`` the true
+        course being flown. Returns the desired *heading* and sets `_rate_frac`.
+
+        INTERCEPT: a flat 45 deg cut toward the course, turning onto it once the time to
+        reach it (at the closure rate held during the cut) drops below a roll-out's worth,
+        always inside 100%..20% of full scale. At 15% deflection the course is captured
+        (CAP), then authority steps down on the POH's timeline (`_RATE_FRAC`)."""
+        a = abs(dev)
+        if src != self._src:                                # a different mode/needle: start over
+            self._reset_coupler()
+            self._src = src
+        if (self._course_ref is not None and self.stage != "INTERCEPT"
+                and abs(norm180(course_deg - self._course_ref)) >= _COURSE_CHANGE_DEG):
+            self.stage, self._cap_t = "CAP", 0.0            # p.3-5: new course >= 10 deg -> CAP
+        self._course_ref = course_deg
+        if self._dev_prev is None:                          # first frame after engaging
+            self._dev_soft = dev
+            hdg_err = abs(norm180(getattr(own, "heading_deg", course_deg) - course_deg))
+            if a < _IMMEDIATE_SOFT_DEV and hdg_err <= 5.0:
+                self.stage, self._cap_t = ("SOFT" if soft_ok else "CAP SOFT"), _T_SOFT
+        elif dt > 0.0:
+            closing = (abs(self._dev_prev) - a) / dt
+            self._closure += (closing - self._closure) * min(1.0, dt / _CLOSURE_FILTER_S)
+        self._dev_prev = dev
+
+        if self.stage == "INTERCEPT":
+            self._closure_peak = max(self._closure_peak, self._closure)
+            if a <= _CAPTURE_FRAC:
+                self.stage, self._cap_t = "CAP", 0.0
+        if self.stage != "INTERCEPT":
+            self._cap_t += dt
+            if self.stage == "CAP" and self._cap_t >= _T_CAP_SOFT:
+                self.stage = "CAP SOFT"
+            if self.stage == "CAP SOFT" and soft_ok and self._cap_t >= _T_SOFT:
+                self.stage = "SOFT"
+            if self.stage != "SOFT":
+                self._dev_soft = dev                    # tracks the needle until SOFT starts filtering it
+            else:
+                self._dev_soft += (dev - self._dev_soft) * min(1.0, dt / _SOFT_FILTER_S)
+                self._over50_t = self._over50_t + dt if a > _SOFT_REVERT_DEV else 0.0
+                if self._over50_t >= _SOFT_REVERT_S:
+                    self.stage, self._cap_t, self._over50_t = "CAP SOFT", _T_CAP_SOFT, 0.0
+
+        turn_in = 1.0
+        if self.stage == "INTERCEPT":
+            # roll out from 45 deg between the turn-in deflection and the 15% capture band, so
+            # the heading is already near the course when capture steps the gain down
+            turn_in = _clamp(_CAPTURE_FRAC + self._closure_peak * _T_TURN_IN_S,
+                             _TURN_IN_MIN_FRAC, _TURN_IN_MAX_FRAC)
+            at_capture = _STAGE_GAIN["CAP"] * _CAPTURE_FRAC
+            ramp = _clamp((a - _CAPTURE_FRAC) / max(turn_in - _CAPTURE_FRAC, 1e-6), 0.0, 1.0)
+            angle = math.copysign(at_capture + (_NAV_INTERCEPT_DEG - at_capture) * ramp, dev)
+        else:
+            d = self._dev_soft if self.stage == "SOFT" else dev
+            # the wind-drift trim only learns from 30 s after capture (the POH's "establishes the
+            # crosswind correction") and once the needle has stopped closing - integrating through
+            # an intercept winds it up and overshoots
+            settled = self._cap_t >= _T_WIND_CORR and abs(self._closure) < _TRIM_MAX_CLOSURE
+            angle = self._vloc_intercept(d, dt, integrate=settled, gain=_STAGE_GAIN[self.stage],
+                                          i_gain=_COUPLER_I_GAIN, i_max=_COUPLER_I_MAX)
+        self._rate_frac = _RATE_FRAC[self.stage]
+        # the crosswind correction is only established 30 s after capture (p.3-4)
+        # (on the roll-out ramp it applies too: without it a steady wind holds the aircraft just outside
+        # the capture band forever, on a heading that only balances the drift)
+        drift = 0.0
+        if (self.stage == "INTERCEPT" and a < turn_in) or (self.stage != "INTERCEPT" and self._cap_t >= _T_WIND_CORR):
+            drift = self._drift(own)
+        return norm360(course_deg + angle - drift)
 
     def _gps_track_command(self, nav_state, own, dt) -> float:
         """Desired track for a GPS leg: DTK plus the S-TEC intercept angle, plus a
@@ -395,6 +519,7 @@ class Autopilot:
         hdg = getattr(own, "heading_deg", 0.0)
 
         if lat is Lat.HDG:
+            self._rate_frac = _HDG_RATE_FRAC
             return norm360(self.heading_bug + magvar)
 
         if lat is Lat.NAV:
@@ -406,20 +531,22 @@ class Autopilot:
             cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
             if cdi_source == "VLOC":
                 if vloc_valid and vloc_course_deg is not None:
-                    dev = vloc_deflection or 0.0
-                    intercept = self._vloc_intercept(dev, dt)
-                    return norm360(vloc_course_deg + magvar + intercept - self._drift(own))
+                    return self._couple(vloc_deflection or 0.0, vloc_course_deg + magvar,
+                                        own, dt, soft_ok=True, src="NAV/VLOC")
             elif nav_state is not None and getattr(nav_state, "dtk", None) is not None:
-                return self._gps_track_command(nav_state, own, dt)
+                if self.gpss:
+                    return self._gps_track_command(nav_state, own, dt)
+                scale = getattr(nav_state, "cdi_scale_nm", None) or _DEFAULT_CDI_SCALE_NM
+                xtk = getattr(nav_state, "xtk_nm", 0.0) or 0.0
+                return self._couple(-xtk / scale, nav_state.dtk, own, dt, soft_ok=True, src="NAV/GPS")
 
         if lat in (Lat.APR, Lat.REV) and vloc_valid and vloc_course_deg is not None:
             dev = (vloc_deflection or 0.0) * (-1.0 if lat is Lat.REV else 1.0)
             if self.gpss and lat is Lat.APR and nav_state is not None \
                     and getattr(nav_state, "dtk", None) is not None:
                 return self._gps_track_command(nav_state, own, dt)
-            intercept = self._vloc_intercept(dev, dt)
             crs = vloc_course_deg + (180.0 if lat is Lat.REV else 0.0)
-            return norm360(crs + magvar + intercept - self._drift(own))
+            return self._couple(dev, crs + magvar, own, dt, soft_ok=False, src=lat.value)
 
         return norm360(hdg)          # LVL / OFF / armed-not-captured: wings level
 

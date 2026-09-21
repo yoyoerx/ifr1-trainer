@@ -111,6 +111,7 @@ class SimModel:
         self.target_vs: float | None = None      # fpm; overrides target_altitude while set
         self.bank = 0.0
         self._turn_rate = 0.0
+        self.turn_rate_limit = _STD_RATE_DEG_S    # deg/s; the autopilot lowers it per mode (POH sec.4.1)
 
         self._track, self._gs = self._wind_solve(self.heading)
 
@@ -142,7 +143,10 @@ class SimModel:
 
     def command(self, *, heading: float | None = None, altitude: float | None = None,
                 tas: float | None = None, ias: float | None = None,
-                vs: float | None = None, clear_vs: bool = False) -> None:
+                vs: float | None = None, clear_vs: bool = False,
+                turn_rate: float | None = None) -> None:
+        if turn_rate is not None:
+            self.turn_rate_limit = max(0.1, float(turn_rate))
         if heading is not None:
             self.target_heading = norm360(heading)
         if altitude is not None:
@@ -206,7 +210,7 @@ class SimModel:
             self._turn_rate = 0.0
             return
         err = angle_diff(self.target_heading, self.heading)   # + = target is CW
-        max_step = _STD_RATE_DEG_S * dt
+        max_step = self.turn_rate_limit * dt
         step = _clamp(err, -max_step, max_step)
         self.heading = norm360(self.heading + step)
         rate = step / dt if dt else 0.0

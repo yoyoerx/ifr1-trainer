@@ -85,7 +85,7 @@ import gns430 as gns430_mod
 import instruments as instr
 import sim_model as simmod
 import windsaloft
-from autopilot import Autopilot
+from autopilot import STD_RATE_DPS as _STD_RATE_DPS, Autopilot
 from radios import RadioStack
 
 
@@ -465,9 +465,10 @@ class World:
             )
             self._apply(cmd)
         elif self.gps_follow:
+            self.sim.command(turn_rate=_STD_RATE_DPS)
             self.sim.follow_leg(nav)
         else:
-            self.sim.command(heading=self.manual_heading)
+            self.sim.command(heading=self.manual_heading, turn_rate=_STD_RATE_DPS)
 
         self.sim.step(dt)
         st = self.sim.state
@@ -563,8 +564,10 @@ class World:
             kw["vs"] = cmd.vs
         elif cmd.clear_vs:
             kw["clear_vs"] = True
-        if kw:
-            self.sim.command(**kw)
+        # the roll-axis turn-rate limit is per mode (S-TEC POH sec.4.1); a mode with no
+        # limit of its own (wings level, HDG-less) turns at the standard rate
+        kw["turn_rate"] = cmd.turn_rate_dps if cmd.turn_rate_dps is not None else _STD_RATE_DPS
+        self.sim.command(**kw)
 
 
 def _tuned_nav(rx):

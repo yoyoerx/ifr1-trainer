@@ -240,3 +240,14 @@ def test_follow_leg_then_fly_reduces_cross_track():
         sim.step(1.0)
     end = abs(cross_track_nm(a, b, sim.state.pos))
     assert end < 1.5 and end < abs(xtk0)
+
+
+def test_turn_rate_limit_caps_how_fast_the_heading_changes():
+    sim = SimModel(pos=ORIGIN, heading_deg=0.0, tas_kt=120.0)
+    sim.command(heading=90.0, turn_rate=1.0)
+    for _ in range(10):
+        sim.step(1.0)
+    assert sim.heading == pytest.approx(10.0)          # 1 deg/s, not the 3 deg/s standard rate
+    sim.command(turn_rate=3.0)
+    sim.step(1.0)
+    assert sim.heading == pytest.approx(13.0)
