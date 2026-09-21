@@ -1131,8 +1131,10 @@ the desired frequency on any of the main pages and press ENT" puts it in the **s
 Not modelled (guide shows them; the data or the units aren't there): "best available approach" and runway length columns
 on Nearest Airport, the Airport Runway page, "Info?" usage restrictions on frequencies, TX/PT designations, Nearest
 User / ARTCC / FSS / Airspace pages, the 30 s tuning-cursor return timer, 8.33 kHz spacing. NDB frequencies are shown but
-not tunable (no ADF). Trainer choice kept: ENT on a highlighted *identifier* still goes Direct-To; the guide opens the
-waypoint's information pages there and uses the D-> key (p.115).
+not tunable (no ADF). **ENT on a highlighted Nearest identifier** now opens that facility's WPT page
+(Airport / VOR / NDB / Intersection; p.117) and CLR returns to the Nearest page; the **D-> key** with a Nearest row
+highlighted seeds the Direct-To page, then ENT, ENT (p.115). The old ENT-to-Direct-To shortcut (Nearest and WPT pages) is
+gone. Not modelled: the "Done?" field (CLR only), and extra Airport Location fields (fuel, city).
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

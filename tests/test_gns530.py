@@ -1147,15 +1147,30 @@ def test_vnav_set_rejects_a_target_not_in_the_plan(g):
     assert g.vnav.target_ident == ""
 
 
-def test_nearest_page_ent_goes_direct_to(g):
+def test_nearest_page_dct_key_selects_the_highlighted_waypoint(g):
+    """p.115: highlight the waypoint, press direct-to, ENT to accept the identifier, ENT again to activate."""
     g.update(Point(40.24, -74.0), 0.0, 120.0)                   # ~near the OOO VOR (40.25)
     g.cursor.group = list(PAGE_GROUPS).index("NRST")
     g.cursor.page = PAGE_GROUPS["NRST"].index("Nearest VOR")
     g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))    # cursor on
     hits = g.nearest_for_page("Nearest VOR")
     assert hits and hits[0].ident == "OOO"
-    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))     # DTO the nearest
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))     # accept the identifier
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))     # Activate?
     assert g.dto is not None and g.dto.target.ident == "OOO"
+
+
+def test_nearest_identifier_ent_opens_its_wpt_page_and_clr_returns(g):
+    """p.117: ENT on a highlighted nearest identifier displays its database pages; CLR/Done? returns."""
+    g.update(Point(40.24, -74.0), 0.0, 120.0)
+    g.cursor.group = list(PAGE_GROUPS).index("NRST")
+    g.cursor.page = PAGE_GROUPS["NRST"].index("Nearest VOR")
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+    assert g.dto is None and g.cursor.page_name == "VOR" and g.wpt_entry.ident() == "OOO"
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+    assert g.cursor.page_name == "Nearest VOR" and g.cursor.cursor_on
 
 
 def test_page_group_knob_does_not_wrap(g):
@@ -2069,8 +2084,8 @@ def test_nearest_airport_frequency_goes_to_the_com_standby(fdb):
     assert g.pop_tune_requests() == [("COM", 118.3, "TOWER")]
     assert g.dto is None                                           # a frequency ENT is not a Direct-To
     _knob(g, outer=-1)
-    _knob(g, pressed=("ENT",))                                     # back on the identifier: Direct-To as before
-    assert g.dto is not None and g.dto.target.ident == "KTST" and not g.pop_tune_requests()
+    _knob(g, pressed=("ENT",))                                     # back on the identifier: its Airport page (p.117)
+    assert g.dto is None and g.cursor.page_name == "Airport" and not g.pop_tune_requests()
 
 
 def test_nearest_vor_frequency_goes_to_the_vloc_standby(g):

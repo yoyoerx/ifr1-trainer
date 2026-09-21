@@ -706,6 +706,7 @@ class GpsNav:
         self._proc_airport = ""                        # airport of the last-loaded procedure
         self.wpt_entry = DirectToEntry.seeded("")   # WPT-page identifier lookup
         self.nrst_sel = 0                            # selection row on a NRST page
+        self._wpt_return: tuple[int, int] | None = None   # (group, page) to CLR back to from a WPT page opened off a NRST row
         self.nrst_col = 0                            # 0 = identifier, 1 = frequency (Nearest APT / VOR)
         self.wpt_field = 0                           # WPT pages: 0 = identifier, 1 = frequency list
         self.wpt_sel = 0                             # ... the highlighted frequency
@@ -1251,6 +1252,8 @@ class GpsNav:
             return
 
         page = self.cursor.page_name
+        if self._wpt_return is not None and page not in _WPT_PAGES:
+            self._wpt_return = None
         for btn in pressed:
             if btn == "SWAP":
                 self.toggle_cdi_source()
@@ -1435,11 +1438,7 @@ class GpsNav:
             elif page == "Airport Freq":
                 if rows and self.cursor.cursor_on:                         # "Press ENT when finished" - on to the frequency list (p.25)
                     self.wpt_field, self.wpt_sel = 1, 0
-            else:
-                entry = self.lookup(self.wpt_entry.ident(), page)
-                if entry is not None:              # DCT-from-a-WPT-page shortcut
-                    self.direct_to(PlanWaypoint.from_entry(entry))
-                    self.cursor.go_to_default_nav()
+            # otherwise ENT just accepts the identifier; Direct-To is the D-> key, not ENT
         elif page == "NAV/COM":
             rows = self.navcom_frequencies()
             if self.navcom_sel >= 0 and self.navcom_sel < len(rows):
@@ -1454,8 +1453,7 @@ class GpsNav:
                     if fr is not None:
                         self._tune(fr)
                     return
-                self.direct_to(PlanWaypoint.from_entry(hits[self.nrst_sel]))
-                self.cursor.go_to_default_nav()
+                self._open_wpt_page(page, hits[self.nrst_sel])
         elif page == "Flight Plan Catalog":
             if self.catalog_load(self.cat_sel):
                 self.cursor.go_to_flight_plan()
@@ -1479,6 +1477,11 @@ class GpsNav:
             return
         if page == "VNAV":
             self.vnav = VnavProfile()
+            return
+        if page in _WPT_PAGES and self._wpt_return is not None:
+            self.cursor.group, self.cursor.page = self._wpt_return
+            self._wpt_return = None
+            self.cursor.cursor_on = True
             return
         self._cancel()
 
@@ -1737,6 +1740,17 @@ class GpsNav:
         out, self.tune_requests = self.tune_requests, []
         return out
 
+    def _open_wpt_page(self, page: str, entry) -> None:
+        """ENT on a highlighted Nearest identifier "display[s] the Airport Location Page" / the waypoint's database
+        page (p.117); CLR returns to the Nearest page ("Done?" ENT or CLR)."""
+        target = {"Nearest APT": "Airport", "Nearest VOR": "VOR", "Nearest NDB": "NDB", "Nearest INT": "Intersection"}[page]
+        self._wpt_return = (self.cursor.group, self.cursor.page)
+        self.wpt_entry = DirectToEntry.seeded(entry.ident)
+        self.cursor.group = _GROUP_ORDER.index("WPT")
+        self.cursor.page = PAGE_GROUPS["WPT"].index(target)
+        self.cursor.cursor_on = False
+        self.wpt_field = self.wpt_sel = self.nrst_col = 0
+
     def nearest_frequency(self, page: str, entry) -> FreqEntry | None:
         """The frequency a Nearest-page row offers: an airport's tower / CTAF, a VOR's frequency."""
         if page == "Nearest APT":
@@ -1804,6 +1818,10 @@ class GpsNav:
             # direct-to"); a second DCT press activates its leg (sec.4 p.60).
             seed = self.fpl.waypoints[row].ident
             leg_row = row if row >= 1 else None
+        elif self._nearest_row() is not None:
+            # a NRST list row highlighted: "press the direct-to key ... ENT to accept the selected waypoint's
+            # identifier and ENT a second time to begin navigating" (p.115)
+            seed = self._nearest_row().ident
         elif self.dto is not None:
             seed = self.dto.target.ident
         elif (self.fpl.has_active_leg and not self.suspended
@@ -1811,6 +1829,13 @@ class GpsNav:
             seed = self.fpl.to_wp.ident
         self._dto_dialog = DirectToEntry.seeded(seed)
         self._dto_dialog.leg_row = leg_row
+
+    def _nearest_row(self):
+        page = self.cursor.page_name
+        if not (self.cursor.cursor_on and page.startswith("Nearest")):
+            return None
+        hits = self.nearest_for_page(page)
+        return hits[self.nrst_sel] if 0 <= self.nrst_sel < len(hits) else None
 
     def _fpl_cursor_row(self) -> int | None:
         """Index of the flight-plan waypoint under the Flight Plan page's cursor

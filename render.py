@@ -1349,7 +1349,7 @@ class Renderer:
             y += 15
         self._t(f"BRG {brg:03.0f}°   {dis:6.1f} nm", b.x, y + 2, font=self.f_sm, color=CYAN)
         if on:
-            hint = "ENT = standby" if (kind == "VhfNavaid" and getattr(gns, "wpt_field", 0) == 1) else "ENT = Direct-To"
+            hint = "ENT = standby" if (kind == "VhfNavaid" and getattr(gns, "wpt_field", 0) == 1) else ("CLR = back" if getattr(gns, "_wpt_return", None) else "")
             self._t(hint, b.right, b.y, font=self.f_sm, color=DIM, right=True)
 
     def _draw_freq_rows(self, rows, sel: int, x: int, y: int, bottom: int, right: int):
@@ -1393,7 +1393,7 @@ class Renderer:
         sel = getattr(gns, "nrst_sel", 0)
         self._t(sub.upper(), b.x, b.y, font=self.f_sm, color=DIM)
         if on:
-            hint = "ENT = standby" if getattr(gns, "nrst_col", 0) == 1 else "ENT = Direct-To"
+            hint = "ENT = standby" if getattr(gns, "nrst_col", 0) == 1 else "ENT = info  D-> = DCT"
             self._t(hint, b.right - 16, b.y, font=self.f_sm, color=DIM, right=True)
         mv = sc.magvar
         y = b.y + 20
