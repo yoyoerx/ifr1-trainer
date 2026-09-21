@@ -203,7 +203,7 @@ Accepted as good; open items below were not checked.
 - **2026-09-20/21** — `faa2xp/` built and installed (see the side-project
   section above): FAA CIFP -> X-Plane 12 `Custom Data`, reversible. F48 fixed a
   trainer CIFP parser bug found on the way (letter-category localizers dropped).
-  807 -> 830+ tests.
+  894 tests pass.
 
 See `archive/WORKING-2026-09-11.md` for the full dated log through M0–M16 and
 the "gps"/"steam"/"dual" layouts' initial build, and `FINDINGS.md` for every
