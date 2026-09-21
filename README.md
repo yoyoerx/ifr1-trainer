@@ -241,6 +241,7 @@ hardware at all). This is the full list, straight from `main._on_key`.
 | `Home` | Jump to Default NAV page |
 | `S` | Suspend (SUSP) |
 | `V` | CDI source (GPS ↔ VLOC) |
+| `Y` | (530W only) cycle the simulated SBAS condition: OK -> ADV LOST -> DEGRADED -> LOSS (a training control - see FINDINGS F58) |
 | `B` | OBS on/off |
 | `-` / `=` | OBS course −1 / +1 (hold `Shift` for ×10) |
 | `M` | Messages page |

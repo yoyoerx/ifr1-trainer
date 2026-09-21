@@ -1063,8 +1063,7 @@ glidepath, similar to an ILS glideslope"; the pilot is still responsible for the
   (GPS) RWY 23 Y (3.41 deg), headless, was drifting to 0.25 GDI high at 1.5 nm and now holds |GDI| <= 0.05 in 0 and 270@25
   wind.
 
-Not modelled: LP+V's silent removal of advisory guidance when out of tolerance (p.115), the "Approach downgraded" message,
-MAPR/TERM after the missed approach point.
+Not modelled here (LP+V removal, "Approach downgraded", MAPR/TERM: see F58).
 
 ### F57 — Closing out the modelled autopilot items (R2, R8, FAIL) and what stays the trainer's own
 
@@ -1083,6 +1082,35 @@ MAPR/TERM after the missed approach point.
   scale, settling within a few % in SOFT, ILS within 2% by ~200 s). Nothing published lets them be pinned down further.
 * Also unresolved, undocumented in all three POHs read: what a repeat press of an engaged mode's button does (HDG, APR,
   REV), and a third NAV press after GPSS - both stay trainer choices.
+
+### F58 — 530W: SBAS integrity (downgrade / abort / silent LP+V removal) and MAPR / TERM
+
+The three "not modelled" items from F55/F56 (500W Pilot's Guide 190-00357-00 Rev K).
+
+* **Missed approach: MAPR / TERM** (p.100 c/d). Once the OBS key sequences past the MAP the approach annunciation is
+  replaced by MAPR (CDI 0.3 nm) or TERM (CDI 1.0 nm): "MAPR ... for missed approach procedures in which the first leg is a
+  climb straight ahead to a waypoint, whereas TERM ... for missed approach procedures requiring a turn". In the FAA
+  CIFP virtually every missed approach opens with a CA climb along the final course (768 of 769 sampled), so the first *leg*
+  cannot tell the two apart; the trainer decides by the turn onto the first **waypoint** the climb heads for - a bearing
+  from the MAP more than 30 deg off the final course = TERM. The 30 deg is the trainer's threshold (the guide gives none);
+  on a 600-approach sample 55% come out MAPR and 45% TERM. Before the OBS press (SUSP at the MAP) the approach
+  annunciation stays.
+* **SBAS condition** (a training control - the trainer has no GPS integrity data, and the guide describes what the unit
+  does, not when): `GpsNav.sbas` in `OK / ADV LOST / DEGRADED / LOSS`, cycled with **`Y`** on a 530W (the top bar shows
+  "SBAS ..." in amber; it is not something the unit displays).
+  * **DEGRADED** - WAAS integrity below the LPV / L/VNAV / LNAV+V / LP limits: 60 s before the FAF the unit posts
+    **"Approach downgraded - Use LNAV minima"**, the annunciation becomes LNAV, the glidepath is flagged and the CDI keeps
+    the 0.3 nm approach scale (p.114; a plain LNAV approach is unaffected). Once past the FAF the same loss **aborts**
+    instead ("After the aircraft has passed the FAF, a loss of WAAS integrity will cause the approach to abort").
+  * **LOSS** - below even the non-precision limits: **"Abort Approach - Loss of Navigation"** at any time; the unit reverts to
+    terminal limits (TERM, CDI 1.0 nm).
+  * **ADV LOST** - LP+V only (p.115): "the advisory vertical guidance could be removed without annunciation due to the vertical
+    guidance not being within tolerances. This does not constitute a downgrade" - the approach stays annunciated LP+V, the
+    glidepath goes away, no message.
+  Approaches loaded again reset the downgrade / abort flags.
+
+Not modelled: the LPV annunciation's yellow background ("safe to continue but a downgrade may occur"), RAIM prediction, the
+message acknowledgement step before the unit "will revert to terminal limits", LOW ALT.
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

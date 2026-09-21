@@ -1929,3 +1929,106 @@ def test_only_an_rnav_gps_approach_gets_an_advisory_angle(db):
     ils = Procedure("KTST", "I18", "approach", "I", {"": (rw,)})
     assert GpsNav._advisory_angle(rnav) == ("RW18", 3.0)
     assert GpsNav._advisory_angle(ils) is None
+
+
+# --------------------------------------------------------------------------- #
+# 530W: SBAS integrity (downgrade / abort / silent LP+V removal) and MAPR / TERM (500W Pilot's Guide p.100, p.114-115)
+# --------------------------------------------------------------------------- #
+def _fly_final(g, ltp, dists, sbas=None, gs=110.0):
+    if sbas is not None:
+        g.sbas = sbas
+    seen = []
+    for d in dists:
+        pos, alt = _on_path(ltp, d)
+        g.update(pos, 180.0, gs, 1.0)
+        seen.append((g.nav.service, g.glidepath(alt).valid))
+    return seen
+
+
+def test_degraded_waas_downgrades_the_approach_60_seconds_before_the_faf(db):
+    """p.114 / messages: 'Approach downgraded - Use LNAV minima ... 60 seconds prior to the FAF ... vertical guidance has
+    been discontinued'; the annunciation becomes LNAV and the glideslope indicator is flagged."""
+    g, ltp = _w_on_final(db)
+    g.fpl.activate_leg(1)                                 # the leg that ends at the FAF
+    g.sbas = "DEGRADED"
+    pos, alt = _on_path(ltp, 8.0)
+    g.update(pos, 180.0, 120.0, 1.0)                      # 3 nm / 90 s from the FAF
+    assert "Approach downgraded - Use LNAV minima" not in g.peek_messages()
+    pos, alt = _on_path(ltp, 6.5)                         # 1.5 nm = 45 s to the FAF: within the minute
+    g.update(pos, 180.0, 120.0, 1.0)
+    assert g.peek_messages().count("Approach downgraded - Use LNAV minima") == 1
+    assert g.nav.service == "LNAV" and not g.glidepath(alt).valid
+    g.update(pos, 180.0, 120.0, 1.0)
+    assert g.peek_messages().count("Approach downgraded - Use LNAV minima") == 1      # once
+
+
+def test_loss_of_integrity_past_the_faf_aborts_instead_of_downgrading(db):
+    g, ltp = _w_on_final(db)                              # the FAF leg is active in this fixture: past the FAF
+    g.fpl.activate_leg(2)
+    g.sbas = "DEGRADED"
+    pos, alt = _on_path(ltp, 3.0)
+    g.update(pos, 180.0, 110.0, 1.0)
+    assert "Abort Approach - Loss of Navigation" in g.peek_messages()
+    assert g.nav.service == "TERM" and not g.glidepath(alt).valid
+    for _ in range(40):
+        g.update(pos, 180.0, 110.0, 1.0)
+    assert g.nav.cdi_scale_nm == pytest.approx(1.0)                                     # reverted to terminal limits
+
+
+def test_loss_of_navigation_aborts_at_any_time_and_a_plain_lnav_approach_is_not_downgraded(db):
+    g, ltp = _w_on_final(db)
+    g.sbas = "LOSS"
+    g.fpl.activate_leg(1)
+    pos, _ = _on_path(ltp, 8.0)
+    g.update(pos, 180.0, 110.0, 1.0)
+    assert "Abort Approach - Loss of Navigation" in g.peek_messages() and g.nav.service == "TERM"
+    lnav, ltp2 = _w_on_final(db, frozenset({"LNAV"}))
+    lnav.fpl.activate_leg(1)
+    lnav.sbas = "DEGRADED"
+    pos, _ = _on_path(ltp2, 6.5)
+    lnav.update(pos, 180.0, 120.0, 1.0)
+    assert not lnav.peek_messages() and lnav.nav.service == "LNAV"
+
+
+def test_lp_plus_v_guidance_is_dropped_silently_when_out_of_tolerance(db):
+    """p.115: 'the advisory vertical guidance could be removed without annunciation due to the vertical guidance not
+    being within tolerances. This does not constitute a downgrade'."""
+    g, ltp = _w_advisory(db, frozenset({"LP", "LNAV"}))
+    assert _fly_final(g, ltp, [3.0])[0] == ("LP+V", True)
+    seen = _fly_final(g, ltp, [3.0], sbas="ADV LOST")
+    assert seen[0] == ("LP+V", False)                     # still annunciated LP+V, but no glidepath
+    assert not g.peek_messages()                          # ...and nothing says so
+    lnavv, ltp2 = _w_advisory(db, frozenset({"LNAV"}))
+    assert _fly_final(lnavv, ltp2, [3.0], sbas="ADV LOST")[0] == ("LNAV+V", True)     # the guide's case is LP+V
+
+
+def _with_missed(db, first_leg_bearing):
+    g, ltp = _w_on_final(db)
+    g.fpl.waypoints.append(PlanWaypoint("MISS", destination(ltp, first_leg_bearing, 3.0)))
+    return g, ltp
+
+
+def test_missed_approach_is_mapr_for_a_straight_climb_and_term_for_a_turn(db):
+    """p.100 c/d: MAPR replaces the approach annunciation once the OBS key sequences to the missed approach (CDI 0.3 nm)
+    when the first leg is a climb straight ahead; TERM (CDI 1.0 nm) when the missed approach requires a turn."""
+    straight, ltp = _with_missed(db, 180.0)               # the approach course continues south
+    straight.fpl.activate_leg(2)                          # still on the leg into the MAP
+    straight.update(destination(ltp, 0.0, 0.3), 180.0, 110.0, 1.0)
+    assert straight.nav.service != "MAPR"                 # SUSP at the MAP: the approach annunciation stays
+    straight.fpl.activate_leg(3)                          # OBS pressed: the missed approach is active
+    for _ in range(40):
+        straight.update(destination(ltp, 180.0, 0.5), 180.0, 110.0, 1.0)
+    assert straight.nav.service == "MAPR" and straight.nav.cdi_scale_nm == pytest.approx(0.3)
+    turning, ltp2 = _with_missed(db, 90.0)                # first leg turns 90 deg left
+    turning.fpl.activate_leg(3)
+    for _ in range(40):
+        turning.update(destination(ltp2, 180.0, 0.5), 180.0, 110.0, 1.0)
+    assert turning.nav.service == "TERM" and turning.nav.cdi_scale_nm == pytest.approx(1.0)
+
+
+def test_sbas_state_cycles_and_rejects_unknown_values(db):
+    from gns530 import Gns530W
+    g = Gns530W(db)
+    assert [g.cycle_sbas() for _ in range(5)] == ["ADV LOST", "DEGRADED", "LOSS", "OK", "ADV LOST"]
+    with pytest.raises(ValueError):
+        g.set_sbas("nonsense")

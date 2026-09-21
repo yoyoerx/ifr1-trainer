@@ -1333,6 +1333,9 @@ def _on_key(e, w: World, ui: dict) -> None:
         g.toggle_suspend()
     elif k == pygame.K_v:
         g.toggle_cdi_source()
+    elif k == pygame.K_y:
+        if hasattr(g, "cycle_sbas") and g.variant.waas:      # training control: 530W SBAS integrity
+            print(f"SBAS integrity: {g.cycle_sbas()}")
     elif k == pygame.K_b:
         g.toggle_obs()
     elif k in (pygame.K_MINUS, pygame.K_EQUALS):

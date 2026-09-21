@@ -765,6 +765,9 @@ class Renderer:
         anns = list(getattr(sc.nav, "annunciators", ()) or ())
         if sc.autopilot:
             anns.insert(0, "AP-NAV")
+        sbas = getattr(getattr(sc, "gns", None), "sbas", "OK")
+        if sbas != "OK" and getattr(getattr(getattr(sc, "gns", None), "variant", None), "waas", False):
+            anns.insert(0, f"SBAS {sbas}")                # trainer control, not something the unit shows
         if getattr(sc, "messages", None):
             anns.insert(0, "MSG")
         if getattr(sc, "shift_hint", ""):
@@ -772,7 +775,7 @@ class Renderer:
         if getattr(sc, "time_warp", 1) > 1:      # hard to miss - flying faster than real time
             anns.insert(0, f"WARP {sc.time_warp}x")
         for a in anns:
-            col = (AMBER if "EXPIRED" in a or a == "MSG" or a.startswith("WARP")
+            col = (AMBER if "EXPIRED" in a or a == "MSG" or a.startswith("WARP") or a.startswith("SBAS")
                    else (CYAN if a in ("WPT", "AP-NAV") or a.startswith("SHIFT") else WHITE))
             r = self._t(a, x, 4, font=self.f_sm, color=col)
             x = r.right + 14

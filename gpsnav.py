@@ -308,6 +308,11 @@ class GlidePath:
 # vertical full-scale of the GPS glidepath needle: the trainer assumes the ILS-equivalent +/-0.7 deg (the 500W
 # Pilot's Guide says the LPV "can be flown identically to a standard ILS" but gives no vertical scale)
 _GP_FULL_SCALE_DEG = 0.7
+# The 530W's SBAS condition, a training control (the trainer has no GPS integrity data): the guide describes what
+# the unit does when integrity falls, not when it does (500W Pilot's Guide p.114-115, messages sec.).
+SBAS_STATES = ("OK", "ADV LOST", "DEGRADED", "LOSS")
+_DOWNGRADE_LEAD_S = 60.0           # "Approach downgraded" comes 60 s before the FAF
+_MISSED_STRAIGHT_DEG = 30.0        # a missed approach turning more than this onto its first waypoint annunciates TERM, not MAPR
 _ADVISORY_TCH_FT = 50.0            # LNAV+V / LP+V threshold crossing height (not published; trainer's assumption)
 _WAAS_ENROUTE_NM = 2.0             # 500W Pilot's Guide: ENR 2.0 nm, TERM 1.0 nm, approach 0.3 nm
 _MAP_FULL_SCALE_NM = 350.0 / 6076.115   # "CDI scaling continues to tighten from 0.3 NM to 350 feet" at the MAP
@@ -691,6 +696,9 @@ class GpsNav:
         self._path = None                        # PathPoint of the loaded RNAV approach (WAAS vertical data)
         self._service: frozenset = frozenset()   # the levels of service that approach publishes
         self._advisory = None                    # (runway ident, descent angle deg) for LNAV+V / LP+V
+        self.sbas = "OK"                         # 530W: OK | ADV LOST | DEGRADED | LOSS (see SBAS_STATES)
+        self._downgraded = False                 # "Approach downgraded - Use LNAV minima" has happened
+        self._aborted = False                    # "Abort Approach - Loss of Navigation" has happened
         # last ownship sample (set by update())
         self._pos: Point | None = None
         self._track = 0.0
@@ -711,6 +719,7 @@ class GpsNav:
         self._hold_state = None
         self._proc_airport = ""
         self._path, self._service, self._advisory = None, frozenset(), None
+        self._downgraded = self._aborted = False
         self.vnav = VnavProfile()
         missing: list[str] = []
         anchor = ref
@@ -749,6 +758,7 @@ class GpsNav:
             self._path = getattr(self.db, "path_points", {}).get((airport, ident))
             self._service = getattr(self.db, "approach_service", {}).get((airport, ident), frozenset())
             self._advisory = self._advisory_angle(proc)
+            self._downgraded = self._aborted = False
         apt = self.db.airport(airport)
         anchor = (self.fpl.waypoints[-1].pos if self.fpl.waypoints
                   else (apt.pos if apt is not None else None))
@@ -1918,8 +1928,9 @@ class GpsNav:
     def update(self, pos: Point, track_deg: float, gs_kt: float,
                dt: float | None = None) -> NavState:
         nav = self._update_core(pos, track_deg, gs_kt, dt)
-        if self.variant.waas:                       # the level-of-service annunciation (LPV / LNAV / ENR ...)
-            nav = self._nav = replace(nav, service=self.level_of_service())
+        if self.variant.waas:
+            self._check_sbas_integrity(pos, gs_kt)
+            nav = self._nav = replace(nav, service=self.level_of_service())   # LPV / LNAV / MAPR / ENR ...
         return nav
 
     def _update_core(self, pos: Point, track_deg: float, gs_kt: float,
@@ -2246,11 +2257,81 @@ class GpsNav:
         frac = 1.0 if total <= 0.0 else min(1.0, left / total)
         return _MAP_FULL_SCALE_NM + (_CDI_APPROACH_NM - _MAP_FULL_SCALE_NM) * frac
 
+    # -- SBAS integrity / missed approach (GNS 530W) --------------------------
+    def set_sbas(self, state: str) -> str:
+        """Set the (simulated) SBAS condition. ``ADV LOST``: the LP+V advisory guidance is not within tolerance;
+        ``DEGRADED``: WAAS integrity below the LPV / L/VNAV / LNAV+V / LP limits; ``LOSS``: below even the
+        non-precision limits."""
+        if state not in SBAS_STATES:
+            raise ValueError(f"SBAS state must be one of {SBAS_STATES}")
+        self.sbas = state
+        return state
+
+    def cycle_sbas(self) -> str:
+        return self.set_sbas(SBAS_STATES[(SBAS_STATES.index(self.sbas) + 1) % len(SBAS_STATES)])
+
+    def _map_index(self):
+        return next((i for i, w in enumerate(self.fpl.waypoints) if w.is_map), None)
+
+    def _in_missed_approach(self) -> bool:
+        """The OBS key has sequenced past the MAP: the active leg is in the missed approach procedure."""
+        map_i = self._map_index()
+        return bool(self._approach_active and map_i is not None and self.fpl.active > map_i)
+
+    def _missed_label(self) -> str:
+        """MAPR or TERM (500W Pilot's Guide p.100 c): "MAPR will be annunciated for missed approach procedures in
+        which the first leg is a climb straight ahead to a waypoint, whereas TERM will be annunciated for missed
+        approach procedures requiring a turn". In the CIFP nearly every missed approach opens with a CA climb along
+        the final course, so what decides it is the turn onto the first *waypoint* the climb is going to: a
+        bearing from the MAP more than 30 deg off the final course means a turn is required (the trainer's
+        threshold - the guide gives none; about half of US approaches come out each way)."""
+        wps = self.fpl.waypoints
+        map_i = self._map_index()
+        if map_i is None or map_i < 1:
+            return "MAPR"
+        nxt = next((w for w in wps[map_i + 1:] if not w.synthetic), None)
+        if nxt is None:
+            return "MAPR"
+        final = initial_bearing(wps[map_i - 1].pos, wps[map_i].pos)
+        return "TERM" if abs(angle_diff(initial_bearing(wps[map_i].pos, nxt.pos), final)) > _MISSED_STRAIGHT_DEG else "MAPR"
+
+    def _check_sbas_integrity(self, pos: Point, gs_kt: float) -> None:
+        """What the 530W does when WAAS integrity falls (500W Pilot's Guide p.114, messages "Approach downgraded
+        - Use LNAV minima" / "Abort Approach - Loss of Navigation"):
+        - 60 s before the FAF, a LPV / L/VNAV / LNAV+V / LP / LP+V approach is downgraded to LNAV: the message, the
+          annunciation LNAV, the glidepath flagged;
+        - once past the FAF a loss of WAAS integrity aborts instead of downgrading, and if the non-precision limits
+          cannot be met it aborts at any time; the unit reverts to terminal limits (1.0 nm, TERM)."""
+        if not (self._approach_active and self.sbas in ("DEGRADED", "LOSS")) or self._aborted:
+            return
+        if self._in_missed_approach():
+            return
+        faf_i = next((i for i, w in enumerate(self.fpl.waypoints) if w.is_faf), None)
+        if faf_i is None:
+            return
+        if self.sbas == "LOSS" or self.fpl.active > faf_i:
+            if self.sbas == "LOSS" or not self._downgraded:
+                self._aborted = True
+                self.messages.append("Abort Approach - Loss of Navigation")
+            return
+        if self._downgraded or self._vertical_service()[0] == "LNAV":
+            return
+        to_faf = great_circle_nm(pos, self.fpl.waypoints[faf_i].pos)
+        if to_faf / max(gs_kt, 30.0) * 3600.0 <= _DOWNGRADE_LEAD_S:
+            self._downgraded = True
+            self.messages.append("Approach downgraded - Use LNAV minima")
+
     def level_of_service(self, dist_nm: float | None = None) -> str:
         """The WAAS unit's flight-mode annunciation (500W Pilot's Guide p.85): ENR / TERM, then on an
         approach LPV / L/VNAV / LP / LNAV. Empty on a non-WAAS unit."""
         if not self.variant.waas:
             return ""
+        if self._aborted:
+            return "TERM"
+        if self._in_missed_approach():
+            return self._missed_label()
+        if self._downgraded and self._approach_active and self._pos is not None:
+            return "LNAV"
         faf_d = self._dist_to_faf(self._pos) if (self._pos is not None and self._approach_active) else None
         if self._approach_active and faf_d is not None and faf_d <= _CDI_APPROACH_ARM_NM:
             return self._vertical_service()[0]
@@ -2265,9 +2346,15 @@ class GpsNav:
         if not (self.variant.waas and self._approach_active and pos is not None):
             return GlidePath()
         service, geo = self._vertical_service()
+        if self._downgraded or self._aborted or self._in_missed_approach():
+            return GlidePath()                           # vertical guidance discontinued, the indicator flagged
         faf_d = self._dist_to_faf(pos)
         if geo is None or faf_d is None or faf_d > _CDI_APPROACH_ARM_NM:
             return GlidePath(service=service if geo is not None else "")
+        if service == "LP+V" and self.sbas == "ADV LOST":
+            # "the advisory vertical guidance could be removed without annunciation due to the vertical guidance
+            # not being within tolerances. This does not constitute a downgrade" (p.115): still LP+V, no glidepath
+            return GlidePath(service=service)
         ltp, elev, tch, gpa, course = geo
         d_nm = great_circle_nm(pos, ltp)
         if d_nm < 0.10 or abs(angle_diff(initial_bearing(pos, ltp), course)) > 90.0:
@@ -2304,11 +2391,17 @@ class GpsNav:
     def _target_cdi_scale(self, dist_to_dest: float | None,
                           dist_to_fix: float | None,
                           dist_to_dep: float | None = None) -> float:
-        if (self._approach_active and dist_to_fix is not None
+        if self.variant.waas and self._in_missed_approach():
+            # once the OBS key sequences to the missed approach: "CDI scaling will change to 0.3 NM full scale
+            # deflection if MAPR is annunciated, or 1.0 NM if TERM is annunciated" (p.100)
+            auto = _CDI_APPROACH_NM if self._missed_label() == "MAPR" else _CDI_TERMINAL_NM
+        elif (self._approach_active and dist_to_fix is not None
                 and dist_to_fix <= _CDI_APPROACH_ARM_NM):
             auto = _CDI_APPROACH_NM
             if self.variant.waas:
                 auto = self._waas_final_scale(dist_to_fix)
+                if self._aborted:                       # "will revert to terminal limits" (p.114)
+                    auto = _CDI_TERMINAL_NM
         else:
             near_dest = dist_to_dest is not None and dist_to_dest <= _CDI_TERMINAL_ARM_NM
             near_dep = dist_to_dep is not None and dist_to_dep <= _CDI_TERMINAL_ARM_NM
