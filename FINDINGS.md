@@ -1038,9 +1038,33 @@ which has no vertical guidance from the GPS. LPV needs a WAAS receiver, so it is
   deviation (within 50% of its scale). Headless KFDK RNAV (GPS) RWY 23 Z, `--unit 530w`, 0 and 270@25 wind: TERM ->
   LPV at 2 nm before SHUEY, scale 1.0 -> 0.30 -> 0.13, GS arms below the path, captures at 5%, |GDI| <= 0.05 to 1.5 nm.
 
-Not modelled: LNAV+V / LP+V advisory glidepaths (the CIFP final-leg vertical angle is available but unused), the HAL/VAL
+Not modelled here (LNAV+V / LP+V: see F56): the HAL/VAL
 integrity downgrade ("Approach downgraded - Use LNAV minima"), the KAP 140 "Enable A/P APR Outputs?" prompt, the 530W's
 other differences (SBAS status pages, terrain, etc.), and the LOW ALT annunciation.
+
+### F56 — LNAV+V and LP+V advisory glidepaths on the 530W
+
+Follow-up to F55. On a `--unit 530w`, an RNAV (GPS) approach that publishes no SBAS path point but does publish a
+final-segment descent angle gets an **advisory** glidepath, annunciated **LNAV+V** (500W Pilot's Guide p.85: "GPS approach
+using published LNAV minima. Advisory vertical guidance is provided") - or **LP+V** when the approach publishes LP minima
+(p.85/p.117, SW 5.10+). The guide (p.117): the glidepath "is provided to assist the pilot in maintaining a constant vertical
+glidepath, similar to an ILS glideslope"; the pilot is still responsible for the step-down altitudes and the MDA
+(p.115).
+
+* **Data.** `ProcedureLeg.vertical_angle_deg` parses ARINC 5.70 at [102:106] (`-341` = 3.41 deg down; present on ~10,200
+  approaches; 3.00 is by far the commonest, then 3.01/3.04/3.50). `GpsNav._advisory_angle` takes the runway leg's angle of
+  an approach whose route type is `R` (RNAV); ILS / VOR overlays stay plain LNAV.
+* **Which label.** `GpsNav._vertical_service`: LPV (SBAS path + LPV) > L/VNAV (SBAS path + LNAV/VNAV) > LP+V / LNAV+V
+  (published angle) > LP / LNAV. The advisory path crosses the threshold at 50 ft - **not published**, the trainer's
+  assumption - along the FAF->threshold course, with the same +/-0.7 deg needle assumption as F55.
+* **Autopilot.** POH sec.3.5.1 lists LNAV+V with LPV/L-VNAV as vertical approaches the autopilot executes, so NAV APR couples
+  it like the others (and "the aircraft will not automatically level off at the DH or MDA"). New `gs_angle_deg`
+  feeds the descent-rate feed-forward the path angle (3.00 deg = 5.31 fpm/kt, scaled by tan(angle)): KFDK RNAV
+  (GPS) RWY 23 Y (3.41 deg), headless, was drifting to 0.25 GDI high at 1.5 nm and now holds |GDI| <= 0.05 in 0 and 270@25
+  wind.
+
+Not modelled: LP+V's silent removal of advisory guidance when out of tolerance (p.115), the "Approach downgraded" message,
+MAPR/TERM after the missed approach point.
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

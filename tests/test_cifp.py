@@ -464,3 +464,14 @@ def test_level_of_service_comes_from_the_faf_continuation_and_dispatches_into_th
     assert db.path_points[("KFDK", "R23-Z")].gpa_deg == 3.0
     assert db.approach_service[("KFDK", "R23-Z")] == frozenset({"LPV", "LNAV/VNAV", "LNAV"})
     assert db.approach_service[("KFDK", "R23-Y")] == frozenset({"LNAV"})        # -Y: no LPV / VNAV
+
+
+RW23_LEG_Y = "SUSAP KFDKK6FR23-Y R      030RW23 K6PG0GY M 031TF                                   00333             -341          B PS   894022207"
+
+
+def test_a_final_leg_carries_its_published_descent_angle():
+    """ARINC 5.70 vertical angle at [102:106]: sign + hundredths of a degree (-341 = 3.41 deg down)."""
+    from navdata.cifp import _leg_from_line
+    leg = _leg_from_line(RW23_LEG_Y)
+    assert leg.fix_ident == "RW23" and leg.vertical_angle_deg == pytest.approx(-3.41)
+    assert _leg_from_line(RW23_LEG_Y[:102] + "    " + RW23_LEG_Y[106:]).vertical_angle_deg is None

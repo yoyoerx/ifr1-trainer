@@ -207,6 +207,11 @@ for every mode (POH: 90%, GPSS 90-130%); NAV silently flies the GPS DTK (that is
 and captures at 75% deflection (POH: 5%); no RDY/roll-mode interlock; ALT knob 100 ft (POH 20 ft, +/-360).
 Not scheduled - awaiting a decision on order (review sec.5).
 
+## Backlog - deliberately skipped (autopilot review, decided 2026-09-21)
+
+Pilot-selectable intercept angle (R9), control-wheel steering, yaw damper: not wanted. Power-up / pre-flight tests
+(POH sec.2): back burner - the trainer always starts airborne, so there is no start-up sequence to hang them on.
+
 ## Done log
 
 - **2026-09-20/21** — `faa2xp/` built and installed (see the side-project

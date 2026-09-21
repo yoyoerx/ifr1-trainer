@@ -213,6 +213,7 @@ class Autopilot:
     _gs_arm_t: float = 0.0
     _gs_defl: float = 0.0
     _gs_ok: bool = False              # NAV APR could couple a glideslope right now
+    _gs_angle: float = 3.0            # the path angle being flown (feed-forward descent rate)
     _flash_nav: bool = False
     _flash_gpss: bool = False
     _gs_needle_flash: bool = False
@@ -458,9 +459,11 @@ class Autopilot:
         gs_valid: bool = False,
         gps_course_deg: float | None = None,
         vloc_is_loc: bool = True,
+        gs_angle_deg: float = 3.0,
     ) -> Commands:
         self._rdy_flash_t = max(0.0, self._rdy_flash_t - dt) if self.engaged else 0.0
         self._own_vs = getattr(own, "vs_fpm", 0.0)
+        self._gs_angle = gs_angle_deg
         if not self.roll_engaged:            # off, or RDY: nothing steers and no pitch mode can run
             self.trim = 0
             self._trim_t, self._trim_dir, self.trim_flash = 0.0, 0, False
@@ -780,7 +783,8 @@ class Autopilot:
         if vert is Vert.VS:
             return None, self.vs_target, False
         if vert is Vert.GS:
-            nominal = -gs_kt * _GS_FPM_PER_KT       # the 3.00 deg glidepath's descent rate at this groundspeed
+            # the descent rate that holds this path's angle at this groundspeed (3.00 deg: 5.31 fpm/kt)
+            nominal = -gs_kt * _GS_FPM_PER_KT * math.tan(math.radians(self._gs_angle)) / math.tan(math.radians(3.0))
             corr = _clamp(gs_deflection * 400.0, -400.0, 400.0)
             return None, _clamp(nominal + corr, -1200.0, 200.0), False
         return None, None, False       # vertical axis off - pilot flies pitch

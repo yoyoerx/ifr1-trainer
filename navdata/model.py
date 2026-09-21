@@ -201,6 +201,7 @@ class ProcedureLeg:
     is_faf: bool = False
     is_map: bool = False        # missed approach point
     is_flyover: bool = False
+    vertical_angle_deg: float | None = None   # published descent angle (negative = descending), ARINC 5.70
 
     @property
     def terminates_at_fix(self) -> bool:

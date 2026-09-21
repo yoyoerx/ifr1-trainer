@@ -484,6 +484,7 @@ class World:
                 vloc_deflection=n1.deflection, vloc_valid=n1.valid,
                 gs_deflection=gp_dev if gp_live else n1.gs_deflection,
                 gs_valid=gp_live or n1.gs_valid,
+                gs_angle_deg=gp.gpa_deg if gp_live else 3.0,
                 gps_course_deg=self._gps_pointer(),
                 vloc_is_loc=bool(getattr(self.radios.nav1, "is_localizer", False)),
             )

@@ -300,7 +300,7 @@ class GlidePath:
 
     valid: bool = False
     vdev: float = 0.0
-    service: str = ""            # "LPV" | "L/VNAV"
+    service: str = ""            # "LPV" | "L/VNAV" | "LNAV+V" | "LP+V" (the last two are advisory)
     gpa_deg: float = 0.0
     height_error_ft: float = 0.0  # + = above the path
 
@@ -308,6 +308,7 @@ class GlidePath:
 # vertical full-scale of the GPS glidepath needle: the trainer assumes the ILS-equivalent +/-0.7 deg (the 500W
 # Pilot's Guide says the LPV "can be flown identically to a standard ILS" but gives no vertical scale)
 _GP_FULL_SCALE_DEG = 0.7
+_ADVISORY_TCH_FT = 50.0            # LNAV+V / LP+V threshold crossing height (not published; trainer's assumption)
 _WAAS_ENROUTE_NM = 2.0             # 500W Pilot's Guide: ENR 2.0 nm, TERM 1.0 nm, approach 0.3 nm
 _MAP_FULL_SCALE_NM = 350.0 / 6076.115   # "CDI scaling continues to tighten from 0.3 NM to 350 feet" at the MAP
 
@@ -689,6 +690,7 @@ class GpsNav:
         self._nav = NavState()
         self._path = None                        # PathPoint of the loaded RNAV approach (WAAS vertical data)
         self._service: frozenset = frozenset()   # the levels of service that approach publishes
+        self._advisory = None                    # (runway ident, descent angle deg) for LNAV+V / LP+V
         # last ownship sample (set by update())
         self._pos: Point | None = None
         self._track = 0.0
@@ -708,7 +710,7 @@ class GpsNav:
         self._susp_at = None
         self._hold_state = None
         self._proc_airport = ""
-        self._path, self._service = None, frozenset()
+        self._path, self._service, self._advisory = None, frozenset(), None
         self.vnav = VnavProfile()
         missing: list[str] = []
         anchor = ref
@@ -746,6 +748,7 @@ class GpsNav:
             self._auto_vloc_done = False
             self._path = getattr(self.db, "path_points", {}).get((airport, ident))
             self._service = getattr(self.db, "approach_service", {}).get((airport, ident), frozenset())
+            self._advisory = self._advisory_angle(proc)
         apt = self.db.airport(airport)
         anchor = (self.fpl.waypoints[-1].pos if self.fpl.waypoints
                   else (apt.pos if apt is not None else None))
@@ -2184,6 +2187,44 @@ class GpsNav:
             return great_circle_nm(pos, self.fpl.waypoints[0].pos)
         return None
 
+    @staticmethod
+    def _advisory_angle(proc):
+        """The published descent angle to the runway of an RNAV (GPS) approach - what a WAAS unit draws as
+        the LNAV+V / LP+V advisory glidepath (500W Pilot's Guide p.117). ``(runway ident, degrees)``."""
+        if getattr(proc, "route_type", "") != "R":
+            return None
+        for leg in proc.assemble(None):
+            va = getattr(leg, "vertical_angle_deg", None)
+            if leg.fix_ident.startswith("RW") and va is not None and va < 0.0:
+                return leg.fix_ident, -va
+        return None
+
+    def _vertical_service(self):
+        """``(label, geometry)`` for the loaded approach on a WAAS unit: geometry is ``(ltp, elev_ft, tch_ft,
+        gpa_deg, course_true)`` for a service with vertical guidance, else ``None``. LPV / L/VNAV fly the SBAS
+        path point; LNAV+V / LP+V fly the published descent angle to the threshold (advisory only)."""
+        pp = self._path
+        if pp is not None and ("LPV" in self._service or "LNAV/VNAV" in self._service):
+            apt = self.db.airport(pp.airport)
+            rwy = apt.runways.get(pp.runway) if apt is not None else None
+            elev = float(rwy.elev_ft) if rwy is not None and rwy.elev_ft is not None else (
+                float(apt.elev_ft or 0) if apt is not None else 0.0)
+            label = "LPV" if "LPV" in self._service else "L/VNAV"
+            return label, (pp.ltp, elev, pp.tch_ft, pp.gpa_deg, initial_bearing(pp.ltp, pp.fpap))
+        lp = "LP" in self._service
+        adv = self._advisory
+        if adv is not None and self._approach_active:
+            rwy_id, gpa = adv
+            apt = self.db.airport(self._proc_airport)
+            rwy = apt.runways.get(rwy_id) if apt is not None else None
+            faf = next((w for w in self.fpl.waypoints if w.is_faf), None)
+            if rwy is not None and faf is not None:
+                elev = float(rwy.elev_ft) if rwy.elev_ft is not None else float(apt.elev_ft or 0)
+                # the advisory path crosses the threshold at 50 ft (trainer's assumption: no TCH is published)
+                return ("LP+V" if lp else "LNAV+V",
+                        (rwy.threshold, elev, _ADVISORY_TCH_FT, gpa, initial_bearing(faf.pos, rwy.threshold)))
+        return ("LP" if lp else "LNAV"), None
+
     def _waas_final_scale(self, dist_to_faf: float) -> float:
         """CDI full-scale on a WAAS unit once inside 2 nm of the FAF (500W Pilot's Guide sec.5 and
         Appendix C): 0.3 nm, or the angular scale (an LP/LPV path point's course width, widening
@@ -2212,13 +2253,7 @@ class GpsNav:
             return ""
         faf_d = self._dist_to_faf(self._pos) if (self._pos is not None and self._approach_active) else None
         if self._approach_active and faf_d is not None and faf_d <= _CDI_APPROACH_ARM_NM:
-            if self._path is not None and "LPV" in self._service:
-                return "LPV"
-            if self._path is not None and "LNAV/VNAV" in self._service:
-                return "L/VNAV"
-            if "LP" in self._service:
-                return "LP"
-            return "LNAV"
+            return self._vertical_service()[0]
         scale = self._cdi_scale
         return "ENR" if scale is None or scale > _CDI_TERMINAL_NM + 0.01 else "TERM"
 
@@ -2226,26 +2261,21 @@ class GpsNav:
         """LPV / L/VNAV vertical guidance for the loaded RNAV approach (WAAS unit only): a glidepath of
         the path point's GPA through its TCH above the landing threshold point, valid from 2 nm before the
         FAF (when the approach annunciation appears) until the missed approach point."""
-        pos, pp = self._pos, self._path
-        if not (self.variant.waas and self._approach_active and pos is not None and pp is not None):
+        pos = self._pos
+        if not (self.variant.waas and self._approach_active and pos is not None):
             return GlidePath()
-        service = "LPV" if "LPV" in self._service else "L/VNAV" if "LNAV/VNAV" in self._service else ""
+        service, geo = self._vertical_service()
         faf_d = self._dist_to_faf(pos)
-        if not service or faf_d is None or faf_d > _CDI_APPROACH_ARM_NM:
-            return GlidePath(service=service)
-        apt = self.db.airport(pp.airport)
-        rwy = apt.runways.get(pp.runway) if apt is not None else None
-        elev = float(rwy.elev_ft) if rwy is not None and rwy.elev_ft is not None else (
-            float(apt.elev_ft or 0) if apt is not None else 0.0)
-        d_nm = great_circle_nm(pos, pp.ltp)
-        course = initial_bearing(pp.ltp, pp.fpap)            # the landing direction, LTP -> FPAP
-        if d_nm < 0.10 or abs(angle_diff(initial_bearing(pos, pp.ltp), course)) > 90.0:
-            return GlidePath(service=service, gpa_deg=pp.gpa_deg)     # in the flare / past the threshold
-        path_ft = elev + pp.tch_ft + d_nm * 6076.115 * math.tan(math.radians(pp.gpa_deg))
-        err_ft = alt_ft - path_ft
-        angle = math.degrees(math.atan2(alt_ft - (elev + pp.tch_ft), d_nm * 6076.115))
-        dev = _clampf(-(angle - pp.gpa_deg) / _GP_FULL_SCALE_DEG, -1.0, 1.0)
-        return GlidePath(True, dev, service, pp.gpa_deg, err_ft)
+        if geo is None or faf_d is None or faf_d > _CDI_APPROACH_ARM_NM:
+            return GlidePath(service=service if geo is not None else "")
+        ltp, elev, tch, gpa, course = geo
+        d_nm = great_circle_nm(pos, ltp)
+        if d_nm < 0.10 or abs(angle_diff(initial_bearing(pos, ltp), course)) > 90.0:
+            return GlidePath(service=service, gpa_deg=gpa)     # in the flare / past the threshold
+        path_ft = elev + tch + d_nm * 6076.115 * math.tan(math.radians(gpa))
+        angle = math.degrees(math.atan2(alt_ft - (elev + tch), d_nm * 6076.115))
+        dev = _clampf(-(angle - gpa) / _GP_FULL_SCALE_DEG, -1.0, 1.0)
+        return GlidePath(True, dev, service, gpa, alt_ft - path_ft)
 
     def _dist_to_faf(self, pos: Point) -> float | None:
         """Great-circle nm to the loaded approach's FAF while actually flying

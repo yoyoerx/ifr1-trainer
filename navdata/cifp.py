@@ -164,6 +164,14 @@ def _tenths(field: str) -> float | None:
     return int(field) / 10.0 if field.isdigit() else None
 
 
+def _vertical_angle(field: str) -> float | None:
+    """ARINC 5.70 vertical angle: sign + hundredths of a degree (``-300`` = a 3.00 degree descent)."""
+    field = field.strip()
+    if len(field) == 4 and field[0] in "+-" and field[1:].isdigit():
+        return int(field) / 100.0
+    return None
+
+
 def _alt(field: str) -> int | None:
     field = field.strip().upper()
     if not field:
@@ -225,6 +233,7 @@ def _leg_from_line(ln: str) -> ProcedureLeg:
         is_faf=d4 == "F",
         is_map=d4 == "M",
         is_flyover=desc[1:2] == "Y",
+        vertical_angle_deg=_vertical_angle(ln[102:106]),
     )
 
 

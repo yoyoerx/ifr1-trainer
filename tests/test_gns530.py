@@ -1876,3 +1876,56 @@ def test_530w_cdi_scaling_is_2nm_enroute_and_angular_on_the_final(db):
         scales.append(g.nav.cdi_scale_nm)
     assert scales[0] < 0.3 and scales[0] > scales[1] > scales[2]      # angular: narrows toward the threshold
     assert scales[2] >= 350.0 / 6076.115 - 1e-6                        # never tighter than 350 ft
+
+
+# --------------------------------------------------------------------------- #
+# LNAV+V / LP+V: advisory glidepaths from the published descent angle (500W Pilot's Guide p.85, p.117)
+# --------------------------------------------------------------------------- #
+def _w_advisory(db, service, angle=3.41):
+    """A 530W on the final of an RNAV approach that publishes no SBAS path point, only a descent angle."""
+    g, ltp = _w_on_final(db, service)
+    g._path = None
+    g._advisory = ("RW18", angle)
+    g._proc_airport = "KTST"
+    return g, ltp
+
+
+def test_lnav_plus_v_flies_the_published_descent_angle_to_the_threshold(db):
+    import math
+    g, ltp = _w_advisory(db, frozenset({"LNAV"}))
+    d = 3.0
+    pos = destination(ltp, 0.0, d)
+    on_path = 100.0 + 50.0 + d * 6076.115 * math.tan(math.radians(3.41))    # crosses the threshold at 50 ft
+    g.update(pos, 180.0, 110.0, 1.0)
+    gp = g.glidepath(on_path)
+    assert g.nav.service == "LNAV+V" and gp.valid and gp.service == "LNAV+V"
+    assert gp.gpa_deg == pytest.approx(3.41) and gp.vdev == pytest.approx(0.0, abs=0.02)
+    assert g.glidepath(on_path - 120.0).vdev > 0.3                     # below: fly up
+
+
+def test_lp_plus_v_when_the_approach_publishes_lp_minima(db):
+    g, ltp = _w_advisory(db, frozenset({"LP", "LNAV"}))
+    pos = destination(ltp, 0.0, 3.0)
+    g.update(pos, 180.0, 110.0, 1.0)
+    assert g.nav.service == "LP+V" and g.glidepath(400.0).service == "LP+V"
+
+
+def test_no_advisory_glidepath_without_a_published_angle_and_lpv_wins_over_it(db):
+    g, ltp = _w_on_final(db, frozenset({"LNAV"}))                       # RNAV, LNAV only, no descent angle
+    pos = destination(ltp, 0.0, 3.0)
+    g.update(pos, 180.0, 110.0, 1.0)
+    assert g.nav.service == "LNAV" and not g.glidepath(400.0).valid
+    g2, ltp2 = _w_advisory(db, frozenset({"LPV", "LNAV"}))
+    g2._path = g._path                                                  # an SBAS path point as well: LPV
+    g2.update(destination(ltp2, 0.0, 3.0), 180.0, 110.0, 1.0)
+    assert g2.nav.service == "LPV"
+
+
+def test_only_an_rnav_gps_approach_gets_an_advisory_angle(db):
+    from navdata.model import LegType, Procedure, ProcedureLeg
+    from gpsnav import GpsNav
+    rw = ProcedureLeg(seq=30, leg_type=LegType.TF, fix_ident="RW18", vertical_angle_deg=-3.0)
+    rnav = Procedure("KTST", "R18", "approach", "R", {"": (rw,)})
+    ils = Procedure("KTST", "I18", "approach", "I", {"": (rw,)})
+    assert GpsNav._advisory_angle(rnav) == ("RW18", 3.0)
+    assert GpsNav._advisory_angle(ils) is None

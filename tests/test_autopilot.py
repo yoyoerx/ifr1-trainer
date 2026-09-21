@@ -711,3 +711,15 @@ def test_nav_apr_couples_a_gps_glidepath_on_a_gps_source():
     ap2.update(Nav(dtk=180.0, xtk=0.2, cdi_source="GPS", cdi_scale_nm=0.3), Own(), 0.0, dt=2.0,
                gs_deflection=0.5, gs_valid=True, gps_course_deg=180.0)
     assert ap2.armed_vert is None                       # 0.2 of 0.3 nm = 67% off the course: not within 50%
+
+
+def test_the_glideslope_descent_rate_follows_the_path_angle_being_flown():
+    """A 3.41 deg LNAV+V path needs ~14% more descent rate than a 3.00 deg one at the same groundspeed."""
+    def vs_for(angle):
+        ap = Autopilot(); ap.press_apr(); ap.press_alt()
+        ap.vertical = Vert.GS
+        return ap.update(Nav(dtk=180.0, xtk=0.0, cdi_source="GPS", cdi_scale_nm=0.3), Own(gs=120.0), 0.0,
+                         gs_deflection=0.0, gs_valid=True, gs_angle_deg=angle).vs
+    v3, v341 = vs_for(3.0), vs_for(3.41)
+    assert v3 == pytest.approx(-120.0 * 5.31, abs=1.0)
+    assert v341 / v3 == pytest.approx(0.05954 / 0.05241, abs=0.01)         # tan(3.41) / tan(3.00)
