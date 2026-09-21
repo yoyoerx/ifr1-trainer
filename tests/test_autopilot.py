@@ -19,10 +19,12 @@ class Own:
 
 
 class Nav:
-    def __init__(self, dtk=None, xtk=None, cdi_source="GPS"):
+    def __init__(self, dtk=None, xtk=None, cdi_source="GPS", cdi_scale_nm=None):
         self.dtk = dtk
         self.xtk_nm = xtk
         self.cdi_source = cdi_source
+        if cdi_scale_nm is not None:
+            self.cdi_scale_nm = cdi_scale_nm
 
 
 # --------------------------------------------------------------------------- #
@@ -231,23 +233,110 @@ def test_closed_loop_intercept_rolls_onto_the_leg_without_overshoot():
 # --------------------------------------------------------------------------- #
 # APR / REV / glideslope
 # --------------------------------------------------------------------------- #
-def test_apr_arms_lateral_and_gs():
-    ap = Autopilot()
-    ap.press_apr()
-    assert ap.armed_lat is Lat.APR and ap.armed_vert is Vert.GS
+def _ils(ap, loc=0.1, gs=0.3, *, dt=1.0, n=1, valid=True, gs_valid=True, is_loc=True, alt=3000.0):
+    cmd = None
+    for _ in range(n):
+        cmd = ap.update(Nav(cdi_source="VLOC"), Own(altitude=alt, gs=120.0), 0.0, dt=dt,
+                        vloc_course_deg=40.0, vloc_deflection=loc, vloc_valid=valid,
+                        gs_deflection=gs, gs_valid=gs_valid, vloc_is_loc=is_loc)
+    return cmd
 
 
-def test_apr_captures_loc_then_gs_from_below():
-    ap = Autopilot()
+def _apr_with_alt():
+    ap = Autopilot(); ap.press_apr(); ap.press_alt()
+    return ap
+
+
+def test_apr_arms_the_lateral_only_and_gs_arms_itself_later():
+    """POH sec.3.2.1.1: the GS annunciation arms once the conditions have held for one second."""
+    ap = _apr_with_alt()
+    assert ap.armed_lat is Lat.APR and ap.armed_vert is None
+    _ils(ap, dt=0.5)                                   # only half a second so far
+    assert ap.armed_vert is None
+
+
+def test_gs_arms_only_when_every_condition_holds_for_a_second():
+    def armed(**kw):
+        ap = _apr_with_alt()
+        _ils(ap, dt=0.5, n=1, **kw)
+        _ils(ap, dt=0.6, n=1, **kw)                    # 1.1 s in total
+        return ap.armed_vert is Vert.GS
+    assert armed()                                                   # everything true
+    assert not armed(gs=0.05)                                        # not MORE than 10% below the beam
+    assert not armed(gs=-0.2)                                        # above the beam
+    assert not armed(loc=0.6)                                        # outside 50% of the localizer
+    assert not armed(valid=False)                                    # NAV flag
+    assert not armed(gs_valid=False)                                 # GS flag
+    assert not armed(is_loc=False)                                   # not a LOC frequency
+    ap = Autopilot(); ap.press_apr()                                 # ALT not engaged
+    _ils(ap, dt=0.6, n=3)
+    assert ap.armed_vert is None
+    ap = _apr_with_alt()
+    _ils(ap, dt=0.4, n=2)                                            # only 0.8 s
+    assert ap.armed_vert is None
+
+
+def test_armed_glideslope_engages_at_5_percent_below_the_beam():
+    ap = _apr_with_alt()
+    _ils(ap, gs=0.4, dt=1.0, n=2)
+    assert ap.armed_vert is Vert.GS and ap.vertical is Vert.ALT
+    _ils(ap, gs=0.06)
+    assert ap.vertical is Vert.ALT                                   # not yet
+    cmd = _ils(ap, gs=0.05)
+    assert ap.vertical is Vert.GS and ap.armed_vert is None
+    assert cmd.vs is not None and cmd.vs < 0                         # now following the beam down
+
+
+def test_apr_disarms_and_rearms_the_glideslope_and_gs_flashes_while_disarmed():
+    """POH p.3-12: APR disables the armed GS (it flashes); pressing APR again re-arms it (it
+    re-appears after one second). The lateral APR mode stays engaged throughout."""
+    ap = _apr_with_alt()
+    _ils(ap, gs=0.4, dt=1.0, n=2)
+    assert ap.armed_vert is Vert.GS
     ap.press_apr()
-    ap.update(Nav(), Own(altitude=3000.0), 0.0,
-              vloc_course_deg=40.0, vloc_deflection=0.2, vloc_valid=True,
-              gs_deflection=0.95, gs_valid=True)
-    assert ap.lateral is Lat.APR and ap.vertical is not Vert.GS
-    cmd = ap.update(Nav(), Own(altitude=3000.0, gs=120.0), 0.0,
-                    vloc_course_deg=40.0, vloc_deflection=0.1, vloc_valid=True,
-                    gs_deflection=0.3, gs_valid=True)
-    assert ap.vertical is Vert.GS and cmd.vs is not None and cmd.vs < 0
+    assert ap.lateral is Lat.APR and ap.armed_vert is None and ap.gs_disabled
+    assert "GS" in ap.flashing
+    _ils(ap, gs=0.4, dt=1.0, n=3)
+    assert ap.armed_vert is None                                     # stays off until re-armed
+    ap.press_apr()
+    assert not ap.gs_disabled and ap.armed_vert is None
+    _ils(ap, gs=0.4, dt=0.5, n=1)
+    assert ap.armed_vert is None
+    _ils(ap, gs=0.4, dt=0.6, n=1)
+    assert ap.armed_vert is Vert.GS and "GS" not in ap.flashing
+
+
+def test_alt_press_engages_the_glideslope_manually_from_alt():
+    """POH p.3-12 note: slightly above the beam, pressing ALT engages the glideslope instantly."""
+    ap = _apr_with_alt()
+    _ils(ap, gs=-0.1)                                                # above the beam: cannot arm
+    assert ap.armed_vert is None
+    ap.press_alt()
+    assert ap.vertical is Vert.GS
+    ap.press_alt()                                                   # ALT again leaves the glideslope
+    assert ap.vertical is Vert.ALT
+    ap2 = Autopilot(); ap2.press_apr(); ap2.press_alt()
+    _ils(ap2, gs=-0.1, gs_valid=False)                               # no usable glideslope: plain ALT
+    ap2.press_alt()
+    assert ap2.vertical is Vert.ALT
+
+
+def test_gs_and_nav_annunciations_flash_beyond_50_percent_or_on_a_flag():
+    ap = _apr_with_alt()
+    _ils(ap, loc=0.2, gs=0.4, dt=1.0, n=2)
+    assert ap.flashing == frozenset()
+    _ils(ap, loc=0.7, gs=0.4)
+    assert "APR" in ap.flashing                                      # NAV needle beyond 50%: POH p.3-5
+    _ils(ap, loc=0.2, gs=0.7)
+    assert "GS" in ap.flashing                                       # GDI beyond 50%: p.3-13
+    _ils(ap, loc=0.2, gs=0.4, gs_valid=False)
+    assert "GS" in ap.flashing                                       # GS flag in view
+    nv = Autopilot(); nv.press_nav()
+    nv.update(Nav(cdi_source="GPS", dtk=90.0, xtk=4.0, cdi_scale_nm=5.0), Own(), 0.0)
+    assert "NAV" in nv.flashing
+    gp = Autopilot(); gp.press_nav(); gp.press_nav()
+    gp.update(Nav(cdi_source="GPS", dtk=None), Own(), 0.0)
+    assert {"NAV", "GPSS"} <= gp.flashing                            # p.3-7: no course programmed
 
 
 def test_apr_cancel_drops_gs():

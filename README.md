@@ -271,6 +271,11 @@ it to the front course (POH sec.3.3.3) - the needle itself is always the beam.
 engage a roll mode; ALT/VS (`F5`/`F6`) are ignored until one is engaged (S-TEC POH sec.3.1.4/3.1.5). Pressing
 the engaged mode's button again releases it back to RDY. NAV APR replaces GPSS.
 
+**Glideslope.** Pressing APR on an ILS arms only the localizer. With **ALT engaged** (S-TEC POH sec.3.2.1.1) the GS
+arms itself once you are within 50% of the localizer and more than 10% below the beam, and engages at 5% GDI. APR
+while it is armed disarms it (GS flashes) and APR again re-arms it; ALT with the beam available engages it
+immediately. NAV, APR, REV and GS blink beyond 50% needle deflection or on a flag.
+
 **While a modal page is open** (these keys are captured, overriding the tables above):
 
 *Direct-To entry page* (opened by `D` or the IFR-1 DCT key):

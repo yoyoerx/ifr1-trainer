@@ -314,3 +314,40 @@ def test_six_pack_reads_ownship_and_applies_magvar():
     assert sp.airspeed_kt == 155.0 and sp.bank_deg == -12.0
     assert sp.heading_deg == pytest.approx(113.0)      # 100 T - (-13) = 113 mag
     assert sp.vsi_fpm == -320.0 and sp.turn_rate_dps == -1.5
+
+
+# --------------------------------------------------------------------------- #
+# A localizer needle is the beam; only a VOR needle follows the OBS card
+# --------------------------------------------------------------------------- #
+class _CardRx:
+    def __init__(self, obs, *, loc):
+        from navmath import Point
+        self.tuned = True
+        self.is_localizer = loc
+        self.station_pos = Point(40.0, -74.0)
+        self.station_magvar = 0.0
+        self.obs_deg = obs
+        self.loc_course_deg = 90.0 if loc else None
+        self.card_deg = obs                      # a manual course card: whatever the pilot set
+        self.has_dme = False
+        self.station_ident = "IABC"
+        self.gs_ref = None
+
+    @property
+    def course_deg(self):
+        return self.loc_course_deg if self.loc_course_deg is not None else self.obs_deg
+
+
+def test_localizer_needle_ignores_the_course_card_but_a_vor_needle_follows_it():
+    """A localizer's deflection comes from the radio signal (the beam); turning the OBS/course
+    card does not move it. A VOR's deflection is measured from the radial the card selects."""
+    from navmath import Point, destination
+    import instruments as instr
+    ac = destination(Point(40.0, -74.0), 270.0, 6.0)          # 6 nm west of the antenna...
+    ac = destination(ac, 0.0, 0.3)                            # ...a little north of the 090 beam
+    loc = [instr.nav_head(_CardRx(obs, loc=True), ac, 3000.0, 100.0, 0.0) for obs in (0.0, 90.0, 271.0)]
+    assert loc[0].deflection == pytest.approx(loc[1].deflection) == pytest.approx(loc[2].deflection)
+    assert abs(loc[0].deflection) > 0.05                      # genuinely off the beam
+    assert [h.course_deg for h in loc] == [0.0, 90.0, 271.0]  # the CARD shows what the pilot set
+    vor = [instr.nav_head(_CardRx(obs, loc=False), ac, 3000.0, 100.0, 0.0) for obs in (0.0, 90.0)]
+    assert vor[0].deflection != pytest.approx(vor[1].deflection)

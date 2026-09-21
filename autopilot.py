@@ -122,6 +122,16 @@ _TRIM_MAX_CLOSURE = 0.01         # deflection-fraction / s
 _COUPLER_I_GAIN = 0.6
 _COUPLER_I_MAX = 3.0
 _CAPTURE_DEFLECTION = 0.75
+# Glideslope (POH sec.3.2.1.1, software rev 5 and above, p.3-12): the GS annunciation arms once, for one
+# second, NAV APR + ALT are engaged, no NAV/GS flag, LOC frequency selected, within 50% of the localizer
+# and MORE than 10% GDI below the glideslope; the mode engages at 5% GDI below centreline. The GS
+# annunciation flashes when the GDI exceeds 50% or the GS flag is in view. (Rev 4 and below: 10 s, 60%.)
+_GS_ARM_S = 1.0
+_GS_ARM_LOC_DEV = 0.50
+_GS_ARM_MIN_BELOW = 0.10
+_GS_CAPTURE_DEFL = 0.05
+_GS_FPM_PER_KT = 5.31           # 3.00 deg: tan(3 deg) x 6076 ft/nm / 60 min
+_FLASH_DEV = 0.50               # NAV / GS annunciation flashes beyond 50% deflection (p.3-5, p.3-13)
 _VS_KNOB_STEP = 100.0
 
 # A pure proportional xtk->intercept loop settles at a nonzero steady-state
@@ -184,6 +194,14 @@ class Autopilot:
     _course_ref: float | None = None
     _rate_frac: float | None = None   # turn-rate limit (fraction of standard rate) this frame
     _src: str = ""                    # what the coupler is flying: mode + needle source
+    # glideslope arming (see `_track_glideslope`)
+    gs_disabled: bool = False         # the pilot disarmed it with APR (the GS annunciation flashes)
+    _gs_arm_t: float = 0.0
+    _gs_defl: float = 0.0
+    _gs_ok: bool = False              # NAV APR could couple a glideslope right now
+    _flash_nav: bool = False
+    _flash_gpss: bool = False
+    _gs_needle_flash: bool = False
 
     # -- master (yoke AP/disconnect) --------------------------------
     def press_ap(self) -> None:
@@ -204,6 +222,7 @@ class Autopilot:
         """Back to RDY. A pitch mode cannot outlive its roll mode."""
         self.lateral, self.armed_lat, self.gpss = Lat.RDY, None, False
         self.vertical, self.armed_vert, self.alt_hold_ft, self.trim = Vert.OFF, None, None, 0
+        self.gs_disabled, self._gs_arm_t = False, 0.0
 
     def _reset_coupler(self) -> None:
         self.stage = "INTERCEPT"
@@ -257,11 +276,21 @@ class Autopilot:
     def press_apr(self) -> None:
         self.engage()
         if self.lateral is Lat.APR:
-            self._release_roll()
+            # POH p.3-12: "The armed glideslope mode can be subsequently disabled by pressing the APR
+            # mode selector switch. The GS annunciation will flash to acknowledge this. To then re-arm
+            # the glideslope mode, press the APR mode selector switch again."
+            if self.armed_vert is Vert.GS:
+                self.armed_vert, self.gs_disabled, self._gs_arm_t = None, True, 0.0
+                return
+            if self.gs_disabled:
+                self.gs_disabled, self._gs_arm_t = False, 0.0
+                return
+            self._release_roll()            # (trainer's choice: the POH is silent on a plain repeat press)
             return
         self.lateral = Lat.APR
         self.armed_lat = Lat.APR
-        self.armed_vert = Vert.GS
+        self.armed_vert = None              # GS arms itself when the conditions hold (`_track_glideslope`)
+        self.gs_disabled, self._gs_arm_t = False, 0.0
         self.gpss = False                   # NAV APR replaces NAV GPSS (POH sec.3.2.2)
         self._reset_coupler()
 
@@ -281,7 +310,15 @@ class Autopilot:
     def press_alt(self) -> None:
         if not self.roll_engaged:
             return
+        if self.lateral is Lat.APR and self.vertical is Vert.ALT and self._gs_ok:
+            # POH p.3-12 note: "If the approach positions the aircraft slightly above the GS centerline,
+            # then manual engagement of the glideslope mode can be instantly achieved by pressing the ALT
+            # mode selector switch." (Caution: not if more than 20% above the centreline - it moves
+            # aggressively toward it.)
+            self.vertical, self.armed_vert = Vert.GS, None
+            return
         self.vertical = Vert.ALT
+        self.armed_vert = None
         self.alt_hold_ft = None          # grab present altitude next update
 
     def press_vs(self) -> None:
@@ -369,6 +406,7 @@ class Autopilot:
         gs_deflection: float = 0.0,
         gs_valid: bool = False,
         gps_course_deg: float | None = None,
+        vloc_is_loc: bool = True,
     ) -> Commands:
         if not self.roll_engaged:            # off, or RDY: nothing steers and no pitch mode can run
             self.trim = 0
@@ -378,7 +416,9 @@ class Autopilot:
         gs_kt = max(getattr(own, "gs_kt", 0.0), 1.0)
 
         self._maybe_capture_lateral(nav_state, vloc_deflection, vloc_valid)
-        self._maybe_capture_gs(gs_deflection, gs_valid)
+        self._track_glideslope(nav_state, dt, vloc_deflection, vloc_valid, vloc_is_loc,
+                               gs_deflection, gs_valid)
+        self._track_flashes(nav_state, vloc_deflection, vloc_valid)
 
         self._rate_frac = None
         cmd_heading = self._lateral_command(nav_state, own, magvar, dt,
@@ -591,10 +631,56 @@ class Autopilot:
         return norm360(hdg)          # RDY / OFF / no valid needle: no steering (holds heading)
 
     # -- vertical -----------------------------------------
-    def _maybe_capture_gs(self, gs_deflection, gs_valid) -> None:
-        if self.armed_vert is Vert.GS and self.lateral is Lat.APR \
-                and gs_valid and abs(gs_deflection) <= _CAPTURE_DEFLECTION:
-            self.vertical, self.armed_vert = Vert.GS, None
+    def _track_glideslope(self, nav_state, dt, vloc_deflection, vloc_valid, vloc_is_loc,
+                          gs_deflection, gs_valid) -> None:
+        """Glideslope auto-arm and capture (POH sec.3.2.1.1). `gs_deflection` is + = fly up, so the
+        aircraft is *below* the beam while it is positive."""
+        cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
+        loc_ok = (cdi_source == "VLOC" and vloc_valid and vloc_is_loc and vloc_deflection is not None)
+        self._gs_defl = gs_deflection
+        self._gs_ok = bool(loc_ok and gs_valid)
+        apr = self.lateral is Lat.APR
+        if self.armed_vert is Vert.GS and not (apr and self.vertical is Vert.ALT):
+            self.armed_vert = None                  # arming needs NAV APR + ALT engaged
+        if apr and self.vertical is Vert.ALT and self.armed_vert is None and not self.gs_disabled:
+            ready = (self._gs_ok and abs(vloc_deflection) <= _GS_ARM_LOC_DEV
+                     and gs_deflection > _GS_ARM_MIN_BELOW)
+            self._gs_arm_t = self._gs_arm_t + dt if ready else 0.0
+            if self._gs_arm_t >= _GS_ARM_S:
+                self.armed_vert, self._gs_arm_t = Vert.GS, 0.0
+        if self.armed_vert is Vert.GS and apr and self._gs_ok and gs_deflection <= _GS_CAPTURE_DEFL:
+            self.vertical, self.armed_vert = Vert.GS, None      # the ALT annunciation goes out
+
+    def _track_flashes(self, nav_state, vloc_deflection, vloc_valid) -> None:
+        """Annunciations that flash: NAV / APR / REV at >50% needle deflection or a flag (POH p.3-5,
+        p.3-13), GS at >50% GDI or its flag, NAV+GPSS with no course programmed (p.3-7)."""
+        cdi_source = getattr(nav_state, "cdi_source", "GPS") if nav_state is not None else "GPS"
+        self._flash_nav = self._flash_gpss = False
+        if self.lateral in (Lat.NAV, Lat.APR, Lat.REV):
+            if cdi_source == "VLOC":
+                self._flash_nav = (not vloc_valid) or abs(vloc_deflection or 0.0) > _FLASH_DEV
+            elif nav_state is not None:
+                dtk = getattr(nav_state, "dtk", None)
+                scale = getattr(nav_state, "cdi_scale_nm", None) or _DEFAULT_CDI_SCALE_NM
+                xtk = getattr(nav_state, "xtk_nm", None)
+                self._flash_nav = dtk is None or (xtk is not None and abs(xtk) / scale > _FLASH_DEV)
+                self._flash_gpss = self.gpss and self.lateral is Lat.NAV and dtk is None
+        if self.vertical is Vert.GS or self.armed_vert is Vert.GS:
+            self._gs_needle_flash = (not self._gs_ok) or abs(self._gs_defl) > _FLASH_DEV
+        else:
+            self._gs_needle_flash = False
+
+    @property
+    def flashing(self) -> frozenset:
+        """Annunciations that should blink right now."""
+        out = set()
+        if self._flash_nav and self.lateral in (Lat.NAV, Lat.APR, Lat.REV):
+            out.add(self.lateral.value)
+        if self._flash_gpss:
+            out.add("GPSS")
+        if self.gs_disabled or self._gs_needle_flash:
+            out.add("GS")
+        return frozenset(out)
 
     def _vertical_command(self, alt, gs_kt, gs_deflection):
         vert = self.vertical
@@ -605,7 +691,7 @@ class Autopilot:
         if vert is Vert.VS:
             return None, self.vs_target, False
         if vert is Vert.GS:
-            nominal = -gs_kt * 5.0
+            nominal = -gs_kt * _GS_FPM_PER_KT       # the 3.00 deg glidepath's descent rate at this groundspeed
             corr = _clamp(gs_deflection * 400.0, -400.0, 400.0)
             return None, _clamp(nominal + corr, -1200.0, 200.0), False
         return None, None, False       # vertical axis off - pilot flies pitch

@@ -954,6 +954,39 @@ deletes it" step is likewise not in this POH (sec.3.1.3 only says press NAV once
 Not modelled / open: REV on a GPS source; the ILS/GPS-approach output that raises autopilot gain
 (Installation Manual 4.5.1.11); the CAP/SOFT gain numbers remain the trainer's.
 
+### F53 — Glideslope auto-arm / 5% capture / APR re-arm; localizer needle vs course card
+
+Fifth step of the POH review (A3-A6, R6), plus the check the user asked for on localizers.
+
+**Localizer needle vs the course card (verified, no change needed).** A localizer's deflection comes from
+the radio signal and does not move with the OBS/course card (Pilots of America "Localizer Approach, CDI & OBS":
+"turning the OBS knob when a localizer is in-use does not affect the CDI displacement"; only a VOR needle follows
+the card). The trainer already had this right after F52 (`radios.NavReceiver.course_deg` is the beam;
+`card_deg` is only the card). New unit test `test_localizer_needle_ignores_the_course_card_but_a_vor_needle_
+follows_it`. The autopilot is *not* indifferent to the card, though: the S-TEC POH sec.3.3.3 has the pilot "Set
+Course Pointer to FRONT INBOUND LOC course" and sec.3.1.2 gives the pointer "sufficient authority to
+complete the intercept"; a wrong card leaves the autopilot aiming at the wrong course while trying to null the
+needle (autopilot forum reports for the KAP 140 describe the same offset; that is another autopilot, so
+supporting only). F52's headless ILS runs show the same thing in the trainer.
+
+**Glideslope (POH sec.3.2.1.1, software rev 5+, p.3-12).**
+* APR no longer arms the GS by itself. `Autopilot._track_glideslope` arms it after 1 s of: NAV APR + ALT
+  engaged, NAV flag and GS flag out, LOC frequency selected (CDI on VLOC, localizer), within 50% CDI of the
+  centreline, and more than 10% GDI *below* the beam. It engages at 5% GDI below centreline and the ALT
+  annunciation goes out.
+* APR while armed disarms it (the GS annunciation flashes); APR again re-arms it (back after 1 s). Only
+  when no GS is armed or disarmed does APR release the mode (trainer's choice; POH silent).
+* ALT with APR + ALT engaged and a usable beam engages GS at once ("slightly above the GS centerline");
+  ALT again leaves it. The >20% above caution is not enforced.
+* Flashing (`Autopilot.flashing`, blinking lamps in the S-TEC panel): NAV/APR/REV at >50% deflection or no
+  valid needle (p.3-5), GS at >50% GDI or a GS flag (p.3-13), NAV+GPSS with no course (p.3-7).
+* The descent-rate law used the wrong nominal (5.0 fpm/kt) so the aircraft rode ~0.1 unit above the beam;
+  now 5.31 (tan 3 deg). Headless KLNS ILS 08, 2500 ft: GS armed at ~55 s once within 50% of the localizer,
+  engaged ~75-90 s at 5% GDI, then |GDI| <= 0.05 to 1 nm in 0/270@25/090@30 wind.
+
+Not modelled: software rev 4 (10 s / 60% arming), GPS glideslopes on a GPS source (LPV/LNAV+V, POH sec.3.5.1),
+the ">20% above" caution, the ILS/GPS-approach output that raises autopilot gain (Installation Manual 4.5.1.11).
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

@@ -2325,7 +2325,12 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None, *, show_info=True):
     alat = getattr(getattr(ap, "armed_lat", None), "value", None)
     avert = getattr(getattr(ap, "armed_vert", None), "value", None)
 
+    flashing = getattr(ap, "flashing", frozenset())
+    blink_off = int(pygame.time.get_ticks() / 400) % 2 == 1     # the POH's flashing annunciations
+
     def key(text, lit, armed):
+        if text in flashing and blink_off:
+            lit = armed = False
         c = GPS_GREEN if lit else (AMBER if armed else (36, 40, 46))
         box = pygame.Rect(bx[0], y + 4, 40, 26)
         pygame.draw.rect(surf, (24, 27, 32), box, border_radius=4)
@@ -2365,9 +2370,12 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None, *, show_info=True):
     ann = []
     if getattr(ap, "gpss", False) and lat in ("NAV", "APR"):
         ann.append(("GPSS", CYAN))
-    if vert == "GS":
+    gs_blink = "GS" in flashing
+    if gs_blink and blink_off:
+        pass                                             # the GS annunciation is flashing
+    elif vert == "GS":
         ann.append(("GS", GPS_GREEN))
-    elif avert == "GS":
+    elif avert == "GS" or gs_blink:
         ann.append(("GS ARM", AMBER))
     tr = getattr(ap, "trim", 0)
     if tr:

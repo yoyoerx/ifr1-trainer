@@ -477,6 +477,7 @@ class World:
                 vloc_deflection=n1.deflection, vloc_valid=n1.valid,
                 gs_deflection=n1.gs_deflection, gs_valid=n1.gs_valid,
                 gps_course_deg=self._gps_pointer(),
+                vloc_is_loc=bool(getattr(self.radios.nav1, "is_localizer", False)),
             )
             self._apply(cmd)
         elif self.gps_follow:
