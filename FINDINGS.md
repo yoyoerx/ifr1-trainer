@@ -987,6 +987,28 @@ supporting only). F52's headless ILS runs show the same thing in the trainer.
 Not modelled: software rev 4 (10 s / 60% arming), GPS glideslopes on a GPS source (LPV/LNAV+V, POH sec.3.5.1),
 the ">20% above" caution, the ILS/GPS-approach output that raises autopilot gain (Installation Manual 4.5.1.11).
 
+### F54 — Modifier-knob ranges, VS capture and flashing, TRIM timing, AP disconnect
+
+The "small items" of the POH review (P1-P3, P5, O2), all pitch-axis / annunciation details.
+
+* **ALT knob** (POH sec.3.1.4, p.3-8): 20 ft per detent, +/-360 ft from the captured altitude (it was 100 ft
+  with no limit). The IFR-1 AP-mode inner knob now goes through `Autopilot.turn_vs_knob`, so it is the
+  "modifier knob" on both ALT and VS (it used `set_vs_target` with a +/-2000 fpm limit).
+* **VS** (sec.3.1.5, 4.2): engaging VS holds the *present* vertical speed (captured, rounded to 100 fpm) instead of
+  the last dialled window value; knob 100 fpm per detent, +/-1600 fpm from the captured rate, 1600 fpm absolute
+  (was 2000). "During a climb, should the aircraft become unable to hold the captured vertical speed for a period
+  of fifteen seconds, the VS annunciation will flash" - `Autopilot.flashing` gets "VS" after 15 s more than
+  200 fpm short of a climb target (the POH gives no tolerance; that number is the trainer's).
+* **TRIM UP/DN** (sec.3.1.7.1): appears after 3 s of servo loading and flashes 4 s later (was instant). The trainer
+  has no servo, so a held rate above 200 fpm stands in for the loading; the periodic audible tone is not modelled.
+* **Disconnect** (sec.3.7, pre-flight step 50): the IFR-1 has one AP key, standing in for the POH's separate
+  controls - with a roll mode engaged it is the yoke AP DISC switch (every mode drops, RDY flashes for 5 s, then
+  stays), from RDY it is the master going off, from off it switches the unit on (RDY). Trainer mapping, not POH text.
+
+Still open in the review: R9 pilot-selectable intercept angle (needs a hold-HDG-then-NAV chord the input layer does
+not carry), A8 GPS glideslopes, O1 CWS, O5 yaw damper, O3 power-up/pre-flight tests, R2 (intercept turn-in is a
+model, not the POH's closure-rate curve), R8, R17 (DG heading systems).
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

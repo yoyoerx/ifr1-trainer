@@ -385,8 +385,8 @@ def test_vs_knob_nudges_alt_hold_when_in_alt():
     ap.press_hdg()                                      # a roll mode first (POH sec.3.1.4)
     ap.press_alt()
     ap.update(Nav(), Own(altitude=4000.0), 0.0)         # captures 4000
-    ap.turn_vs_knob(2)                                  # +200 ft
-    assert ap.update(Nav(), Own(altitude=4000.0), 0.0).altitude == pytest.approx(4200.0)
+    ap.turn_vs_knob(2)                                  # POH sec.3.1.4: 20 ft per detent
+    assert ap.update(Nav(), Own(altitude=4000.0), 0.0).altitude == pytest.approx(4040.0)
 
 
 def test_preselect_captures_out_of_vs():
@@ -407,11 +407,20 @@ def test_trim_annunciator_follows_commanded_vs():
     ap.press_vs()
     ap.set_preselect(20000.0)                           # keep the preselect out of the way
     ap.set_vs_target(600.0)
+    for _ in range(2):
+        ap.update(Nav(), Own(), 0.0)
+    assert ap.trim == 0                                 # POH sec.3.1.7.1: only after 3 s of servo loading
     ap.update(Nav(), Own(), 0.0)
-    assert ap.trim == 1
+    assert ap.trim == 1 and not ap.trim_flash
     ap.set_vs_target(-600.0)
     ap.update(Nav(), Own(), 0.0)
+    assert ap.trim == 0                                 # a new direction starts the 3 s over
+    for _ in range(3):
+        ap.update(Nav(), Own(), 0.0)
     assert ap.trim == -1
+    for _ in range(4):
+        ap.update(Nav(), Own(), 0.0)
+    assert ap.trim_flash and "TRIM" in ap.flashing      # flashes 4 s after it appeared
 
 
 def test_disengage_clears_everything():
@@ -624,3 +633,61 @@ def test_pointer_only_matters_to_nav_on_a_gps_leg():
     ap2 = Autopilot(); ap2.press_nav()
     c2 = ap2.update(Nav(dtk=90.0, xtk=0.0), Own(heading=200.0), 0.0)
     assert c2.heading == pytest.approx(90.0)                     # no pointer given: the DTK
+
+
+# --------------------------------------------------------------------------- #
+# modifier knob ranges, VS capture, VS/TRIM flashing, disconnect (POH sec.3.1.4-3.1.7, 3.7, 4.2)
+# --------------------------------------------------------------------------- #
+def test_alt_knob_is_20_ft_per_detent_limited_to_360_ft_either_side_of_the_captured_altitude():
+    ap = Autopilot(); ap.press_hdg(); ap.press_alt()
+    ap.update(Nav(), Own(altitude=4000.0), 0.0)
+    for _ in range(40):
+        ap.turn_vs_knob(1)
+    assert ap.alt_hold_ft == pytest.approx(4360.0)
+    for _ in range(80):
+        ap.turn_vs_knob(-1)
+    assert ap.alt_hold_ft == pytest.approx(3640.0)
+
+
+def test_vs_captures_the_present_rate_and_the_knob_is_100_fpm_up_to_1600_from_it():
+    ap = Autopilot(); ap.press_hdg()
+    ap.update(Nav(), Own(vs=720.0), 0.0)
+    ap.press_vs()
+    assert ap.vs_target == pytest.approx(700.0)         # POH sec.3.1.5: holds the current (captured) rate
+    for _ in range(30):
+        ap.turn_vs_knob(1)
+    assert ap.vs_target == pytest.approx(1600.0)        # sec.4.2: 1600 fpm is the limit
+    for _ in range(60):
+        ap.turn_vs_knob(-1)
+    assert ap.vs_target == pytest.approx(-900.0)        # 1600 below the captured +700
+
+
+def test_vs_flashes_when_a_climb_cannot_be_held_for_15_seconds():
+    ap = Autopilot(); ap.press_hdg()
+    ap.update(Nav(), Own(vs=0.0), 0.0)
+    ap.press_vs()
+    ap.set_vs_target(800.0)
+    ap.set_preselect(20000.0)
+    for _ in range(14):
+        ap.update(Nav(), Own(vs=100.0), 0.0)
+    assert "VS" not in ap.flashing
+    ap.update(Nav(), Own(vs=100.0), 0.0)
+    assert "VS" in ap.flashing
+    ap.update(Nav(), Own(vs=800.0), 0.0)                # holding it again
+    assert "VS" not in ap.flashing
+
+
+def test_ap_key_disconnects_to_a_flashing_rdy_then_master_off_then_on():
+    """One IFR-1 key stands in for the POH's yoke AP DISC (roll mode -> RDY, which flashes for 5 s, sec.3.7 /
+    pre-flight step 50), then the master switch (RDY -> off), then on again (RDY)."""
+    ap = Autopilot(); ap.press_hdg(); ap.press_alt()
+    ap.press_ap()
+    assert ap.engaged and ap.lateral is Lat.RDY and ap.vertical is Vert.OFF
+    assert "RDY" in ap.flashing
+    for _ in range(5):
+        ap.update(Nav(), Own(), 0.0)
+    assert ap.ready and "RDY" not in ap.flashing        # steady RDY after 5 s
+    ap.press_ap()
+    assert not ap.engaged
+    ap.press_ap()
+    assert ap.engaged and ap.lateral is Lat.RDY and "RDY" not in ap.flashing

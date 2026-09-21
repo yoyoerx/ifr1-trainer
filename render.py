@@ -2312,8 +2312,10 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None, *, show_info=True):
         return
     y = ap_rect.y + 8
 
-    # RDY lamp
+    # RDY lamp (it flashes for 5 s after a disconnect, POH sec.3.7)
     ready = getattr(ap, "ready", False)
+    if "RDY" in getattr(ap, "flashing", ()) and int(pygame.time.get_ticks() / 400) % 2 == 1:
+        ready = False
     r._t("S-TEC 55X", ap_rect.x + 10, y, font=r.f_sm, color=DIM)
     rl = pygame.Rect(ap_rect.x + 10, y + 16, 42, 18)
     pygame.draw.rect(surf, GPS_GREEN if ready else (40, 44, 48), rl, border_radius=3)
@@ -2345,7 +2347,7 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None, *, show_info=True):
     key("APR", lat == "APR", alat == "APR")
     key("REV", lat == "REV", alat == "REV")
     key("ALT", vert == "ALT", False)
-    key("VS", vert == "VS", False)
+    key("VS", vert == "VS", False)      # (VS blinks via `flashing` above)
 
     # VS window, right after the mode-button row (not pinned to the box's
     # far right edge - the box is wide, and anchoring the readout that far
@@ -2378,7 +2380,7 @@ def draw_ap_panel(surf, rect, ap, magvar, r, ias_bug=None, *, show_info=True):
     elif avert == "GS" or gs_blink:
         ann.append(("GS ARM", AMBER))
     tr = getattr(ap, "trim", 0)
-    if tr:
+    if tr and not ("TRIM" in flashing and blink_off):
         ann.append((f"TRIM {'UP' if tr > 0 else 'DN'}", AMBER))
     ax = ap_rect.x + 92
     ann_y = y + 36 if vy == y else vy + 22   # below the wrapped VS row too, when wrapped

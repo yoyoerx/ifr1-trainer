@@ -133,6 +133,20 @@ _GS_CAPTURE_DEFL = 0.05
 _GS_FPM_PER_KT = 5.31           # 3.00 deg: tan(3 deg) x 6076 ft/nm / 60 min
 _FLASH_DEV = 0.50               # NAV / GS annunciation flashes beyond 50% deflection (p.3-5, p.3-13)
 _VS_KNOB_STEP = 100.0
+# POH sec.3.1.4 / 3.1.5 / 4.2 (pp.3-8, 4-3): the modifier knob moves the held altitude 20 ft per detent,
+# +/-360 ft from the captured altitude, and the held vertical speed 100 fpm per detent, +/-1600 fpm from
+# the captured rate; 1600 fpm is the absolute limit. In a climb the VS annunciation flashes when the
+# aircraft cannot hold the rate for 15 s. TRIM UP/DN appears after 3 s of servo loading and flashes 4 s
+# later (sec.3.1.7.1). After a disconnect RDY flashes for 5 s (sec.3.7, pre-flight test step 50).
+_ALT_KNOB_FT = 20.0
+_ALT_KNOB_RANGE_FT = 360.0
+_VS_MAX_FPM = 1600.0
+_VS_LAG_S = 15.0
+_VS_LAG_FPM = 200.0             # "unable to hold" tolerance - the POH gives none (trainer's choice)
+_TRIM_ANNUNCIATE_S = 3.0
+_TRIM_FLASH_AFTER_S = 4.0
+_TRIM_LOAD_FPM = 200.0          # commanded rate that loads the pitch servo enough to need trim (trainer's proxy)
+_DISC_RDY_FLASH_S = 5.0
 
 # A pure proportional xtk->intercept loop settles at a nonzero steady-state
 # offset in any crosswind: the intercept angle has to equal the wind
@@ -202,10 +216,34 @@ class Autopilot:
     _flash_nav: bool = False
     _flash_gpss: bool = False
     _gs_needle_flash: bool = False
+    # pitch-axis bookkeeping
+    _alt_captured: float | None = None    # altitude captured on ALT engage (the knob's +/-360 ft datum)
+    _vs_captured: float = 0.0             # vertical speed captured on VS engage (the +/-1600 fpm datum)
+    _own_vs: float = 0.0
+    _vs_lag_t: float = 0.0
+    _trim_t: float = 0.0
+    _trim_dir: int = 0
+    trim_flash: bool = False
+    _rdy_flash_t: float = 0.0
 
     # -- master (yoke AP/disconnect) --------------------------------
     def press_ap(self) -> None:
-        self.disengage() if self.engaged else self.engage()
+        """The IFR-1 has a single AP key, so it stands in for both of the POH's controls: with a
+        roll mode engaged it is the yoke AP DISC switch (back to a flashing RDY, sec.3.7); from RDY it
+        is the master switch going off; from off it switches the unit on (RDY, p.2-3)."""
+        if self.roll_engaged:
+            self.disconnect()
+        elif self.engaged:
+            self.disengage()
+        else:
+            self.engage()
+
+    def disconnect(self) -> None:
+        """AP DISC: every mode drops; RDY flashes for 5 s (pre-flight test step 50). The POH's audible
+        tone is not modelled."""
+        self._release_roll()
+        self._reset_coupler()
+        self._rdy_flash_t = _DISC_RDY_FLASH_S
 
     def engage(self) -> None:
         self.engaged = True
@@ -238,6 +276,7 @@ class Autopilot:
         self.alt_hold_ft = None
         self.trim = 0
         self._xtk_i = 0.0
+        self._rdy_flash_t = 0.0
 
     # -- programmer buttons ---------------------------------------
     # NAV/APR/REV engage - and start actively intercepting - the moment
@@ -320,10 +359,15 @@ class Autopilot:
         self.vertical = Vert.ALT
         self.armed_vert = None
         self.alt_hold_ft = None          # grab present altitude next update
+        self._alt_captured = None
 
     def press_vs(self) -> None:
         if not self.roll_engaged:
             return
+        # POH sec.3.1.5: "The autopilot will hold the aircraft at its current (captured) vertical speed."
+        self.vs_target = _clamp(round(self._own_vs / 100.0) * 100.0, -_VS_MAX_FPM, _VS_MAX_FPM)
+        self._vs_captured = self.vs_target
+        self._vs_lag_t = 0.0
         self.vertical = Vert.VS
 
     def toggle_gpss(self) -> None:
@@ -331,10 +375,16 @@ class Autopilot:
 
     # -- knobs ---------------------------------------------------
     def turn_vs_knob(self, detents: int) -> None:
+        """The modifier knob: 20 ft per detent (+/-360 ft) on ALT, 100 fpm per detent (+/-1600 fpm from the
+        captured rate, 1600 fpm absolute) on VS."""
         if self.vertical is Vert.ALT and self.alt_hold_ft is not None:
-            self.alt_hold_ft += detents * 100.0
+            cap = self.alt_hold_ft if self._alt_captured is None else self._alt_captured
+            self.alt_hold_ft = _clamp(self.alt_hold_ft + detents * _ALT_KNOB_FT,
+                                      cap - _ALT_KNOB_RANGE_FT, cap + _ALT_KNOB_RANGE_FT)
         else:
-            self.vs_target = _clamp(self.vs_target + detents * _VS_KNOB_STEP, -2000.0, 2000.0)
+            lo = max(-_VS_MAX_FPM, self._vs_captured - _VS_MAX_FPM)
+            hi = min(_VS_MAX_FPM, self._vs_captured + _VS_MAX_FPM)
+            self.vs_target = _clamp(self.vs_target + detents * _VS_KNOB_STEP, lo, hi)
 
     def set_heading_bug(self, deg: float) -> None:
         self.heading_bug = norm360(deg)
@@ -346,7 +396,8 @@ class Autopilot:
         self.alt_preselect = float(ft)
 
     def set_vs_target(self, fpm: float) -> None:
-        self.vs_target = float(fpm)
+        self.vs_target = _clamp(float(fpm), -_VS_MAX_FPM, _VS_MAX_FPM)
+        self._vs_captured = self.vs_target
 
     # -- annunciator text --------------------------------------
     @property
@@ -408,8 +459,11 @@ class Autopilot:
         gps_course_deg: float | None = None,
         vloc_is_loc: bool = True,
     ) -> Commands:
+        self._rdy_flash_t = max(0.0, self._rdy_flash_t - dt) if self.engaged else 0.0
+        self._own_vs = getattr(own, "vs_fpm", 0.0)
         if not self.roll_engaged:            # off, or RDY: nothing steers and no pitch mode can run
             self.trim = 0
+            self._trim_t, self._trim_dir, self.trim_flash = 0.0, 0, False
             return Commands()
 
         alt = getattr(own, "altitude_ft", 0.0)
@@ -431,9 +485,11 @@ class Autopilot:
             if abs(alt - self.alt_preselect) <= band:
                 self.vertical = Vert.ALT
                 self.alt_hold_ft = self.alt_preselect
+                self._alt_captured = self.alt_preselect
                 cmd_alt, cmd_vs, clear_vs = self.alt_preselect, None, True
 
-        self.trim = 1 if (cmd_vs or 0) > 200 else -1 if (cmd_vs or 0) < -200 else 0
+        self._track_trim(cmd_vs, dt)
+        self._track_vs_lag(dt)
         rate = None if self._rate_frac is None else self._rate_frac * STD_RATE_DPS
         return Commands(heading=cmd_heading, altitude=cmd_alt, vs=cmd_vs, clear_vs=clear_vs,
                         turn_rate_dps=rate)
@@ -670,6 +726,25 @@ class Autopilot:
         else:
             self._gs_needle_flash = False
 
+    def _track_trim(self, cmd_vs, dt) -> None:
+        """TRIM UP/DN (POH sec.3.1.7): the pitch servo loads while a vertical rate is being held; after 3 s the
+        annunciation appears, and flashes 4 s later. The trainer has no servo, so the commanded rate stands
+        in for the loading."""
+        direction = 1 if (cmd_vs or 0) > _TRIM_LOAD_FPM else -1 if (cmd_vs or 0) < -_TRIM_LOAD_FPM else 0
+        if direction != self._trim_dir:
+            self._trim_dir, self._trim_t = direction, (dt if direction else 0.0)
+        elif direction:
+            self._trim_t += dt
+        self.trim = direction if (direction and self._trim_t >= _TRIM_ANNUNCIATE_S) else 0
+        self.trim_flash = bool(self.trim) and self._trim_t >= _TRIM_ANNUNCIATE_S + _TRIM_FLASH_AFTER_S
+
+    def _track_vs_lag(self, dt) -> None:
+        """POH sec.3.1.5: 'During a climb, should the aircraft become unable to hold the captured vertical
+        speed for a period of fifteen seconds, the VS annunciation will flash'."""
+        lagging = (self.vertical is Vert.VS and self.vs_target > _VS_LAG_FPM
+                   and self._own_vs < self.vs_target - _VS_LAG_FPM)
+        self._vs_lag_t = self._vs_lag_t + dt if lagging else 0.0
+
     @property
     def flashing(self) -> frozenset:
         """Annunciations that should blink right now."""
@@ -680,6 +755,12 @@ class Autopilot:
             out.add("GPSS")
         if self.gs_disabled or self._gs_needle_flash:
             out.add("GS")
+        if self._vs_lag_t >= _VS_LAG_S:
+            out.add("VS")
+        if self.trim_flash:
+            out.add("TRIM")
+        if self._rdy_flash_t > 0.0 and self.lateral is Lat.RDY:
+            out.add("RDY")
         return frozenset(out)
 
     def _vertical_command(self, alt, gs_kt, gs_deflection):
@@ -687,6 +768,7 @@ class Autopilot:
         if vert is Vert.ALT:
             if self.alt_hold_ft is None:
                 self.alt_hold_ft = round(alt / 10.0) * 10.0
+                self._alt_captured = self.alt_hold_ft
             return self.alt_hold_ft, None, True
         if vert is Vert.VS:
             return None, self.vs_target, False

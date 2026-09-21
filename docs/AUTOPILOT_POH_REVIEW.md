@@ -41,7 +41,7 @@ Status: **OK** matches the text - **PARTIAL** right idea, wrong numbers or missi
 | R9 | Sec.3.1.2.1 / 3.1.3.1 p.3-6: **pilot-selectable intercept angle** - set the heading bug to the intercept heading, hold HDG, press NAV (twice for GPSS); AP flies that heading until it must turn to avoid overshoot. | Not implemented. | **N/M** |
 | R10 | Sec.4.1 p.4-3: turn-rate limit **90% of standard rate** (HDG, NAV, APR, REV, CWS; piston), **GPSS 90/110/130%** by hardware mod code. | F50: `Commands.turn_rate_dps` -> `SimModel.turn_rate_limit`: HDG 90%, NAV/APR/REV 90/45/15% by stage. GPSS 110% (the AR-and-above hardware code; POH offers 130/90/110% by code). | **OK** |
 | R11 | Sec.3.1.2 p.3-3: **NAV mode uses the course selected on the HSI/OBS** and the CDI needle; the pilot must keep it set. GPSS (sec.3.1.3) follows the GPS's own course and ignores the course pointer. GNS 530 Pilot's Guide p.175: 'Set course to [###]' when the selected course is >10 deg off the DTK. | F51: NAV on GPS flies the NAV1 CRS pointer (`--ap-course manual`, the default) against the GPS needle; GPSS ignores it; the 530 posts 'Set course to ###' (`GpsNav.check_course_select`). `--ap-course auto` keeps the old DTK-slaved behaviour. | **OK** |
-| R12 | Sec.3.1.3 p.3-7: NAV GPSS with no programmed course: NAV and GPSS **flash**, AP holds wings level. | `_lateral_command` falls through to wings level; no flashing. | **PARTIAL** |
+| R12 | Sec.3.1.3 p.3-7: NAV GPSS with no programmed course: NAV and GPSS **flash**, AP holds wings level. | F53: NAV and GPSS flash and the AP holds heading when no course is programmed. | **OK** |
 | R13 | Sec.3.1.3 p.3-7: the AP will not accept course-error input from the HSI in GPSS. | Consistent (GPSS ignores OBS). | **OK** |
 | R14 | Sec.3.1.3, 3.5.2 p.3-34: GPSS + a GPS with the missed approach loaded flies it, including the hold; sec.3.3.7 the whole lateral approach incl. procedure turn. | Works through the `gpsnav` legs (flown-hold, arcs, missed approach SUSP). | **OK** |
 | R15 | Sec.3.1.1 p.3-3: HDG mode turns to the bug and holds it. | `heading_bug + magvar`. Pressing HDG a second time drops to **LVL** (wings level) - the POH describes no such toggle. | **OK / PARTIAL** |
@@ -58,19 +58,19 @@ Status: **OK** matches the text - **PARTIAL** right idea, wrong numbers or missi
 | A4 | p.3-12: GS **captures at 5% GDI** below centerline; ALT annunciation drops. | F53: engages at 5% GDI below the beam (the ALT annunciation goes out); nominal descent uses the 3.00 deg rate (5.31 fpm/kt). Headless ILS 08: |GDI| <= 0.05 through the approach in 0/270@25/090@30 wind. | **OK** |
 | A5 | p.3-12: pressing **APR** with GS armed disables it (GS flashes); again re-arms (1 s / 10 s). Pressing **ALT** above the beam engages GS manually; caution >20% above - "aggressive". | F53: APR press with GS armed disarms it (GS flashes), the next press re-arms it (back after 1 s); ALT press with APR+ALT and a usable beam engages GS at once, ALT again leaves it. The >20%-above caution is not enforced (the descent is just rate-clamped). | **OK** |
 | A6 | p.3-13: GS annunciation **flashes** at >50% GDI or flag (with FAIL). | F53: the GS annunciation flashes at >50% GDI or a flag (`flashing`, blinking in the panel). | **OK** |
-| A7 | p.3-12: at DH disconnect - the AP does not level off (sec.3.5.1 caution for WAAS at DH/MDA). | No DH prompt or level-off logic was written; not tested past the beam. | **UNVERIFIED** |
+| A7 | p.3-12: at DH disconnect - the AP does not level off (sec.3.5.1 caution for WAAS at DH/MDA). | No automatic level-off at DH/MDA - the pilot disconnects (POH sec.3.2.1, 3.5.1 caution); the trainer does the same. | **OK** |
 | A8 | Sec.3.5.1 p.3-34: with a WAAS GPS, GPSS flies the lateral approach; **NAV APR on the FAC** captures the GPS glideslope (LPV, LNAV/VNAV, LNAV+V). | No GPS-vertical GS coupling (GS only from a tuned ILS). | **N/M** |
-| A9 | Sec.3.2.1: GS holds via closure rate on the beam. | Fixed 5 fpm per kt nominal + 400 fpm x deflection clamped to -1200/+200 fpm. Untested against a real descent profile. | **UNVERIFIED** |
+| A9 | Sec.3.2.1: GS holds via closure rate on the beam. | F53: 3.00 deg nominal descent (5.31 fpm/kt) plus a 400 fpm/unit correction; flown headless to 1 nm in 3 winds within 0.05 GDI. | **OK** |
 
 ## 3. Pitch axis
 
 | # | POH says | Trainer does | Status |
 |---|---|---|---|
-| P1 | Sec.3.1.4 p.3-8: ALT hold holds the captured altitude; **modifier knob 20 ft per detent, +/-360 ft** from capture. | `turn_vs_knob` on ALT moves the target **100 ft per detent**, no range limit (`alt_hold_ft += detents*100`). | **GAP** |
-| P2 | Sec.3.1.5 p.3-8: VS holds the captured rate; knob **100 fpm/detent, +/-1600 fpm** from the captured value; **VS flashes** if it cannot hold for 15 s in a climb. | 100 fpm/detent, clamped +/-2000 fpm absolute (`vs_target`), no flash. | **PARTIAL** |
-| P3 | Sec.4.2 p.4-3: max **1600 fpm**, 0.6 g, 32,000 ft. | Clamps at 2000 fpm. | **PARTIAL** |
+| P1 | Sec.3.1.4 p.3-8: ALT hold holds the captured altitude; **modifier knob 20 ft per detent, +/-360 ft** from capture. | F54: `turn_vs_knob` on ALT: 20 ft per detent, +/-360 ft from the captured altitude (also from a preselect capture). | **OK** |
+| P2 | Sec.3.1.5 p.3-8: VS holds the captured rate; knob **100 fpm/detent, +/-1600 fpm** from the captured value; **VS flashes** if it cannot hold for 15 s in a climb. | F54: VS engage captures the present rate (rounded to 100 fpm); knob 100 fpm/detent, +/-1600 fpm from the captured rate, 1600 absolute; VS flashes after 15 s of a climb that cannot be held (>200 fpm short - the POH gives no tolerance). | **OK** |
+| P3 | Sec.4.2 p.4-3: max **1600 fpm**, 0.6 g, 32,000 ft. | F54: 1600 fpm limit enforced (was 2000). | **OK** |
 | P4 | Sec.3.1.5: VS shows the captured vertical speed in fpm x100 in the display. | Shown via `vs_target`. | **OK** |
-| P5 | Sec.3.1.7 p.3-9: TRIM UP / TRIM DN annunciations after 3 s of servo loading, flash after 4 more s, audible tone. | `trim` = arrow when commanded VS >200 fpm (cosmetic). | **PARTIAL** |
+| P5 | Sec.3.1.7 p.3-9: TRIM UP / TRIM DN annunciations after 3 s of servo loading, flash after 4 more s, audible tone. | F54: TRIM UP/DN appears after 3 s of held vertical rate and flashes 4 s later; the commanded rate stands in for servo loading and the audible tone is not modelled. | **PARTIAL** (visual only) |
 | P6 | Altitude preselect capture out of VS is not in this POH (it is the 55X-with-altitude-selector option). | `alt_preselect` capture modelled (documented as an installed option). | **N/A** |
 
 ## 4. Other
@@ -78,7 +78,7 @@ Status: **OK** matches the text - **PARTIAL** right idea, wrong numbers or missi
 | # | POH says | Trainer does | Status |
 |---|---|---|---|
 | O1 | Sec.3.1.6: **CWS** (control-wheel steering) holds turn rate and VS. | Not modelled. | **N/M** |
-| O2 | Sec.3.7: disconnect by yoke switch/master/trim switch; RDY flashes 5 s with an audible alert. | `press_ap` toggles; no RDY/alert. | **PARTIAL** |
+| O2 | Sec.3.7: disconnect by yoke switch/master/trim switch; RDY flashes 5 s with an audible alert. | F54: the single IFR-1 AP key = yoke AP DISC with a roll mode engaged (-> RDY flashing 5 s), master off from RDY, on from off. Audible alert not modelled. | **PARTIAL** (trainer mapping of one key onto two POH controls) |
 | O3 | Sec.2.1/2.2: power-up test annunciations, FAIL states. | Not modelled. | **N/M** (out of scope) |
 | O4 | Sec.3.1.3: press NAV twice for GPSS, "only press it once" if NAV is already engaged. | First press NAV, second press GPSS, third press deletes it. The "deletes" step is not in **this** POH; an earlier docstring cites "sec.4.2.5" of a different edition. | **UNVERIFIED** (see below) |
 | O5 | Sec.3.6: yaw damper. | Not modelled. | **N/M** |

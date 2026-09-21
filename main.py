@@ -814,7 +814,7 @@ def route_event(ev, w: World) -> None:
             if shift:                            # shift latched -> IAS set-point
                 w.set_ias_target(w.ias_target + inner * _IAS_STEP_KT)
             else:
-                w.ap.set_vs_target(_clamp(w.ap.vs_target + inner * 100, -2000.0, 2000.0))
+                w.ap.turn_vs_knob(inner)         # the modifier knob: ALT 20 ft / VS 100 fpm per detent
 
 
 # --------------------------------------------------------------------------- #

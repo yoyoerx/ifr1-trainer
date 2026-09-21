@@ -276,6 +276,11 @@ arms itself once you are within 50% of the localizer and more than 10% below the
 while it is armed disarms it (GS flashes) and APR again re-arms it; ALT with the beam available engages it
 immediately. NAV, APR, REV and GS blink beyond 50% needle deflection or on a flag.
 
+**Knobs and disconnect.** The AP-mode inner knob (or `9`/`0`) is the S-TEC modifier knob: **ALT** moves the held altitude
+20 ft per click (+/-360 ft from where it was captured), **VS** 100 fpm per click (+/-1600 fpm from the rate that VS
+captured, 1600 max). VS captures the rate you are flying when you press it. With a roll mode engaged the AP key
+disconnects to a flashing RDY (5 s); from RDY it switches the unit off.
+
 **While a modal page is open** (these keys are captured, overriding the tables above):
 
 *Direct-To entry page* (opened by `D` or the IFR-1 DCT key):
