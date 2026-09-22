@@ -1129,12 +1129,29 @@ the desired frequency on any of the main pages and press ENT" puts it in the **s
 * `GpsNav.tune_requests` -> `main.World._apply_tunes`: FMS1 fills COM1/NAV1, FMS2 COM2/NAV2 (out-of-band values ignored).
 
 Not modelled (guide shows them; the data or the units aren't there): "best available approach" and runway length columns
-on Nearest Airport, the Airport Runway page, "Info?" usage restrictions on frequencies, TX/PT designations, Nearest
+on Nearest Airport (the Airport Runway page: F60), "Info?" usage restrictions on frequencies, TX/PT designations, Nearest
 User / ARTCC / FSS / Airspace pages, the 30 s tuning-cursor return timer, 8.33 kHz spacing. NDB frequencies are shown but
 not tunable (no ADF). **ENT on a highlighted Nearest identifier** now opens that facility's WPT page
 (Airport / VOR / NDB / Intersection; p.117) and CLR returns to the Nearest page; the **D-> key** with a Nearest row
 highlighted seeds the Direct-To page, then ENT, ENT (p.115). The old ENT-to-Direct-To shortcut (Nearest and WPT pages) is
 gone. Not modelled: the "Done?" field (CLR only), and extra Airport Location fields (fuel, city).
+
+### F60 - WPT > Airport Runway page
+
+Pilot's Guide sec.6 p.93: the page shows runway designations, length and width, surface and lighting for the selected
+airport; the cursor goes to the "Runway" field, the small knob lists the runways, ENT displays one.
+
+* New page second in the WPT group (guide order: Location, Runway, Frequency). Large knob off the identifier reaches the
+  Runway field, the small knob steps through the runway ends (by designation), the large knob back returns to the identifier.
+  Shows designation, length x width, magnetic heading, threshold elevation, surface, lighting and the ILS/LOC frequency.
+* **New data**: NASR `APT_RWY.csv` is now kept by `datasrc.faa` (re-run `python -m datasrc.faa update --kinds nasr --force`
+  on an existing cache; without it the page shows Unknown) and merged by `navdata.nasr.merge_runways`; nav-DB cache schema 5.
+  NASR surface codes are mapped to the guide's words (Hard / Turf / Sealed / Gravel / Dirt / Water, else Unknown; a composite
+  code like ASPH-TURF takes its first part).
+* **Gap**: NASR gives lighting *intensity* (High / Medium / Low / Perimeter ...), not the guide's schedule (No Lights / Part
+  Time / Full Time / Frequency), so the page shows the intensity and Unknown where NASR is blank. Not modelled: the runway
+  map image and RNG scaling, and the Public/Military/Private type. Default runway shown first is the lowest designation
+  (the guide does not say).
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

@@ -1324,6 +1324,32 @@ class Renderer:
         kind = type(ent).__name__
         self._t(getattr(ent, "name", "") or kind, b.x, y, font=self.f_sm, color=GPS_GREEN)
         y += 16
+        if sub == "Airport Runway":
+            rows = gns.wpt_runways()
+            r_on = on and getattr(gns, "wpt_field", 0) == 1
+            if not rows:
+                self._t("no runway data", b.x, y, font=self.f_sm, color=DIM)
+                return
+            rw = rows[getattr(gns, "wpt_sel", 0) % len(rows)]
+            surf, lgt = ent.runway_info(rw.ident)
+            self._t(f"{'>' if r_on else ' '}RWY {rw.number:<4} {getattr(gns, 'wpt_sel', 0) % len(rows) + 1}/{len(rows)}",
+                    b.x, y, font=self.f_sm, color=AMBER if r_on else TEXT)
+            y += 15
+            dims = f"{rw.length_ft or '---'} x {rw.width_ft or '---'} ft"
+            lines = [f"  {dims}", f"  HDG {rw.bearing_deg:03.0f}° mag",
+                     f"  SFC {surf}", f"  LGT {lgt}"]
+            if rw.elev_ft is not None:
+                lines.append(f"  ELEV {rw.elev_ft} ft")
+            ils = next(iter(gns.db.vhf.get(rw.ils_ident, [])), None) if rw.ils_ident else None
+            if ils is not None:
+                lines.append(f"  {'ILS' if rw.ils_category else 'LOC'} {ils.freq_mhz:.2f}")
+            for ln in lines:
+                self._t(ln, b.x, y, font=self.f_sm, color=TEXT)
+                y += 15
+            if on:
+                self._t("small knob" if r_on else "large knob", b.right, b.y,
+                        font=self.f_sm, color=DIM, right=True)
+            return
         if sub == "Airport Freq":
             rows = gns.wpt_frequencies(sub)
             f_on = on and getattr(gns, "wpt_field", 0) == 1

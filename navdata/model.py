@@ -123,6 +123,16 @@ class Airport:
     transition_alt_ft: int | None = None
     runways: dict[str, Runway] = field(default_factory=dict)
     comms: dict[str, list[float]] = field(default_factory=dict)  # "TWR"/"GND"/"ATIS"/... -> MHz
+    # NASR APT_RWY: runway pair ("08/26", "18L/36R") -> (surface, lighting) as the GNS words them
+    rwy_info: dict[str, tuple[str, str]] = field(default_factory=dict)
+
+    def runway_info(self, end_ident: str) -> tuple[str, str]:
+        """(surface, lighting) for a runway end ("RW08"); ("Unknown", "Unknown") when NASR has none."""
+        num = end_ident[2:] if end_ident.startswith("RW") else end_ident
+        for pair, info in self.rwy_info.items():
+            if num in pair.split("/"):
+                return info
+        return ("Unknown", "Unknown")
 
     def distance_nm(self, other: Point) -> float:
         return great_circle_nm(self.pos, other)

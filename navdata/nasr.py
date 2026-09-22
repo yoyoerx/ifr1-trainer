@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .model import NavDatabase
 
-__all__ = ["merge_comms", "load_frequencies", "faa_icao_crosswalk"]
+__all__ = ["merge_runways", "merge_comms", "load_frequencies", "faa_icao_crosswalk"]
 
 # FREQ_USE (may be a space-joined combo) -> our category. Checked as substrings.
 _USE_MAP = [
@@ -103,5 +103,39 @@ def merge_comms(db: NavDatabase, data_dir: Path) -> int:
         by_faa = freqs.get(apt.ident) or freqs.get(icao_to_faa.get(apt.ident, ""))
         if by_faa:
             apt.comms = {k: list(v) for k, v in by_faa.items()}
+            updated += 1
+    return updated
+
+
+# NASR SURFACE_TYPE_CODE -> the GNS 530's words (Pilot's Guide p.93: Hard, Turf, Sealed, Gravel, Dirt, Soft, Unknown, Water);
+# a composite code ("ASPH-TURF") takes its first component
+_SURFACE = {"CONC": "Hard", "ASPH": "Hard", "PEM": "Hard", "MATS": "Hard", "PSP": "Hard", "METAL": "Hard",
+            "ALUMINUM": "Hard", "TURF": "Turf", "GRASS": "Turf", "GRVL": "Gravel", "GRAVEL": "Gravel",
+            "CALICHE": "Gravel", "DIRT": "Dirt", "SAND": "Dirt", "WATER": "Water", "TRTD": "Sealed"}
+# RWY_LGT_CODE is a lighting *intensity*; the guide's Full Time / Part Time / Frequency schedule is not in NASR
+_LIGHTS = {"HIGH": "High", "MED": "Medium", "LOW": "Low", "PERI": "Perimeter", "NSTD": "Non-std",
+           "FLD": "Flood", "STRB": "Strobe"}
+
+
+def merge_runways(db: NavDatabase, data_dir: Path) -> int:
+    """Attach NASR runway surface and lighting (``APT_RWY.csv``) to ``db.airports``. Returns airports updated;
+    a missing CSV (older caches) is not an error - the page then shows Unknown."""
+    path = Path(data_dir) / "APT_RWY.csv"
+    if not path.exists():
+        return 0
+    icao_to_faa = {v: k for k, v in faa_icao_crosswalk(data_dir).items()}
+    by_faa: dict[str, dict[str, tuple[str, str]]] = {}
+    for row in _rows(path):
+        rid = row.get("RWY_ID", "").strip()
+        apt = row.get("ARPT_ID", "").strip()
+        if not rid or not apt:
+            continue
+        surf = _SURFACE.get(row.get("SURFACE_TYPE_CODE", "").strip().upper().split("-")[0].split("/")[0], "Unknown")
+        by_faa.setdefault(apt, {})[rid] = (surf, _LIGHTS.get(row.get("RWY_LGT_CODE", "").strip().upper(), "Unknown"))
+    updated = 0
+    for apt in db.airports.values():
+        info = by_faa.get(apt.ident) or by_faa.get(icao_to_faa.get(apt.ident, ""))
+        if info:
+            apt.rwy_info = dict(info)
             updated += 1
     return updated

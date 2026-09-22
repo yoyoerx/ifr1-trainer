@@ -55,6 +55,7 @@ NASR_LANDING = (
 NASR_KEEP = {
     "NAV_BASE.csv",
     "APT_BASE.csv",
+    "APT_RWY.csv",
     "ILS_BASE.csv",
     "FRQ.csv",
     "FIX_BASE.csv",

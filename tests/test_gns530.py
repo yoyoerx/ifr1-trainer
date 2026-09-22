@@ -2171,3 +2171,37 @@ def test_frequency_pages_render(fdb):
     _knob(g, pressed=("KNOB",))
     _knob(g, outer=1)
     r.draw(sc)
+
+
+def test_airport_runway_page_selects_runways_with_the_small_knob(fdb):
+    """p.93: cursor to the Runway field, small knob steps through the airport's runways."""
+    from navdata.model import Runway
+    apt = fdb.airport("KTST")
+    apt.runways["RW26"] = Runway("RW26", Point(40.26, -73.99), 260.0, length_ft=5000, width_ft=100)
+    apt.rwy_info["08/26"] = ("Hard", "Medium")
+    assert apt.runway_info("RW26") == ("Hard", "Medium") and apt.runway_info("RW17") == ("Unknown", "Unknown")
+    g = Gns530(fdb)
+    _on_page(g, "WPT", "Airport Runway")
+    _knob(g, pressed=("KNOB",))
+    g.wpt_entry = type(g.wpt_entry).seeded("KTST")
+    assert [r.ident for r in g.wpt_runways()] == ["RW08", "RW26"]
+    _knob(g, outer=1)
+    assert g.wpt_field == 1 and g.wpt_sel == 0
+    _knob(g, inner=1)
+    assert g.wpt_sel == 1
+    _knob(g, inner=1)
+    assert g.wpt_sel == 0                                          # wraps
+    _knob(g, outer=-1)
+    assert g.wpt_field == 0
+
+
+def test_nasr_runway_surface_and_lighting_use_the_guide_words(tmp_path, fdb):
+    from navdata.nasr import merge_runways
+    (tmp_path / "APT_BASE.csv").write_text('"ARPT_ID","ICAO_ID"\n"TST","KTST"\n', encoding="utf-8")
+    (tmp_path / "APT_RWY.csv").write_text(
+        '"ARPT_ID","RWY_ID","SURFACE_TYPE_CODE","RWY_LGT_CODE"\n"TST","08/26","ASPH-TURF","MED"\n'
+        '"TST","17/35","TURF",""\n', encoding="utf-8")
+    assert merge_runways(fdb, tmp_path) == 1
+    apt = fdb.airport("KTST")
+    assert apt.runway_info("RW08") == ("Hard", "Medium") and apt.runway_info("RW35") == ("Turf", "Unknown")
+    assert merge_runways(fdb, tmp_path / "nope") == 0              # no CSV cached: not an error

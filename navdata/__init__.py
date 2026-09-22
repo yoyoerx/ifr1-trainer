@@ -55,7 +55,7 @@ __all__ = [
 
 CIFP_FILENAME = "FAACIFP18"
 # bump when the model / parser output shape changes so stale pickles are ignored
-_CACHE_SCHEMA = 4
+_CACHE_SCHEMA = 5
 
 
 def _cache_path(cdir: Path, cifp_path: Path, *, areas, comms: bool) -> Path:
@@ -130,6 +130,8 @@ def load(
         from .nasr import merge_comms
 
         try:
+            from .nasr import merge_runways
+            merge_runways(db, cdir)
             n = merge_comms(db, cdir)
             if n:
                 db.notes.append(f"{n} airports got NASR comm frequencies")

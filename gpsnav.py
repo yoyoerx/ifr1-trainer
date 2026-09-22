@@ -324,7 +324,7 @@ _MAP_FULL_SCALE_NM = 350.0 / 6076.115   # "CDI scaling continues to tighten from
 PAGE_GROUPS: dict[str, list[str]] = {
     "NAV": ["Default NAV", "Map", "NAV/COM", "Position", "Flight Plan",
             "Flight Plan Catalog", "VNAV"],
-    "WPT": ["Airport", "Airport Freq", "Intersection", "NDB", "VOR"],
+    "WPT": ["Airport", "Airport Runway", "Airport Freq", "Intersection", "NDB", "VOR"],
     "AUX": ["Trip Planning", "Utility", "Setup", "Nav Data", "Weather", "Charts"],
     "NRST": ["Nearest APT", "Nearest VOR", "Nearest NDB", "Nearest INT"],
 }
@@ -332,8 +332,8 @@ _GROUP_ORDER = list(PAGE_GROUPS)
 # each WPT sub-page resolves only its own category (Pilot's Guide sec.4.2:
 # the Airport/Intersection/NDB/VOR pages are separate lookups) - the value
 # matches navdata.NavDatabase.find/nearest_fix's ``kind`` argument.
-_WPT_PAGES = ("Airport", "Airport Freq", "Intersection", "NDB", "VOR")
-_WPT_PAGE_KIND = {"Airport": "airport", "Airport Freq": "airport", "Intersection": "waypoint",
+_WPT_PAGES = ("Airport", "Airport Runway", "Airport Freq", "Intersection", "NDB", "VOR")
+_WPT_PAGE_KIND = {"Airport": "airport", "Airport Runway": "airport", "Airport Freq": "airport", "Intersection": "waypoint",
                   "NDB": "ndb", "VOR": "vhf"}
 
 
@@ -1320,7 +1320,7 @@ class GpsNav:
                 n = len(self.fpl.waypoints)
                 ed["row"] = max(0, min(n, ed["row"] + outer))
         elif page in _WPT_PAGES:
-            rows = self.wpt_frequencies(page)
+            rows = self.wpt_runways() if page == "Airport Runway" else self.wpt_frequencies(page)
             if self.wpt_field == 0:
                 # "Rotate the large right knob to highlight the frequency field" (p.105) - off the end of the identifier
                 if (outer > 0 and rows and self.wpt_entry.cursor >= len(self.wpt_entry.ident()) - 1):
@@ -1328,6 +1328,12 @@ class GpsNav:
                 else:
                     self.wpt_entry.move_cursor(outer)
                     self.wpt_entry.scroll_char(inner)
+            elif page == "Airport Runway":
+                # "Rotate the small right knob to display a window listing all runways ... continue rotating to select" (p.93)
+                if inner:
+                    self.wpt_sel = (self.wpt_sel + inner) % len(rows)
+                if outer < 0:
+                    self.wpt_field = 0
             elif outer:
                 if self.wpt_sel + outer < 0:
                     self.wpt_field = 0
@@ -1767,6 +1773,11 @@ class GpsNav:
         if page == "Airport Freq":
             return airport_frequencies(self.db, ent)
         return [FreqEntry("VOR", ent.freq_mhz, "VLOC")] if getattr(ent, "freq_mhz", None) else []
+
+    def wpt_runways(self) -> list:
+        """The Airport Runway page's runway ends for the looked-up airport, by designation."""
+        apt = self.lookup(self.wpt_entry.ident(), "Airport Runway")
+        return [r for _, r in sorted(apt.runways.items())] if apt is not None else []
 
     def navcom_airports(self) -> list[str]:
         """The NAV/COM page's airports: departure, en route and arrival along the flight plan (p.24)."""
