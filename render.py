@@ -167,6 +167,15 @@ CYAN = (90, 210, 235)
 MAGENTA = (230, 110, 210)     # Garmin active-leg colour
 AMBER = (240, 180, 60)
 WHITE = (235, 240, 245)
+
+# Nearest Airspace Page row wording (Pilot's Guide p.121-122) - distinct from the MSG-queue alert text
+# (gpsnav._AIRSPACE_ALERT_MSG), which quotes different phrasing for the same four conditions.
+_AIRSPACE_STATUS_LABEL = {
+    "inside": "Inside of airspace",
+    "near_ahead": "Ahead < 2nm",
+    "near": "Within 2nm of airspace",
+    "ahead": "Ahead",
+}
 RED = (235, 90, 80)
 
 WIN_W, WIN_H = 1000, 640
@@ -1453,13 +1462,18 @@ class Renderer:
         self._draw_freq_rows(rows, getattr(gns, "nrst_freq_sel", 0) if on else -1, b.x, b.y + 60, b.bottom, b.right)
 
     def _draw_nrst_airspace(self, sc: Scene, b: pygame.Rect, hits, on: bool, sel: int, y: int):
-        """Nearest Airspace: name/class, a simple proximity status, then floor/ceiling (Pilot's Guide p.121-122).
-        No frequency or drill-down page - see FINDINGS F62 for what isn't modelled here."""
+        """Nearest Airspace: name/class, the alert status (F63: the same four conditions that post an MSG-queue
+        alert, in the page's own wording), then floor/ceiling (Pilot's Guide p.121-123). No frequency or
+        drill-down page - see FINDINGS F62/F63 for what isn't modelled here."""
+        own = sc.own
+        track = getattr(own, "track_deg", 0.0)
+        gs = getattr(own, "gs_kt", 0.0) or 0.0
         room = max(1, (b.bottom - y) // 30)
         top = max(0, min(max(0, len(hits) - room), sel - room // 2))
         for i, aw in enumerate(hits[top:top + room], start=top):
-            d = aw.distance_nm(sc.own.pos)
-            status = "Inside of airspace" if d <= 0.0 else ("Within 2nm of airspace" if d < 2.0 else f"{d:4.1f}nm")
+            d = aw.distance_nm(own.pos)
+            cat = aw.alert_category(own.pos, track, gs)
+            status = _AIRSPACE_STATUS_LABEL.get(cat) or f"{d:4.1f}nm"
             row_on = on and i == sel
             mk = ">" if row_on else " "
             self._t(f"{mk} {aw.ident:<5} CLASS {aw.cls}  {status}", b.x, y,

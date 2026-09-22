@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
 
-from navmath import Point, distance_to_polygon_nm, great_circle_nm
+from navmath import Point, destination, distance_to_polygon_nm, great_circle_nm, point_in_polygon
 
 __all__ = [
     "CenterSite",
@@ -187,6 +187,35 @@ class Airspace:
 
     def distance_nm(self, pos: Point) -> float:
         return distance_to_polygon_nm(pos, [list(r) for r in self.rings])
+
+    def time_to_entry_s(self, pos: Point, track_deg: float, gs_kt: float, *,
+                        lookahead_s: float = 600.0, step_s: float = 15.0) -> float | None:
+        """Seconds until the projected course (straight line at ``track_deg``/``gs_kt``) first enters this
+        airspace, ``None`` if that doesn't happen within ``lookahead_s`` (the guide's "next ten minutes",
+        p.121). ``0.0`` if already inside. Below 30 kt the projection is too noisy to mean anything (taxiing,
+        a stationary test) and is skipped."""
+        if self.distance_nm(pos) <= 0.0:
+            return 0.0
+        if gs_kt < 30.0:
+            return None
+        rings = [list(r) for r in self.rings]
+        t = 0.0
+        while t <= lookahead_s:
+            if point_in_polygon(destination(pos, track_deg, gs_kt / 3600.0 * t), rings):
+                return t
+            t += step_s
+        return None
+
+    def alert_category(self, pos: Point, track_deg: float, gs_kt: float) -> str | None:
+        """One of "inside" / "near_ahead" / "near" / "ahead", or ``None`` - the four Nearest Airspace Page alert
+        conditions (Pilot's Guide p.121-122), most severe first."""
+        d = self.distance_nm(pos)
+        if d <= 0.0:
+            return "inside"
+        entering = self.time_to_entry_s(pos, track_deg, gs_kt) is not None
+        if d < 2.0:
+            return "near_ahead" if entering else "near"
+        return "ahead" if entering else None
 
 
 class LegType(str, Enum):

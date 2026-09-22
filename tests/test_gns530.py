@@ -2324,3 +2324,59 @@ def test_nearest_airspace_ent_and_column_toggle_are_inert(adb):
     _knob(g, outer=1)
     _knob(g, pressed=("ENT",))
     assert g.pop_tune_requests() == [] and g.dto is None
+
+
+# --------------------------------------------------------------------------- #
+# Nearest Airspace alert messages (F63: p.121-122)                           #
+# --------------------------------------------------------------------------- #
+def test_airspace_alert_posts_ahead_then_near_ahead_then_inside_once_each(adb):
+    """Flying straight at the KTST Class D from ~9nm south: "ahead" (>10 min out is never reached at 120kt/9nm,
+    so the first condition seen is already "ahead" within 10 min), then "near_ahead" inside 2nm, then "inside"."""
+    g = Gns530(adb)
+    g.update(Point(40.10, -74.0), 0.0, 120.0)                    # ~9nm south, heading due north at 120kt
+    msgs = g.ack_messages()
+    assert msgs.count("Airspace ahead - less than 10 minutes") == 1
+    g.update(Point(40.10, -74.0), 0.0, 120.0)                    # same spot, same condition: no repeat
+    assert g.ack_messages() == []
+    g.update(Point(40.239, -74.0), 0.0, 120.0)                   # just south of the boundary, still heading in
+    assert "Airspace near and ahead" in g.ack_messages()
+    g.update(Point(40.25, -74.0), 0.0, 120.0)                    # now inside
+    assert "Inside Airspace" in g.ack_messages()
+    g.update(Point(40.25, -74.0), 0.0, 120.0)                    # still inside: no repeat
+    assert g.ack_messages() == []
+
+
+def test_airspace_alert_near_but_not_entering(adb):
+    """Within 2nm of the boundary but flying away/parallel: "Near airspace less than 2nm", not the "ahead" wording."""
+    g = Gns530(adb)
+    g.update(Point(40.235, -74.0), 180.0, 120.0)                 # ~0.3nm south of the boundary, heading away
+    assert g.ack_messages() == ["Near airspace less than 2nm"]
+
+
+def test_airspace_alert_clears_when_flown_clear(adb):
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)                    # inside
+    assert g.ack_messages() == ["Inside Airspace"]
+    g.update(Point(39.0, -74.0), 180.0, 100.0)                   # far south, heading further away: condition clears
+    assert g.ack_messages() == []                                # clearing itself doesn't message
+    g.update(Point(40.10, -74.0), 0.0, 120.0)                    # back on approach: re-alerts
+    assert g.ack_messages() == ["Airspace ahead - less than 10 minutes"]
+
+
+def test_no_airspace_data_means_no_alerts(db):
+    g = Gns530(db)                                                # the plain `db` fixture has no airspaces
+    g.update(Point(40.0, -74.0), 0.0, 120.0)
+    assert g.ack_messages() == []
+
+
+def test_airspace_time_to_entry_and_category(adb):
+    from navmath import Point as P
+    aw = adb.airspaces[0]
+    south = P(40.10, -74.0)
+    assert aw.alert_category(south, 0.0, 120.0) == "ahead"
+    t = aw.time_to_entry_s(south, 0.0, 120.0)
+    assert t is not None and 200.0 < t < 500.0
+    assert aw.time_to_entry_s(south, 180.0, 120.0) is None       # heading away: never enters
+    assert aw.time_to_entry_s(south, 0.0, 5.0) is None           # too slow to project meaningfully
+    assert aw.alert_category(P(40.25, -74.0), 90.0, 100.0) == "inside"
+    assert aw.time_to_entry_s(P(40.25, -74.0), 90.0, 100.0) == 0.0

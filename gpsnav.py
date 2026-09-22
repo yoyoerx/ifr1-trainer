@@ -357,6 +357,17 @@ _COM_LISTING = (("ATIS", "ATIS"), ("CLNC", "CLEARANCE"), ("GND", "GROUND"), ("TW
                 ("CTAF", "CTAF"), ("UNICOM", "UNICOM"), ("APP", "APPROACH"), ("DEP", "DEPARTURE"))
 
 
+# Nearest Airspace Page alert conditions and their MSG-queue wording (Pilot's Guide p.121-122), most severe
+# first - "inside" wins over "near_ahead" wins over "near" wins over "ahead".
+_AIRSPACE_SEVERITY = {"ahead": 1, "near": 2, "near_ahead": 3, "inside": 4}
+_AIRSPACE_ALERT_MSG = {
+    "ahead": "Airspace ahead - less than 10 minutes",
+    "near_ahead": "Airspace near and ahead",
+    "near": "Near airspace less than 2nm",
+    "inside": "Inside Airspace",
+}
+
+
 def airport_frequencies(db, apt) -> list[FreqEntry]:
     """The Airport Frequency / NAV/COM list for one airport: its COM frequencies, then each runway's ILS/LOC."""
     out: list[FreqEntry] = []
@@ -748,6 +759,7 @@ class GpsNav:
         self.approach_ref: str = ""               # ... its ident (ILS / VOR)
         self._auto_vloc_done = False              # one-shot GPS->VLOC CDI switch
         self._susp_at: tuple | None = None  # (active, ident) we auto-suspended at
+        self._airspace_alert_key: tuple | None = None   # (ident, category) of the last airspace alert posted
         self._hold_state: dict | None = None  # in-progress holding-pattern circuit
         self.cdi_alarm_max_nm: float | None = None  # AUX>Setup>CDI/Alarms override; None = Auto
         self._cdi_scale = _CDI_ENROUTE_NM  # live (slewed) GPS CDI full-scale, nm
@@ -2170,10 +2182,33 @@ class GpsNav:
     def update(self, pos: Point, track_deg: float, gs_kt: float,
                dt: float | None = None) -> NavState:
         nav = self._update_core(pos, track_deg, gs_kt, dt)
+        self._check_airspace_alerts(pos, track_deg, gs_kt)
         if self.variant.waas:
             self._check_sbas_integrity(pos, gs_kt)
             nav = self._nav = replace(nav, service=self.level_of_service())   # LPV / LNAV / MAPR / ENR ...
         return nav
+
+    # -- Nearest Airspace alerts (all variants, not just WAAS - p.121-122) --
+    def _check_airspace_alerts(self, pos: Point, track_deg: float, gs_kt: float) -> None:
+        """"Once one of the described conditions exists, the message annunciator flashes" (p.122): posts one
+        message on each *change* of condition (a new airspace, or an existing one's category getting worse or
+        better) - not every tick, so the MSG queue isn't spammed while inside/near an area."""
+        if not self.db.airspaces:
+            return
+        lookahead_nm = max(2.0, gs_kt / 60.0 * 10.0 + 5.0)   # bound the candidate search to the projection range
+        best = None
+        for aw in self.db.nearest_airspaces(pos, 6, max_nm=lookahead_nm):
+            cat = aw.alert_category(pos, track_deg, gs_kt)
+            if cat is None:
+                continue
+            sev = _AIRSPACE_SEVERITY[cat]
+            if best is None or sev > best[0]:
+                best = (sev, aw.ident, cat)
+        key = (best[1], best[2]) if best is not None else None
+        if key != self._airspace_alert_key:
+            self._airspace_alert_key = key
+            if key is not None:
+                self.messages.append(_AIRSPACE_ALERT_MSG[key[1]])
 
     def _update_core(self, pos: Point, track_deg: float, gs_kt: float,
                      dt: float | None = None) -> NavState:

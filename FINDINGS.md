@@ -1215,21 +1215,55 @@ guide's Direct-To list (p.115) is airport/VOR/NDB/intersection/user waypoint onl
 deferred by design decision). This is correct behaviour for a unit that has never had one entered, not a stub.
 
 **Nearest Airspace - what's built and what's not.** Built: the list (name, class, floor/ceiling, distance), sorted
-by boundary distance; two simple proximity words, "Inside of airspace" and "Within 2nm of airspace" (p.121, exact
-wording), else a bare distance. Class B/C/D outlines on the moving map, sectional-ish colors (B blue, C magenta, D
-dashed blue), own-position bounding-box prefiltered so a nationwide list costs nothing off-screen (~10 ms/frame
-with the overlay on, well inside a 33 ms/30 Hz budget). **Not built** (p.121-123): the course-projected alerts
-("Airspace ahead - less than 10 minutes", "Airspace near and ahead") - these need a lookahead track/intercept
-prediction this trainer doesn't have; the MSG-annunciator alert workflow; the drill-down "Airspace Information
-Page" (controlling agency, "View Frequencies?" -> tune) - no controlling-agency frequency data exists in anything
-fetched here; the "Done?" field; the yellow/background alert coloring on the map. ENT and the large-knob
-column-toggle are inert on this page (verified not to crash or tune anything).
+by boundary distance; all four alert status words in the guide's exact wording ("Ahead", "Ahead < 2nm", "Within
+2nm of airspace", "Inside of airspace") and the matching MSG-queue alert messages - see F63. Class B/C/D outlines
+on the moving map, sectional-ish colors (B blue, C magenta, D dashed blue), own-position bounding-box prefiltered
+so a nationwide list costs nothing off-screen (~10 ms/frame with the overlay on, well inside a 33 ms/30 Hz
+budget). **Not built** (p.121-123): the drill-down "Airspace Information Page" (controlling agency, "View
+Frequencies?" -> tune) - no controlling-agency frequency data exists in anything fetched here; the "Done?" field;
+the yellow/background alert coloring on the map; the Setup page's alert-messages-enabled toggle (F63). ENT and the
+large-knob column-toggle are inert on this page (verified not to crash or tune anything).
 
 **Trainer choices, undocumented in the guide:** the 30 s round-trip through `AFF.txt`'s anchor-based parsing
 instead of fixed columns (the FAA no longer publishes the column layout for this legacy file); showing "ZDC
 CENTER"/"<callsign> RADIO" as the facility name in place of the ARTCC's full name (not in this data, only the
 3-letter id); the 0.0008 deg simplification tolerance; Douglas-Peucker over a simpler decimation (kept concave
 detail - a Class B "wedding cake" shelf stays recognizable - unlike, say, every-Nth-point).
+
+### F63 - Airspace alert messages (Pilot's Guide p.121-122)
+
+The four conditions F62 left as "not built": course-projected proximity alerts to a nearby Class B/C/D area, tied
+into the existing MSG-annunciator queue (the same `self.messages`/`peek_messages`/`ack_messages` plumbing as every
+other trainer message - F58's SBAS messages, "TUNE VLOC", etc.). Quoting the guide exactly:
+
+* *"If your projected course will take you inside an airspace within the next ten minutes"* -> **"Airspace ahead -
+  less than 10 minutes"** (Nearest Airspace Page: "Ahead").
+* *"If you are within two nautical miles of an airspace and your current course will take you inside"* ->
+  **"Airspace near and ahead"** ("Ahead < 2nm").
+* *"If you are within two nautical miles ... and your current course will not take you inside"* -> **"Near
+  airspace less than 2nm"** ("Within 2nm of airspace").
+* *"If you have entered an airspace"* -> **"Inside Airspace"** ("Inside of airspace").
+
+`Airspace.time_to_entry_s` projects a straight line at the current true track/groundspeed, sampled every 15 s out
+to 10 minutes, and reports the first time it lands inside the polygon (`None` if it never does within the window;
+also `None` below 30 kt, where a straight-line projection is meaningless - taxiing, a stationary test). Below 2 nm
+of the boundary, whether that projection ever lands inside picks "near_ahead" vs. "near"; at or past 10 minutes it
+picks "ahead" vs. nothing. `Airspace.alert_category` is the single source both the message check and the Nearest
+Airspace page's status column read, so the two can't drift apart - the *wording* differs (the guide itself uses
+different phrasing for the message than for the page), the *category* doesn't.
+
+`GpsNav._check_airspace_alerts` runs every `update()` (all variants - this is base-500-series behaviour, not
+WAAS-gated) and considers the 6 nearest airspaces within a speed-scaled search radius (`gs_kt/60*10 + 5` nm, so it
+never misses a real 10-minute projection at higher speeds). It posts a message only on a **change** of condition -
+"once one of the described conditions exists" (p.122) - keyed on (airspace, category), not every tick, so holding
+inside/near one area doesn't spam the queue; flying clear and re-approaching re-alerts, as a real transition would.
+
+**Not modelled**: the Setup page's "airspace alert messages enabled" toggle (p.147, referenced in this same
+paragraph) - alerts are always on here; the "less than 10 minutes" / "less than 2 nm" thresholds are the guide's
+own numbers, not tunable. Considering only the 6 *nearest-by-boundary-distance* airspaces is a trainer
+simplification - guide behaviour is presumably exhaustive within range; in the crowded DC Class B "wedding cake"
+this can occasionally let a closer-but-behind area crowd out a farther one that's actually dead ahead, which
+hasn't come up in testing but is a known edge case worth flagging.
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

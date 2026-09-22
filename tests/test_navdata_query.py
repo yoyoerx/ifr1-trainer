@@ -158,3 +158,31 @@ def test_nearest_airspaces_zero_distance_when_inside_and_respects_max_nm():
                    rings=((Point(0.0, 0.0), Point(0.0, 0.1), Point(0.1, 0.1), Point(0.1, 0.0)),))
     d.add_airspace(far)
     assert d.nearest_airspaces(REF, 4, max_nm=1.0) == [inside]
+
+
+# --------------------------------------------------------------------------- #
+# Airspace alert categories / lookahead (F63)                                #
+# --------------------------------------------------------------------------- #
+def test_airspace_alert_category_all_four_conditions():
+    from navdata.model import Airspace
+
+    square = (Point(40.0, -74.0), Point(40.0, -73.9), Point(40.1, -73.9), Point(40.1, -74.0))
+    aw = Airspace(ident="X", name="", cls="D", floor_ft=0, ceiling_ft=3000, rings=(square,))
+    inside = Point(40.05, -73.95)
+    assert aw.alert_category(inside, 90.0, 100.0) == "inside"
+    near_south = Point(39.98, -73.95)                    # ~1.2nm south of the boundary
+    assert aw.alert_category(near_south, 0.0, 100.0) == "near_ahead"     # heading toward it
+    assert aw.alert_category(near_south, 180.0, 100.0) == "near"          # heading away
+    far_south = Point(39.85, -73.95)                     # >2nm, but a straight shot at 120kt gets there < 10 min
+    assert aw.alert_category(far_south, 0.0, 120.0) == "ahead"
+    assert aw.alert_category(far_south, 180.0, 120.0) is None            # heading away: no condition at all
+
+
+def test_airspace_time_to_entry_bounds():
+    from navdata.model import Airspace
+
+    square = (Point(40.0, -74.0), Point(40.0, -73.9), Point(40.1, -73.9), Point(40.1, -74.0))
+    aw = Airspace(ident="X", name="", cls="D", floor_ft=0, ceiling_ft=3000, rings=(square,))
+    far = Point(30.0, -73.95)                             # much more than 10 min away even at high speed
+    assert aw.time_to_entry_s(far, 0.0, 150.0) is None
+    assert aw.time_to_entry_s(far, 0.0, 29.9) is None      # below the 30kt projection floor

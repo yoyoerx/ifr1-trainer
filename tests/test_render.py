@@ -1734,3 +1734,24 @@ def test_map_draws_class_airspace_rings_near_ownship(db):
 def test_map_with_no_airspaces_does_not_crash(db):
     surf = pygame.display.get_surface()
     Renderer(surf).draw(_scene(db))          # db.airspaces == [] by default - must be a no-op, not an error
+
+
+def test_nrst_airspace_page_shows_alert_wording_when_ahead(db):
+    """The Nearest Airspace page's status column should read the guide's own wording ("Ahead", not a bare
+    distance) once the alert condition applies - F63."""
+    from navdata.model import Airspace
+    from ifr1 import Event, Mode
+    from gpsnav import PAGE_GROUPS
+
+    a, b = db.find("ALFA")[0].pos, db.find("BRAVO")[0].pos
+    square = (Point(a.lat + 0.3, a.lon - 0.05), Point(a.lat + 0.3, a.lon + 0.05),
+              Point(a.lat + 0.4, a.lon + 0.05), Point(a.lat + 0.4, a.lon - 0.05))
+    db.add_airspace(Airspace(ident="ZZZ", name="", cls="D", floor_ft=0, ceiling_ft=2500, rings=(square,)))
+    sc = _scene(db)
+    g = sc.gns
+    g.update(sc.own.pos, 0.0, 150.0)                      # heading north (toward the box) at high speed
+    g.cursor.group = list(PAGE_GROUPS).index("NRST")
+    g.cursor.page = PAGE_GROUPS["NRST"].index("Nearest Airspace")
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(sc)                               # must not raise; the category lookup runs at draw time
