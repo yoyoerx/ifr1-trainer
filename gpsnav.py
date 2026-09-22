@@ -51,7 +51,7 @@ from navmath import (
     reciprocal,
     turn_anticipation_nm,
 )
-from navdata.model import LegType, NavDatabase, Point
+from navdata.model import Airspace, LegType, NavDatabase, Point
 
 try:  # ifr1 imports `hid`; keep gpsnav importable (and testable) without it
     from ifr1 import Event, Mode
@@ -596,6 +596,19 @@ class FplMenu:
         return self.options[self.sel] if 0 <= self.sel < len(self.options) else ""
 
 
+@dataclass
+class AirspaceInfo:
+    """The Airspace Information Page + its Frequency Page (Pilot's Guide p.122-123): ENT on a highlighted
+    Nearest Airspace Page row opens this - a modal overlay, like ``FplMenu``/the Direct-To dialog. The airspace
+    itself is held by reference (not looked up by ident+class) so a duplicate-ident shelf - Class B areas are
+    published as several overlapping records, one per altitude tier - keeps its own floor/ceiling correctly."""
+
+    airspace: Airspace
+    sel: int = 0            # 0 = "View Frequencies?", 1 = "Done?" (scrolled together, p.123 steps 6-7)
+    freqs_open: bool = False
+    freq_sel: int = 0       # 0..len(freqs)-1 = a frequency; len(freqs) = the Frequency Page's own "Done?" row
+
+
 # --------------------------------------------------------------------------- #
 # VNAV - a straight-line descent/climb profile to a flight-plan fix
 # --------------------------------------------------------------------------- #
@@ -760,6 +773,7 @@ class GpsNav:
         self._auto_vloc_done = False              # one-shot GPS->VLOC CDI switch
         self._susp_at: tuple | None = None  # (active, ident) we auto-suspended at
         self._airspace_alert_key: tuple | None = None   # (ident, category) of the last airspace alert posted
+        self._airspace_info: AirspaceInfo | None = None  # Airspace Information Page modal (F65)
         self._hold_state: dict | None = None  # in-progress holding-pattern circuit
         self.cdi_alarm_max_nm: float | None = None  # AUX>Setup>CDI/Alarms override; None = Auto
         self._cdi_scale = _CDI_ENROUTE_NM  # live (slewed) GPS CDI full-scale, nm
@@ -1269,6 +1283,12 @@ class GpsNav:
                 self._dto_dialog.scroll_char(inner)
             return
 
+        # the Airspace Information Page (+ its Frequency Page) is a modal overlay - opened by ENT on a
+        # highlighted Nearest Airspace Page row (p.123)
+        if self._airspace_info is not None:
+            self._airspace_info_event(pressed, outer)
+            return
+
         # the MNU pop-up (Flight Plan / Flight Plan Catalog) is a modal overlay
         if self._fpl_menu is not None:
             for btn in pressed:
@@ -1498,11 +1518,10 @@ class GpsNav:
                 if 0 <= self.nrst_freq_sel < len(freqs):
                     self._tune(freqs[self.nrst_freq_sel])
         elif page == "Nearest Airspace":
+            # ENT on a highlighted row opens the Airspace Information Page (p.122) - not a direct tune
             hits = self.nearest_for_page(page)
             if hits and 0 <= self.nrst_sel < len(hits):
-                fr = self.airspace_controlling_entry(hits[self.nrst_sel])
-                if fr is not None:
-                    self._tune(fr)
+                self._airspace_info = AirspaceInfo(airspace=hits[self.nrst_sel])
         elif page.startswith("Nearest"):
             hits = self.nearest_for_page(page)
             if hits and 0 <= self.nrst_sel < len(hits):
@@ -1818,15 +1837,52 @@ class GpsNav:
         airspace`/`nasr` data, or this particular airspace's controller isn't in the FAA data)."""
         return self.db.controlling_agency(aw)
 
-    def airspace_controlling_entry(self, aw) -> FreqEntry | None:
-        """The one frequency ENT tunes from the Nearest Airspace page: the controlling agency's *primary*
-        frequency. A Class B TRACON often publishes several sectorized frequencies (F64) - only the first
-        (lowest) is offered here; the others aren't reachable from this page, a trainer simplification."""
+    def airspace_freq_entry(self, aw, index: int) -> FreqEntry | None:
+        """The Airspace Information Page's Frequency Page (p.123): the controlling agency's frequency at
+        ``index``, or ``None`` if there's no controlling-agency data at all for this airspace."""
         agency = self.airspace_controlling(aw)
-        if agency is None or not agency[1]:
+        if agency is None:
             return None
         name, freqs = agency
-        return FreqEntry(name[:10], freqs[0], "COM")
+        if not 0 <= index < len(freqs):
+            return None
+        return FreqEntry(name[:10], freqs[index], "COM")
+
+    def _airspace_info_event(self, pressed: tuple, outer: int) -> None:
+        """The Airspace Information Page (p.122) and, nested inside it, the Frequency Page (p.123). Large knob
+        scrolls; on the info page, ENT opens "View Frequencies?" or (on "Done?") closes back to the Nearest
+        Airspace Page; on the frequency page, ENT tunes the highlighted frequency or (on its own "Done?") backs
+        out to the info page. CLR is the guide's stated alternative to "Done?"+ENT at either level."""
+        info = self._airspace_info
+        if info.freqs_open:
+            agency = self.airspace_controlling(info.airspace)
+            n_freqs = len(agency[1]) if agency else 0
+            if outer:
+                info.freq_sel = max(0, min(n_freqs, info.freq_sel + outer))   # n_freqs itself = "Done?"
+            for btn in pressed:
+                if btn == "ENT":
+                    if info.freq_sel < n_freqs:
+                        fr = self.airspace_freq_entry(info.airspace, info.freq_sel)
+                        if fr is not None:
+                            self._tune(fr)
+                    else:
+                        info.freqs_open = False
+                        info.freq_sel = 0
+                elif btn == "CLR":
+                    info.freqs_open = False
+                    info.freq_sel = 0
+            return
+        if outer:
+            info.sel = max(0, min(1, info.sel + outer))     # 0 = "View Frequencies?", 1 = "Done?"
+        for btn in pressed:
+            if btn == "ENT":
+                if info.sel == 0:
+                    info.freqs_open = True
+                    info.freq_sel = 0
+                else:
+                    self._airspace_info = None
+            elif btn == "CLR":
+                self._airspace_info = None
 
     def _open_wpt_page(self, page: str, entry) -> None:
         """ENT on a highlighted Nearest identifier "display[s] the Airport Location Page" / the waypoint's database

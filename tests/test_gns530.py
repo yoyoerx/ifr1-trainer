@@ -2314,27 +2314,70 @@ def test_nearest_airspace_lists_by_boundary_distance(adb):
     assert hits and hits[0].ident == "KTST" and hits[0].distance_nm(Point(40.25, -74.0)) == 0.0
 
 
-def test_nearest_airspace_ent_with_no_controlling_data_is_inert(adb):
-    """`adb`'s KTST airspace has no controlling-agency entry (F64 data is a NASR merge step, not part of this
-    hand-built fixture) - ENT/large-knob-column must not crash or tune anything in that case."""
+def test_nearest_airspace_ent_opens_the_airspace_information_page(adb):
+    """p.122: ENT on a highlighted row -> the Airspace Information Page (a modal, not a direct tune)."""
+    from gpsnav import AirspaceInfo
+
     g = Gns530(adb)
     g.update(Point(40.25, -74.0), 0.0, 100.0)
     _on_page(g, "NRST", "Nearest Airspace")
     _knob(g, pressed=("KNOB",))
-    _knob(g, outer=1)
     _knob(g, pressed=("ENT",))
+    assert isinstance(g._airspace_info, AirspaceInfo) and g._airspace_info.airspace.ident == "KTST"
     assert g.pop_tune_requests() == [] and g.dto is None
 
 
-def test_nearest_airspace_ent_tunes_the_controlling_agencys_primary_frequency(adb):
+def test_airspace_info_page_view_frequencies_with_no_controlling_data_is_inert(adb):
+    """`adb`'s KTST airspace has no controlling-agency entry (F64 data is a NASR merge step, not part of this
+    hand-built fixture) - "View Frequencies?" must still open cleanly onto an empty list (just "Done?")."""
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    _on_page(g, "NRST", "Nearest Airspace")
+    _knob(g, pressed=("KNOB",))
+    _knob(g, pressed=("ENT",))                          # open Airspace Information
+    _knob(g, pressed=("ENT",))                           # "View Frequencies?" (sel starts at 0)
+    assert g._airspace_info.freqs_open
+    _knob(g, pressed=("ENT",))                           # only "Done?" to land on
+    assert g.pop_tune_requests() == [] and not g._airspace_info.freqs_open
+
+
+def test_airspace_info_page_view_frequencies_scrolls_and_tunes_each_sector(adb):
+    """p.123: large knob scrolls the frequency list (+ "Done?"), ENT tunes; CLR/Done? backs out a level at a
+    time back to the Nearest Airspace Page."""
     aw = adb.airspaces[0]
     adb.airspace_controlling[(aw.ident, aw.cls)] = ("POTOMAC TRACON", (119.85, 124.2))
     g = Gns530(adb)
     g.update(Point(40.25, -74.0), 0.0, 100.0)
     _on_page(g, "NRST", "Nearest Airspace")
     _knob(g, pressed=("KNOB",))
+    _knob(g, pressed=("ENT",))                          # Airspace Information Page, "View Frequencies?" highlighted
+    _knob(g, pressed=("ENT",))                           # -> Frequency Page
+    assert g._airspace_info.freqs_open
+    _knob(g, pressed=("ENT",))                           # tune 119.85 (freq_sel 0)
+    _knob(g, outer=1)                                    # highlight 124.20
     _knob(g, pressed=("ENT",))
-    assert g.pop_tune_requests() == [("COM", 119.85, "POTOMAC TR")]
+    assert g.pop_tune_requests() == [("COM", 119.85, "POTOMAC TR"), ("COM", 124.2, "POTOMAC TR")]
+    _knob(g, outer=1)                                    # past the last freq -> "Done?"
+    _knob(g, pressed=("ENT",))                           # back to the Airspace Information Page
+    assert not g._airspace_info.freqs_open
+    _knob(g, outer=1)                                    # -> "Done?"
+    _knob(g, pressed=("ENT",))                           # back to the Nearest Airspace Page
+    assert g._airspace_info is None
+
+
+def test_airspace_info_page_clr_shortcuts(adb):
+    aw = adb.airspaces[0]
+    adb.airspace_controlling[(aw.ident, aw.cls)] = ("POTOMAC TRACON", (119.85,))
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    _on_page(g, "NRST", "Nearest Airspace")
+    _knob(g, pressed=("KNOB",))
+    _knob(g, pressed=("ENT",))
+    _knob(g, pressed=("ENT",))                           # -> Frequency Page
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+    assert g._airspace_info is not None and not g._airspace_info.freqs_open   # CLR: one level, not all the way out
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+    assert g._airspace_info is None                                          # CLR again: fully closed
 
 
 # --------------------------------------------------------------------------- #

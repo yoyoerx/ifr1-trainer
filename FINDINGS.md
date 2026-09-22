@@ -1288,11 +1288,42 @@ frequency only). The Nearest Airspace Page now shows a third line per entry (con
 frequency, "+N" if there are more) and **ENT tunes it to COM standby** - real Washington data: `DCA CLASS B
 Inside of airspace / 1500ft - 10000ft / POTOMAC TRACON 119.850 +1`.
 
-**Trainer simplification, not in the guide**: the guide's own workflow is a separate drill-down "Airspace
-Information Page" with a "View Frequencies?" field to scroll every sectorized frequency (p.123) - not built here
-(F62's gap still stands). Instead the primary frequency tunes directly from the list row, one knob-and-ENT away
-like every other NRST page, at the cost of the other sector frequencies (e.g. Potomac's 124.200 EAST) not being
-reachable from this page at all.
+**Superseded by F65**: the first pass tuned the primary frequency directly from the Nearest Airspace list row.
+The guide's actual workflow is a separate drill-down "Airspace Information Page" with a "View Frequencies?" field
+that scrolls every sectorized frequency (p.123) - F65 replaces the direct-tune shortcut with that, so every
+frequency (e.g. Potomac's 124.200 EAST, not just 119.850) is reachable.
+
+### F65 - The Airspace Information / Frequency Pages (Pilot's Guide p.122-123)
+
+Replaces F64's "tune the primary frequency directly" shortcut with the guide's actual three-level flow, quoted
+exactly:
+
+1. **Nearest Airspace Page** (built in F62/F63): "Rotate the large right knob to scroll through the list,
+   highlighting the desired airspace. Press ENT to display the Airspace Information Page."
+2. **Airspace Information Page**: airspace name, status + time-to-entry (F63's four conditions), floor/ceiling
+   limits, and two fields scrolled together by the large knob - **"View Frequencies?"** and **"Done?"**. ENT on
+   "View Frequencies?" opens the Frequency Page; ENT on "Done?" (or CLR) returns to the Nearest Airspace Page.
+3. **Frequency Page**: "Rotate the large right knob to scroll through the list, highlighting the desired
+   frequency. Press ENT to place the selected frequency in the standby field of the COM window" - then the COM
+   flip-flop key activates it, same as every other auto-tune page (F59). Its own "Done?" row (scrolled to like any
+   frequency, p.123 doesn't treat it as separate) or CLR returns to the Airspace Information Page.
+
+Implemented as a modal overlay (`GpsNav.AirspaceInfo`/`_airspace_info_event`), the same pattern as the Direct-To
+dialog, the PROC selector and the MNU pop-up - `handle_event` gives it every input while open, matching how those
+other multi-field GNS "pages within a page" already work. The airspace is held **by reference**, not re-looked-up
+by ident+class, because Class B areas publish several overlapping shelf records that share both (Washington's
+Class B is three separate records at KFDK's range) - re-deriving "the" airspace from ident+class alone could land
+on the wrong shelf's floor/ceiling.
+
+Verified against real data: KIAD-area Class B opens to "DCA CLASS B / Inside of airspace / 1500ft - 10000ft /
+View Frequencies? / Done?", then "POTOMAC TRACON / 119.850 / 124.200 / Done?" - both of Potomac's published
+sectors are now reachable and tunable, not just the primary.
+
+Not modelled: the guide's separate physical "Done?" *field marker* vs. this trainer's list-row "Done?" (visually
+identical, functionally identical - CLR is offered everywhere the guide offers it as an alternative). The status
+line inside the Airspace Information Page recomputes live from current position/track/groundspeed rather than
+freezing at the moment ENT opened it - the guide doesn't say either way, and a live status seems more useful in a
+trainer than a stale one.
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

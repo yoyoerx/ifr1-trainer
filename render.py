@@ -930,6 +930,8 @@ class Renderer:
             self._message_page(sc, scr)
         elif getattr(sc.gns, "_fpl_menu", None) is not None:
             self._fpl_menu_page(sc, scr)
+        elif getattr(sc.gns, "_airspace_info", None) is not None:
+            self._airspace_info_page(sc, scr)
 
     def _activate_leg_page(self, sc: Scene, scr: pygame.Rect):
         """The "Activate Leg?" confirmation (DCT pressed twice on a highlighted
@@ -1300,6 +1302,48 @@ class Renderer:
             mk = ">" if i == menu.sel else " "
             self._t(f"{mk} {opt}", box.x + 8, y, font=self.f_sm, color=col)
             y += 16
+
+    def _airspace_info_page(self, sc: Scene, scr: pygame.Rect):
+        """The Airspace Information Page + its Frequency Page (Pilot's Guide p.122-123), opened by ENT on a
+        highlighted Nearest Airspace Page row."""
+        gns = sc.gns
+        info = gns._airspace_info
+        aw = info.airspace
+        box = pygame.Rect(scr.x + 8, scr.y + 24, scr.w - 16, scr.h - 34)
+        pygame.draw.rect(self.surf, (10, 14, 18), box)
+        pygame.draw.rect(self.surf, AMBER, box, width=1)
+        if info.freqs_open:
+            self._t("FREQUENCIES", box.x + 8, box.y + 6, font=self.f_sm, color=AMBER)
+            agency = gns.airspace_controlling(aw) if hasattr(gns, "airspace_controlling") else None
+            name, freqs = agency if agency is not None else ("", ())
+            self._t(name, box.x + 8, box.y + 24, font=self.f_sm, color=GPS_GREEN)
+            y = box.y + 44
+            for i, mhz in enumerate(freqs):
+                hot = i == info.freq_sel
+                self._t(f"{'>' if hot else ' '} {mhz:7.3f}", box.x + 8, y,
+                        font=self.f_sm, color=AMBER if hot else TEXT)
+                y += 16
+            done_on = info.freq_sel == len(freqs)
+            self._t("Done?", box.x + 8, y, font=self.f_sm, color=AMBER if done_on else TEXT)
+            self._t("ENT=standby  CLR=back", box.right - 10, box.bottom - 14,
+                    font=self.f_sm, color=DIM, right=True)
+            return
+        self._t("AIRSPACE INFORMATION", box.x + 8, box.y + 6, font=self.f_sm, color=AMBER)
+        self._t(f"{aw.ident}  CLASS {aw.cls}", box.x + 8, box.y + 26, font=self.f_md, color=GPS_GREEN)
+        own = sc.own
+        cat = aw.alert_category(own.pos, getattr(own, "track_deg", 0.0), getattr(own, "gs_kt", 0.0) or 0.0)
+        status = _AIRSPACE_STATUS_LABEL.get(cat) or f"{aw.distance_nm(own.pos):4.1f}nm"
+        self._t(status, box.x + 8, box.y + 44, font=self.f_sm, color=TEXT)
+        floor = "SFC" if (aw.floor_ft or 0) == 0 else f"{aw.floor_ft}ft"
+        ceil = f"{aw.ceiling_ft}ft" if aw.ceiling_ft is not None else "---"
+        self._t(f"{floor} - {ceil}", box.x + 8, box.y + 60, font=self.f_sm, color=TEXT)
+        y = box.y + 82
+        for i, label in enumerate(("View Frequencies?", "Done?")):
+            hot = i == info.sel
+            self._t(f"{'>' if hot else ' '} {label}", box.x + 8, y, font=self.f_sm, color=AMBER if hot else TEXT)
+            y += 16
+        self._t("ENT=select  CLR=back", box.right - 10, box.bottom - 14,
+                font=self.f_sm, color=DIM, right=True)
 
     def _draw_wpt_page(self, sc: Scene, b: pygame.Rect, sub: str):
         gns = sc.gns
