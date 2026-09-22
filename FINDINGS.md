@@ -1325,6 +1325,28 @@ line inside the Airspace Information Page recomputes live from current position/
 freezing at the moment ENT opened it - the guide doesn't say either way, and a live status seems more useful in a
 trainer than a stale one.
 
+### F66 - Directory-services audit (F59-F65 vs the Pilot's Guide)
+
+A full page-by-page re-check of every auto-tune/NRST/WPT directory page's button sequences and displayed data
+against the guide text, prompted by a request to validate consistency. No behavioural bugs found - every knob/ENT/
+CLR/DCT sequence re-verified matches its cited page, including a word-for-word re-check of the ARTCC/FSS small
+knob = facility / large knob = frequency split (p.119 caption, quoted in F62/F65).
+
+Two genuinely new, previously-undocumented **data** gaps turned up on the Nearest FSS Page (p.120):
+
+* *"'RX' and 'TX' indications appear beside the listed frequencies -- indicating 'receive only' or 'transmit
+  only' frequencies."* `FRQ.csv`'s RCO rows (F62's data source for this page) carry no such flag - checked the
+  raw columns directly, confirmed absent. Every frequency this trainer shows is presented as full-duplex; a real
+  site may not be.
+* *"The associated VOR is also provided for reference"* - for **duplex** FSS operation, tune COM to the RCO
+  frequency and VLOC to the paired VOR to transmit/receive; ENT on that list entry tunes **VLOC**, not COM (p.120:
+  "Press ENT to place the selected frequency in the standby field of the **COM or VLOC** window"). `FRQ.csv`'s RCO
+  rows carry no associated-navaid reference either, so this trainer's Nearest FSS frequency list is COM-only, and
+  correctly so given the data - there's nothing to mistakenly mistag, but the feature itself can't be built without
+  a data source that has it.
+
+Neither is fixable from data this trainer already fetches; noted here rather than acted on.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a
