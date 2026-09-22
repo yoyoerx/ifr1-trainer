@@ -398,6 +398,11 @@ class NavDatabase:
         keys = [k for k in self._proc_lines if k[0] == apt and (kind is None or k[1] == kind)]
         return [self._build_procedure(k) for k in keys]
 
+    def approach_idents(self, airport: str) -> list[str]:
+        """Approach identifiers for an airport without assembling the procedures ("I23", "R05", "L23")."""
+        apt = airport.strip().upper()
+        return [k[2] for k in self._proc_lines if k[0] == apt and k[1] == "approach"]
+
     def approaches(self, airport: str) -> list[Procedure]:
         return self.procs(airport, "approach")
 

@@ -1128,8 +1128,7 @@ the desired frequency on any of the main pages and press ENT" puts it in the **s
   (Departure / Enroute / Arrival), large knob the frequency, ENT -> standby (p.24).
 * `GpsNav.tune_requests` -> `main.World._apply_tunes`: FMS1 fills COM1/NAV1, FMS2 COM2/NAV2 (out-of-band values ignored).
 
-Not modelled (guide shows them; the data or the units aren't there): "best available approach" and runway length columns
-on Nearest Airport (the Airport Runway page: F60), "Info?" usage restrictions on frequencies, TX/PT designations, Nearest
+Not modelled (guide shows them; the data or the units aren't there): (Nearest Airport columns: F61; the Airport Runway page: F60), "Info?" usage restrictions on frequencies, TX/PT designations, Nearest
 User / ARTCC / FSS / Airspace pages, the 30 s tuning-cursor return timer, 8.33 kHz spacing. NDB frequencies are shown but
 not tunable (no ADF). **ENT on a highlighted Nearest identifier** now opens that facility's WPT page
 (Airport / VOR / NDB / Intersection; p.117) and CLR returns to the Nearest page; the **D-> key** with a Nearest row
@@ -1152,6 +1151,19 @@ airport; the cursor goes to the "Runway" field, the small knob lists the runways
   Time / Full Time / Frequency), so the page shows the intensity and Unknown where NASR is blank. Not modelled: the runway
   map image and RNG scaling, and the Public/Military/Private type. Default runway shown first is the lowest designation
   (the guide does not say).
+
+### F61 - Nearest Airport columns
+
+Pilot's Guide sec.7 p.116: for each nearest airport the page shows identifier, bearing, distance, **best available
+approach**, tower / CTAF frequency and the **longest runway**, "detailed information for four nearest airports".
+
+* Two lines per airport: identifier, bearing, distance, approach; then the frequency (large knob, ENT -> COM standby, F59)
+  and longest runway (NASR/CIFP `longest_runway_ft`).
+* Best approach uses the guide's list (p.91) best-first - ILS, LOC, LDA, SDF, GPS, VOR, RNAV, NDB, TACAN - from the CIFP
+  approach identifiers, "VFR" when there is none. A CIFP "R" (RNAV (GPS)) counts as GPS; that mapping is the trainer's (the
+  guide's list predates RNAV (GPS) naming). MLS / LORAN / helicopter are not in the data.
+* The trainer screen has room for three airports at a time, not four (the list scrolls).
+* Not modelled: the AUX > Setup "Nearest Airport Criteria" (minimum runway length / surface filter, p.152).
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

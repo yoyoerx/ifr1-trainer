@@ -368,6 +368,19 @@ def airport_frequencies(db, apt) -> list[FreqEntry]:
     return out
 
 
+# the Airport Location / Nearest Airport "Approach" field: ILS, MLS, LOC, LDA, SDF, GPS, VOR, RNAV ("RNV"), LORAN,
+# NDB, TACAN, ... (p.91), best first; keyed by the ARINC 424 approach-ident prefix. A CIFP "R" (RNAV (GPS)) is a GPS approach.
+_APPROACH_KIND = {"I": "ILS", "L": "LOC", "B": "LOC", "X": "LDA", "U": "SDF", "R": "GPS", "P": "GPS", "J": "GPS",
+                  "V": "VOR", "S": "VOR", "D": "VOR", "H": "RNV", "N": "NDB", "Q": "NDB", "T": "TCN"}
+_APPROACH_RANK = ("ILS", "LOC", "LDA", "SDF", "GPS", "VOR", "RNV", "NDB", "TCN")
+
+
+def best_approach(db, ident: str) -> str:
+    """Best available instrument approach at an airport, "VFR" when it has none (p.91)."""
+    kinds = {_APPROACH_KIND[i[:1]] for i in db.approach_idents(ident) if i[:1] in _APPROACH_KIND}
+    return next((k for k in _APPROACH_RANK if k in kinds), "VFR")
+
+
 def airport_com_freq(apt) -> FreqEntry | None:
     """What the Nearest Airport page shows: "Tower or CTAF Frequency" (p.116)."""
     for use, label in (("TWR", "TOWER"), ("CTAF", "CTAF"), ("UNICOM", "UNICOM")):
@@ -1756,6 +1769,12 @@ class GpsNav:
         self.cursor.page = PAGE_GROUPS["WPT"].index(target)
         self.cursor.cursor_on = False
         self.wpt_field = self.wpt_sel = self.nrst_col = 0
+
+    def best_approach(self, ident: str) -> str:
+        cache = self.__dict__.setdefault("_best_appr", {})
+        if ident not in cache:
+            cache[ident] = best_approach(self.db, ident)
+        return cache[ident]
 
     def nearest_frequency(self, page: str, entry) -> FreqEntry | None:
         """The frequency a Nearest-page row offers: an airport's tower / CTAF, a VOR's frequency."""

@@ -2205,3 +2205,21 @@ def test_nasr_runway_surface_and_lighting_use_the_guide_words(tmp_path, fdb):
     apt = fdb.airport("KTST")
     assert apt.runway_info("RW08") == ("Hard", "Medium") and apt.runway_info("RW35") == ("Turf", "Unknown")
     assert merge_runways(fdb, tmp_path / "nope") == 0              # no CSV cached: not an error
+
+
+def test_best_available_approach_follows_the_guide_ranking(db):
+    """p.91: ILS, MLS, LOC, LDA, SDF, GPS, VOR, RNAV, LORAN, NDB, TACAN - best first; VFR when the airport has none."""
+    from gpsnav import best_approach
+
+    class _Db:
+        def __init__(self, idents):
+            self._i = idents
+
+        def approach_idents(self, apt):
+            return self._i
+    assert best_approach(_Db(["R05", "L23", "I23"]), "X") == "ILS"
+    assert best_approach(_Db(["N04", "R05", "V22"]), "X") == "GPS"      # an RNAV (GPS) approach counts as GPS
+    assert best_approach(_Db(["N04", "V22"]), "X") == "VOR"
+    assert best_approach(_Db(["N04"]), "X") == "NDB"
+    assert best_approach(_Db([]), "X") == "VFR"
+    assert Gns530(db).best_approach("NOWHERE") == "VFR"

@@ -1378,6 +1378,30 @@ class Renderer:
             hint = "ENT = standby" if (kind == "VhfNavaid" and getattr(gns, "wpt_field", 0) == 1) else ("CLR = back" if getattr(gns, "_wpt_return", None) else "")
             self._t(hint, b.right, b.y, font=self.f_sm, color=DIM, right=True)
 
+    def _draw_nrst_airports(self, sc: Scene, b: pygame.Rect, hits, on: bool, sel: int, y: int):
+        """Nearest Airport: two lines per airport (the guide shows four) - identifier, bearing, distance and best
+        approach; then the tower / CTAF frequency and the longest runway (p.116)."""
+        gns = sc.gns
+        room = max(1, (b.bottom - y) // 30)
+        top = max(0, min(max(0, len(hits) - room), sel - room // 2))
+        for i, e in enumerate(hits[top:top + room], start=top):
+            brg = norm360(initial_bearing(sc.own.pos, e.pos) - sc.magvar)
+            dis = great_circle_nm(sc.own.pos, e.pos)
+            row_on = on and i == sel
+            id_on = row_on and getattr(gns, "nrst_col", 0) == 0
+            self._t(f"{'>' if id_on else ' '} {e.ident:<5} {brg:03.0f}° {dis:5.1f}nm {gns.best_approach(e.ident):>3}",
+                    b.x, y, font=self.f_sm, color=AMBER if id_on else TEXT)
+            fr = gns.nearest_frequency("Nearest APT", e)
+            fon = row_on and not id_on
+            rwy = f"{e.longest_runway_ft}ft" if e.longest_runway_ft else "---"
+            self._t(f"{'>' if fon else ' '}   {f'{fr.mhz:7.3f}' if fr else '  ---  '}", b.x, y + 15,
+                    font=self.f_sm, color=AMBER if fon else (TEXT if fr else DIM))
+            self._t(rwy, b.right - 18, y + 15, font=self.f_sm, color=CYAN, right=True)
+            y += 30
+        if len(hits) > room:
+            more = ("^" if top > 0 else " ") + ("v" if top + room < len(hits) else " ")
+            self._t(more, b.right - 2, b.y + 16, font=self.f_sm, color=AMBER, right=True)
+
     def _draw_freq_rows(self, rows, sel: int, x: int, y: int, bottom: int, right: int):
         """A scrolling list of tunable frequencies (Airport Frequency / NAV/COM pages); ``sel`` -1 = none highlighted."""
         if not rows:
@@ -1426,6 +1450,9 @@ class Renderer:
         room = max(1, (b.height - 20) // 15)
         if not hits:
             self._t("none within range", b.x, y, font=self.f_sm, color=DIM)
+            return
+        if sub == "Nearest APT":
+            self._draw_nrst_airports(sc, b, hits, on, sel, y)
             return
         # scroll the window to keep the selection on-screen (same idea as the
         # Weather page's CRSR scroll) - the list always started at the top
