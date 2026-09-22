@@ -232,6 +232,59 @@ def test_draw_wpt_and_nrst_pages(db):
     Renderer(surf).draw(sc)
 
 
+def test_draw_remove_waypoint_confirmation_page(db):
+    from ifr1 import Event, Mode
+    from gns530 import PAGE_GROUPS
+    sc = _scene(db)
+    g = sc.gns
+    g.cursor.group = list(PAGE_GROUPS).index("NAV")
+    g.cursor.page = PAGE_GROUPS["NAV"].index("Flight Plan")
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
+    g._fpl_edit["row"] = 1
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+    assert g._remove_confirm is not None
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(sc)
+    assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
+
+
+def test_draw_remove_approach_confirmation_and_restart_approach_pages(db):
+    from ifr1 import Event, Mode
+    from navdata.model import LegType, Procedure, ProcedureLeg
+    from gns530 import PAGE_GROUPS
+    db.add_airport(Airport("KEND", Point(41.5, -74.0)))
+    db.add_procedure(Procedure(
+        airport="KEND", ident="I05", kind="approach", route_type="I",
+        transitions={"": (ProcedureLeg(10, LegType.IF, fix_ident="ALFA", is_iaf=True),
+                          ProcedureLeg(20, LegType.CF, fix_ident="BRAVO", is_faf=True),
+                          ProcedureLeg(30, LegType.CF, fix_ident="CHAR", is_map=True))},
+    ))
+    sc = _scene(db)
+    g = sc.gns
+    g.load_procedure("KEND", "I05", None)
+    g.cursor.group = list(PAGE_GROUPS).index("NAV")
+    g.cursor.page = PAGE_GROUPS["NAV"].index("Flight Plan")
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(sc)                          # procedure title row on the FPL page
+    assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("MNU",)))
+    g._fpl_menu.sel = g._fpl_menu.options.index("REMOVE APPROACH")
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+    assert g._remove_confirm is not None
+    Renderer(surf).draw(sc)
+    assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))          # cancel the removal
+    assert g._remove_confirm is None
+    iaf = next(i for i, w in enumerate(g.fpl.waypoints) if w.is_iaf)
+    g.fpl.activate_leg(iaf)
+    g.begin_proc_select()
+    g._proc_dialog.sel = g._proc_dialog.options.index("ACTIVATE APPROACH")
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+    assert g._restart_confirm is not None
+    Renderer(surf).draw(sc)
+    assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
+
+
 def test_draw_flight_plan_page(db):
     sc = _scene(db)
     sc.gns.cursor.group = list(__import__("render").PAGE_GROUPS).index("NAV") \

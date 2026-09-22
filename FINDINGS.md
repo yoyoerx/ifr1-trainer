@@ -1353,7 +1353,57 @@ VOR records (confirmed against real data: Frederick VOR/FDK 116.85 carries `FSS_
 trainer's purposes, and building only half of a two-part guide feature (VOR reference without the RX/TX flags
 sitting beside it) was judged not worth the added Nearest FSS page complexity. Both stay documented gaps.
 
-## Deferred — milestone-scale, tracked in WORKING.md
+### F67 - Flight-plan editing audit: adding/removing procedures, deleting waypoints, restarting an approach
+
+A re-check of every FPL/PROC button sequence against the guide's Section 4 (Flight Plans) and Section 5
+(Approaches/Departures/Arrivals), prompted by real playtest confusion ("I've selected approaches and then I need
+to cancel them ... the trainer is not functioning as I expect"). Found four real deviations, all fixed.
+
+**1. Selecting a second procedure of the same kind stacked it onto the flight plan instead of replacing the
+first one.** p.56: *"Select Approach? allows you to select a published instrument approach for the destination
+airport, **or replace the current approach with a new selection**."* (p.57 says the same of Select Arrival?/
+Select Departure?.) `load_procedure()` always appended; picking a second approach left both loaded end-to-end,
+their legs interleaved with no way to tell which was live - exactly the "selected approaches and need to cancel
+them" symptom. Fixed: `PlanWaypoint` now carries `proc_kind`/`proc_ident` (which procedure, if any, a leg
+belongs to), and `load_procedure()` calls a new `remove_procedure(kind)` before loading a same-kind procedure,
+matching "replace" literally.
+
+**2. No way to remove a loaded approach/arrival/departure at all.** p.58: *"Remove Approach? deletes the
+currently selected approach from the active flight plan. Remove Arrival? ... Remove Departure? ... A
+confirmation window appears listing the procedure you are about to remove. With 'Yes?' highlighted, press
+ENT."* None of `Remove Approach?`/`Remove Arrival?`/`Remove Departure?` existed in the FPL page's MNU options
+(`_FPL_MENU` had only Invert/Copy/Delete Flight Plan). p.59 also documents a CLR-key shortcut: *"highlight the
+title for the approach, departure or arrival you wish to delete ... press CLR to display a confirmation
+window."* Fixed both: the MNU options window now offers `REMOVE APPROACH`/`REMOVE ARRIVAL`/`REMOVE DEPARTURE`
+whenever a procedure of that kind is loaded, and CLR on any leg belonging to a loaded procedure removes the
+whole procedure (this trainer doesn't render a separately-selectable title row above the procedure's legs - CLR
+on any of its legs stands in for it, a deliberate simplification of the exact input surface, not of the
+resulting behavior).
+
+**3. CLR on the Flight Plan page deleted the highlighted waypoint immediately, with no confirmation.** p.49:
+*"Rotate the large right knob to select the waypoint you wish to delete and press CLR to display a 'REMOVE
+WAYPOINT' confirmation window. With 'Yes' highlighted, press ENT to remove the waypoint."* The trainer called
+`fpl.delete(row)` straight off the CLR press - an easy accidental-delete with no way back. Fixed: CLR now opens
+a `REMOVE WAYPOINT` confirmation (or, per #2 above, `REMOVE <procedure>` when the row belongs to one);
+`ENT`="Yes?" deletes, `CLR` cancels and leaves the plan untouched.
+
+**4. No "Restart Approach?" confirmation when reactivating an approach already being flown.** p.62: *"If you
+reactivate the approach currently being flown using the PROC key, prior to reaching the MAP a Restart Approach
+confirmation window appears. If you have passed the MAP, the GNS 530 proceeds to the transition waypoint without
+a restart confirmation."* `_activate_approach()` always jumped straight to the IAF/FAF with no confirmation,
+silently resetting progress through an approach already underway. Fixed with a new `_approach_being_flown()`
+check (active leg between the IAF and the MAP inclusive) gating a `RESTART APPROACH` confirmation window before
+`_activate_approach()` runs; first-time activation (approach loaded but not yet the one providing guidance) and
+reactivation after the MAP both proceed exactly as before, unconfirmed, matching the guide's stated exception.
+
+**Checked and found correct, no change:** Direct-To skip-ahead (`D->` to any waypoint, on or off the flight
+plan) and the "Activate Leg?" DCT-twice/MNU-first-option shortcut (F46) already match p.59-60 exactly, including
+"a specific leg... a departure, an arrival, the procedure turn portion of an approach, a DME arc or a holding
+pattern" all being reachable through the same mechanism, since flight-plan legs (procedure or not) are uniform
+`PlanWaypoint` rows. A user-facing note in the guide (p.3541-ish, Section 6 User Waypoints) that a direct-to or
+active-leg waypoint can't be modified/deleted from *User Waypoint* memory doesn't map onto this trainer, which
+has no user-waypoint-creation feature (documented gap, F62); it was not applied to FPL-page leg deletion since
+the guide's own FPL-specific deletion instructions (p.49, p.58-59) state no such restriction for that page.
 
 These are real gaps against the manual but each is a multi-day feature, not a
 defect in the implemented surface. They are consistent with the project's stated

@@ -174,6 +174,13 @@ class PlanWaypoint:
     # not as a straight line. The radius is centre -> this fix.
     arc_centre: Point | None = None
     arc_turn: str = "R"
+    # Which loaded procedure (if any) this leg belongs to - "" for a plain
+    # enroute fix. Lets the FPL page group/annotate procedure legs and remove
+    # a whole procedure at once (Pilot's Guide sec.4 p.58-59: "Remove
+    # Approach?"/"Remove Arrival?"/"Remove Departure?", and the CLR-key
+    # shortcut on a procedure's title).
+    proc_kind: str = ""          # approach | star | sid
+    proc_ident: str = ""
 
     @classmethod
     def from_entry(cls, entry, **flags) -> "PlanWaypoint":
@@ -756,6 +763,8 @@ class GpsNav:
         self.tune_requests: list[tuple[str, float, str]] = []   # ("COM"|"VLOC", MHz, label) for main.py
         self._fpl_edit: dict | None = None           # {"row": int, "buf": DirectToEntry?}
         self._leg_confirm: dict | None = None        # "Activate Leg?" window: {"row": int}
+        self._remove_confirm: dict | None = None     # "REMOVE WAYPOINT"/"Remove Approach?" etc.: {"kind": ..., "row": int|None}
+        self._restart_confirm: dict | None = None    # "Restart Approach?" window (PROC reactivating a flown approach): {"vtf": bool}
         self._pending_menu = False       # MNU pressed; menu content is render-tier
         self._fpl_menu: FplMenu | None = None    # MNU pop-up: Flight Plan / Catalog page
         self.fpl_catalog: list[FlightPlan | None] = [None] * CATALOG_SIZE  # FPL 01-19
@@ -841,7 +850,15 @@ class GpsNav:
         if not append:
             self.fpl.clear()
             self._approach_active = False
-        is_appr = getattr(proc, "kind", "") == "approach"
+        kind = getattr(proc, "kind", "")
+        if append and kind:
+            # "Select Approach?"/"Select Arrival?"/"Select Departure?" replace
+            # the current procedure of that kind rather than stacking a second
+            # copy of it onto the flight plan (Pilot's Guide sec.4 p.56-57:
+            # "or replace the current approach/arrival/departure with a new
+            # selection").
+            self.remove_procedure(kind)
+        is_appr = kind == "approach"
         if is_appr:
             self._approach_active = True
             self._auto_vloc_done = False
@@ -857,6 +874,8 @@ class GpsNav:
         legs = proc.assemble(transition)
         for leg in legs:
             for wp, brg in self._expand_leg(leg, anchor, prev_true, apt):
+                if kind:
+                    wp = replace(wp, proc_kind=kind, proc_ident=ident)
                 last = self.fpl.waypoints[-1] if self.fpl.waypoints else None
                 if last is not None and last.ident == wp.ident and not wp.synthetic:
                     self.fpl.waypoints[-1] = replace(   # IF then HF at the same fix
@@ -869,7 +888,9 @@ class GpsNav:
                                            else last.hold_inbound_true),
                         hold_turn=(wp.hold_turn if wp.hold else last.hold_turn),
                         hold_leg_min=(wp.hold_leg_min if wp.hold else last.hold_leg_min),
-                        hold_leg_nm=(wp.hold_leg_nm if wp.hold else last.hold_leg_nm))
+                        hold_leg_nm=(wp.hold_leg_nm if wp.hold else last.hold_leg_nm),
+                        proc_kind=wp.proc_kind or last.proc_kind,
+                        proc_ident=wp.proc_ident or last.proc_ident)
                     anchor = last.pos
                     continue
                 self.fpl.append(wp)
@@ -882,6 +903,31 @@ class GpsNav:
         if is_appr:
             self.approach_freq, self.approach_ref = self._approach_vloc_freq(legs, apt)
         return added
+
+    def remove_procedure(self, kind: str) -> str:
+        """Remove every leg of the currently-loaded procedure of ``kind``
+        ("approach"/"star"/"sid") from the active flight plan - Pilot's Guide
+        sec.4 p.58 "Remove Approach?"/"Remove Arrival?"/"Remove Departure?",
+        and the equivalent CLR-key shortcut on the procedure's title (p.59).
+        Returns the removed procedure's ident, or "" if none of that kind
+        was loaded."""
+        idxs = [i for i, w in enumerate(self.fpl.waypoints) if w.proc_kind == kind]
+        if not idxs:
+            return ""
+        proc_ident = self.fpl.waypoints[idxs[0]].proc_ident
+        dto_target = self.dto.fpl_index if self.dto is not None else None
+        for i in reversed(idxs):                    # delete back-to-front: indices stay valid
+            self.fpl.delete(i)
+        if dto_target is not None and dto_target in idxs:
+            self.dto = None                          # its Direct-To target no longer exists
+        if kind == "approach":
+            self._approach_active = False
+            self.approach_freq = None
+            self.approach_ref = ""
+            self._auto_vloc_done = False
+            self._path, self._service, self._advisory = None, frozenset(), None
+            self._downgraded = self._aborted = False
+        return proc_ident
 
     def _approach_vloc_freq(self, legs, apt) -> tuple[float | None, str]:
         """The VLOC frequency the GNS auto-loads to standby for a VOR/ILS
@@ -1264,6 +1310,30 @@ class GpsNav:
                     self._leg_confirm = None
             return
 
+        # "REMOVE WAYPOINT" / "Remove Approach?" etc. confirmation window
+        # (CLR on the Flight Plan page, or MNU > Remove Approach/Arrival/
+        # Departure) - Pilot's Guide sec.4 p.58-59
+        if self._remove_confirm is not None:
+            for btn in pressed:
+                if btn == "ENT":
+                    self._apply_remove_confirm()
+                elif btn in ("CLR", "DCT", "MNU"):
+                    self._remove_confirm = None
+            return
+
+        # "Restart Approach?" window - PROC > Activate Approach/Vectors-To-
+        # Final while that same approach is already being flown, prior to
+        # the MAP (Pilot's Guide sec.5 p.62)
+        if self._restart_confirm is not None:
+            for btn in pressed:
+                if btn == "ENT":
+                    rc = self._restart_confirm
+                    self._restart_confirm = None
+                    self._activate_approach(vtf=rc["vtf"])
+                elif btn in ("CLR", "DCT", "MNU"):
+                    self._restart_confirm = None
+            return
+
         # the Direct-To dialog is a modal overlay - it owns every input
         if self._dto_dialog is not None:
             for btn in pressed:
@@ -1311,12 +1381,20 @@ class GpsNav:
             elif btn == "MNU":
                 if page == "Flight Plan":
                     row = self._fpl_cursor_row()
+                    # Approaches, arrivals and departures can each be removed
+                    # from the Active Flight Plan Options once loaded (Pilot's
+                    # Guide sec.4 p.58) - only the kinds actually present offer
+                    # a "Remove ...?" entry.
+                    kinds = {w.proc_kind for w in self.fpl.waypoints if w.proc_kind}
+                    removes = [label for kind, label in
+                               (("approach", "REMOVE APPROACH"), ("star", "REMOVE ARRIVAL"),
+                                ("sid", "REMOVE DEPARTURE")) if kind in kinds]
                     if row is not None and row >= 1:
                         # Pilot's Guide sec.4 p.55: with a leg's waypoint highlighted the
                         # options window offers "Activate Leg?" (first in its list)
-                        self._fpl_menu = FplMenu(["ACTIVATE LEG"] + list(_FPL_MENU), leg_row=row)
+                        self._fpl_menu = FplMenu(["ACTIVATE LEG"] + list(_FPL_MENU) + removes, leg_row=row)
                     else:
-                        self._fpl_menu = FplMenu(list(_FPL_MENU))
+                        self._fpl_menu = FplMenu(list(_FPL_MENU) + removes)
                 elif page == "Flight Plan Catalog":
                     self._fpl_menu = FplMenu(list(_CATALOG_MENU))
                 else:
@@ -1547,8 +1625,11 @@ class GpsNav:
                 return
             row = ed["row"]
             if 0 <= row < len(self.fpl.waypoints):
-                self.fpl.delete(row)
-                ed["row"] = max(0, min(row, len(self.fpl.waypoints)))
+                # CLR pops a confirmation window before anything is actually
+                # removed (Pilot's Guide sec.4 p.49 "REMOVE WAYPOINT", p.59
+                # the same key on a procedure's title) - it doesn't delete
+                # immediately.
+                self._remove_confirm = {"kind": "waypoint", "row": row}
             return
         if page == "Flight Plan Catalog":
             self.catalog_delete(self.cat_sel)
@@ -1613,6 +1694,12 @@ class GpsNav:
                 self.dto = None
                 self._hold_state = None
                 self.suspended = False
+            elif choice in ("REMOVE APPROACH", "REMOVE ARRIVAL", "REMOVE DEPARTURE"):
+                # "A confirmation window appears listing the procedure you are
+                # about to remove. With 'Yes?' highlighted, press ENT." (p.58)
+                kind = {"REMOVE APPROACH": "approach", "REMOVE ARRIVAL": "star",
+                        "REMOVE DEPARTURE": "sid"}[choice]
+                self._remove_confirm = {"kind": kind, "row": None}
         elif page == "Flight Plan Catalog":
             if choice == "COPY FLT PLAN":
                 stored = self.fpl_catalog[self.cat_sel] if 0 <= self.cat_sel < len(
@@ -2005,6 +2092,30 @@ class GpsNav:
         row = ed.get("row", -1)
         return row if 0 <= row < len(self.fpl.waypoints) else None
 
+    def _apply_remove_confirm(self) -> None:
+        """"Yes?"+ENT on the REMOVE WAYPOINT / Remove Approach / Remove
+        Arrival / Remove Departure confirmation window."""
+        rc = self._remove_confirm
+        self._remove_confirm = None
+        if rc is None:
+            return
+        if rc["kind"] == "waypoint":
+            row = rc["row"]
+            if 0 <= row < len(self.fpl.waypoints):
+                wp = self.fpl.waypoints[row]
+                if wp.proc_kind:
+                    # highlighting any leg of a loaded procedure and pressing
+                    # CLR removes the whole procedure, same as its title
+                    # (Pilot's Guide sec.4 p.59) - not just that one leg.
+                    self.remove_procedure(wp.proc_kind)
+                else:
+                    self.fpl.delete(row)
+            ed = self._fpl_edit
+            if ed is not None:
+                ed["row"] = max(0, min(row, len(self.fpl.waypoints)))
+        else:
+            self.remove_procedure(rc["kind"])
+
     def _activate_leg(self, row: int) -> None:
         """Activate Leg? confirmed: navigate the flight-plan leg ending at ``row``
         (previous waypoint -> row), skipping whatever came before it. Unlike a
@@ -2164,12 +2275,16 @@ class GpsNav:
                 dlg.step = "PROC"
                 dlg.options = sorted(p.ident for p in self.db.procs(dlg.airport, dlg.kind))
                 dlg.sel = 0
-            elif choice == _PROC_ACT_APPR:
-                self._activate_approach(vtf=False)
+            elif choice in (_PROC_ACT_APPR, _PROC_ACT_VTF):
+                vtf = choice == _PROC_ACT_VTF
                 self._proc_dialog = None
-            elif choice == _PROC_ACT_VTF:
-                self._activate_approach(vtf=True)
-                self._proc_dialog = None
+                if self._approach_being_flown():
+                    # "If you reactivate the approach currently being flown
+                    # using the PROC key, prior to reaching the MAP a Restart
+                    # Approach confirmation window appears." (p.62)
+                    self._restart_confirm = {"vtf": vtf}
+                else:
+                    self._activate_approach(vtf=vtf)
             return
         if dlg.step == "PROC":
             dlg.proc_ident = dlg.current
@@ -2237,6 +2352,23 @@ class GpsNav:
         else:
             self.messages.append(f"{kind.upper()} LOADED: {proc_ident}{tag}")
             self.cursor.go_to_flight_plan()
+
+    def _approach_being_flown(self) -> bool:
+        """The loaded approach is the one currently providing navigation
+        guidance, and the MAP hasn't been passed yet - "the approach
+        currently being flown ... prior to reaching the MAP" (p.62). If the
+        MAP has already been passed, PROC > Activate proceeds without a
+        restart confirmation (it "proceeds to the transition waypoint")."""
+        if not self._approach_active or not self.fpl.has_active_leg:
+            return False
+        wps = self.fpl.waypoints
+        iaf = next((i for i, w in enumerate(wps) if w.is_iaf), None)
+        map_i = next((i for i, w in enumerate(wps) if w.is_map), None)
+        if iaf is None:
+            return False
+        if map_i is not None and self.fpl.active > map_i:
+            return False
+        return self.fpl.active >= iaf
 
     def _activate_approach(self, *, vtf: bool) -> None:
         """PROC > Activate Approach / Vectors-To-Final: drop SUSP and steer to

@@ -924,6 +924,10 @@ class Renderer:
             self._proc_page(sc, scr)
         elif getattr(sc.gns, "_leg_confirm", None) is not None:
             self._activate_leg_page(sc, scr)
+        elif getattr(sc.gns, "_remove_confirm", None) is not None:
+            self._remove_confirm_page(sc, scr)
+        elif getattr(sc.gns, "_restart_confirm", None) is not None:
+            self._restart_confirm_page(sc, scr)
         elif getattr(sc.gns, "_dto_dialog", None) is not None:
             self._direct_to_page(sc, scr)
         elif getattr(sc, "show_messages", False):
@@ -948,6 +952,52 @@ class Renderer:
         self._t("Activate?", box.right - 10, box.bottom - 34, font=self.f_sm,
                 color=AMBER, right=True)
         self._t("ENT=activate  CLR=cancel", box.x + 14, box.bottom - 18,
+                font=self.f_sm, color=DIM)
+
+    def _remove_confirm_page(self, sc: Scene, scr: pygame.Rect):
+        """"REMOVE WAYPOINT" / "Remove Approach?" etc. confirmation window
+        (Pilot's Guide sec.4 p.49, p.58-59): CLR on a flight-plan row, or MNU
+        > Remove Approach/Arrival/Departure - lists what will be removed and
+        requires ENT on "Yes?" before anything actually happens."""
+        rc = sc.gns._remove_confirm
+        box = pygame.Rect(scr.x + 8, scr.y + 24, scr.w - 16, min(110, scr.h - 34))
+        pygame.draw.rect(self.surf, (10, 14, 18), box)
+        pygame.draw.rect(self.surf, AMBER, box, width=1)
+        wps = sc.gns.fpl.waypoints
+        if rc["kind"] == "waypoint":
+            row = rc["row"]
+            wp = wps[row] if 0 <= row < len(wps) else None
+            if wp is not None and wp.proc_kind:
+                label = {"approach": "APPROACH", "star": "ARRIVAL", "sid": "DEPARTURE"}.get(
+                    wp.proc_kind, wp.proc_kind.upper())
+                self._t(f"REMOVE {label}", box.x + 8, box.y + 6, font=self.f_sm, color=AMBER)
+                self._t(wp.proc_ident, box.x + 14, box.y + 30, font=self.f_md, color=WHITE)
+            else:
+                self._t("REMOVE WAYPOINT", box.x + 8, box.y + 6, font=self.f_sm, color=AMBER)
+                if wp is not None:
+                    self._t(wp.ident, box.x + 14, box.y + 30, font=self.f_md, color=WHITE)
+        else:
+            label = {"approach": "APPROACH", "star": "ARRIVAL", "sid": "DEPARTURE"}.get(
+                rc["kind"], rc["kind"].upper())
+            ident = next((w.proc_ident for w in wps if w.proc_kind == rc["kind"]), "")
+            self._t(f"REMOVE {label}", box.x + 8, box.y + 6, font=self.f_sm, color=AMBER)
+            self._t(ident, box.x + 14, box.y + 30, font=self.f_md, color=WHITE)
+        self._t("Yes?", box.right - 10, box.bottom - 34, font=self.f_sm, color=AMBER, right=True)
+        self._t("ENT=remove  CLR=cancel", box.x + 14, box.bottom - 18,
+                font=self.f_sm, color=DIM)
+
+    def _restart_confirm_page(self, sc: Scene, scr: pygame.Rect):
+        """"Restart Approach?" window - PROC > Activate (Vectors-To-Final)
+        while that same approach is already being flown, before the MAP
+        (Pilot's Guide sec.5 p.62)."""
+        box = pygame.Rect(scr.x + 8, scr.y + 24, scr.w - 16, min(90, scr.h - 34))
+        pygame.draw.rect(self.surf, (10, 14, 18), box)
+        pygame.draw.rect(self.surf, AMBER, box, width=1)
+        ident = next((w.proc_ident for w in sc.gns.fpl.waypoints if w.proc_kind == "approach"), "")
+        self._t("RESTART APPROACH", box.x + 8, box.y + 6, font=self.f_sm, color=AMBER)
+        self._t(ident, box.x + 14, box.y + 28, font=self.f_md, color=WHITE)
+        self._t("Yes?", box.right - 10, box.bottom - 34, font=self.f_sm, color=AMBER, right=True)
+        self._t("ENT=restart  CLR=cancel", box.x + 14, box.bottom - 18,
                 font=self.f_sm, color=DIM)
 
     def _direct_to_page(self, sc: Scene, scr: pygame.Rect):
@@ -1177,7 +1227,17 @@ class Renderer:
         ed = getattr(sc.gns, "_fpl_edit", None)
         sel = ed["row"] if ed else -1
         buf = ed.get("buf") if ed else None
+        prev_kind = ""
         for i, wp in enumerate(wps[:cap]):
+            if wp.proc_kind and wp.proc_kind != prev_kind:
+                # a procedure's title, "in light blue text", directly above
+                # its waypoints (Pilot's Guide sec.4 p.59) - CLR on any of
+                # its legs removes the whole procedure, same as the title.
+                label = {"approach": "APR", "star": "STAR", "sid": "SID"}.get(
+                    wp.proc_kind, wp.proc_kind.upper())
+                self._t(f"{label} {wp.proc_ident}", b.x, y, font=self.f_sm, color=CYAN)
+                y += 15
+            prev_kind = wp.proc_kind
             leg_to_here = i == active and dto is None
             col = MAGENTA if leg_to_here else (DIM if dto is not None else TEXT)
             marker = "->" if leg_to_here else ("[]" if i == sel else "  ")

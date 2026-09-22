@@ -515,6 +515,101 @@ def test_proc_menu_activate_vtf_appears_after_an_approach_is_loaded(gp):
     assert gp.fpl.to_wp.ident == "BRAVO"             # steered straight to the FAF
 
 
+def test_load_procedure_replaces_a_previously_loaded_approach_of_the_same_kind(gp):
+    """Pilot's Guide p.56: "Select Approach? allows you to select a
+    published instrument approach ... or replace the current approach with
+    a new selection." Loading a second approach must remove the first, not
+    stack both onto the flight plan."""
+    gp.db.add_procedure(Procedure(
+        airport="KEND", ident="R05", kind="approach", route_type="R",
+        transitions={"": (ProcedureLeg(10, LegType.CF, fix_ident="DELT",
+                                        is_iaf=True, is_faf=True, is_map=True),)},
+    ))
+    gp.load_procedure("KEND", "I05", "ALFA")
+    assert any(w.proc_ident == "I05" for w in gp.fpl.waypoints)
+    gp.load_procedure("KEND", "R05", None)
+    idents = [w.ident for w in gp.fpl.waypoints]
+    assert not any(w.proc_ident == "I05" for w in gp.fpl.waypoints)   # I05's legs are gone
+    assert idents.count("CHAR") == 0                                  # I05's MAP fix with it
+    assert any(w.proc_ident == "R05" for w in gp.fpl.waypoints)
+
+
+def test_mnu_remove_approach_offered_only_when_one_is_loaded(gp):
+    _to_fpl_page(gp)
+    gp.handle_event(_fms(pressed=("MNU",)))
+    assert "REMOVE APPROACH" not in gp._fpl_menu.options
+    gp.handle_event(_fms(pressed=("CLR",)))          # close
+    gp.load_procedure("KEND", "I05", "ALFA")
+    gp.handle_event(_fms(pressed=("MNU",)))
+    assert "REMOVE APPROACH" in gp._fpl_menu.options
+    assert "REMOVE ARRIVAL" not in gp._fpl_menu.options   # no STAR loaded
+
+
+def test_mnu_remove_approach_shows_a_confirmation_then_removes_it(gp):
+    """Pilot's Guide p.58: "A confirmation window appears listing the
+    procedure you are about to remove. With 'Yes?' highlighted, press ENT."."""
+    gp.load_procedure("KEND", "I05", "ALFA")
+    assert gp._approach_active
+    _to_fpl_page(gp)
+    gp.handle_event(_fms(pressed=("MNU",)))
+    gp._fpl_menu.sel = gp._fpl_menu.options.index("REMOVE APPROACH")
+    gp.handle_event(_fms(pressed=("ENT",)))
+    assert gp._fpl_menu is None
+    assert gp._remove_confirm == {"kind": "approach", "row": None}
+    assert any(w.proc_ident == "I05" for w in gp.fpl.waypoints)   # not removed yet
+    gp.handle_event(_fms(pressed=("ENT",)))          # "Yes?"
+    assert gp._remove_confirm is None
+    assert not any(w.proc_kind == "approach" for w in gp.fpl.waypoints)
+    assert not gp._approach_active
+
+
+def test_clr_on_any_leg_of_a_loaded_procedure_removes_the_whole_procedure(gp):
+    """Pilot's Guide p.59: highlighting the procedure's title (or, as
+    modelled here, any of its legs) and pressing CLR removes the entire
+    procedure at once, not just the single highlighted leg."""
+    gp.load_procedure("KEND", "I05", "ALFA")
+    _to_fpl_page(gp)
+    gp.handle_event(_fms(pressed=("KNOB",)))
+    row = next(i for i, w in enumerate(gp.fpl.waypoints) if w.ident == "BRAVO")
+    gp._fpl_edit["row"] = row
+    gp.handle_event(_fms(pressed=("CLR",)))
+    assert gp._remove_confirm == {"kind": "waypoint", "row": row}
+    gp.handle_event(_fms(pressed=("ENT",)))
+    assert not any(w.proc_kind == "approach" for w in gp.fpl.waypoints)
+    assert not gp._approach_active
+
+
+def test_restart_approach_confirmation_when_reactivating_a_flown_approach(gp):
+    """Pilot's Guide p.62: "If you reactivate the approach currently being
+    flown using the PROC key, prior to reaching the MAP a Restart Approach
+    confirmation window appears"."""
+    gp.load_procedure("KEND", "I05", "ALFA")
+    iaf = next(i for i, w in enumerate(gp.fpl.waypoints) if w.is_iaf)
+    gp.fpl.activate_leg(iaf)                         # now actually flying the approach
+    gp.begin_proc_select()
+    opts = gp._proc_dialog.options
+    gp._proc_dialog.sel = opts.index("ACTIVATE APPROACH")
+    gp.handle_event(_fms(pressed=("ENT",)))
+    assert gp._proc_dialog is None
+    assert gp._restart_confirm == {"vtf": False}
+    gp.handle_event(_fms(pressed=("ENT",)))          # "Yes?"
+    assert gp._restart_confirm is None
+    assert gp.fpl.to_wp.ident == "ALFA"
+
+
+def test_restart_approach_confirmation_can_be_cancelled_without_disturbing_navigation(gp):
+    gp.load_procedure("KEND", "I05", "ALFA")
+    gp.fpl.activate_leg(gp.fpl.index_of("BRAVO"))
+    before = gp.fpl.active
+    gp.begin_proc_select()
+    gp._proc_dialog.sel = gp._proc_dialog.options.index("ACTIVATE APPROACH")
+    gp.handle_event(_fms(pressed=("ENT",)))
+    assert gp._restart_confirm is not None
+    gp.handle_event(_fms(pressed=("CLR",)))
+    assert gp._restart_confirm is None
+    assert gp.fpl.active == before                  # nothing changed
+
+
 # --------------------------------------------------------------------------- #
 # derived nav state
 # --------------------------------------------------------------------------- #
@@ -874,15 +969,32 @@ def test_flight_plan_page_ent_inserts_before_the_selected_row(g):
     assert [w.ident for w in g.fpl.waypoints] == ["ALFA", "BRAVO", "CHAR", "DELT"]
 
 
-def test_flight_plan_page_clr_deletes_the_selected_waypoint(g):
+def test_flight_plan_page_clr_opens_remove_waypoint_confirmation_then_ent_deletes(g):
+    # Pilot's Guide sec.4 p.49: CLR pops a "REMOVE WAYPOINT" confirmation
+    # window first - it doesn't delete immediately.
     g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
     g.update(Point(40.0, -74.0), 0.0, 120.0)
     g.cursor.group = list(PAGE_GROUPS).index("NAV")
     g.cursor.page = PAGE_GROUPS["NAV"].index("Flight Plan")
     g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
     g._fpl_edit["row"] = 1
-    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))      # delete BRAVO
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+    assert g._remove_confirm == {"kind": "waypoint", "row": 1}
+    assert [w.ident for w in g.fpl.waypoints] == ["ALFA", "BRAVO", "CHAR"]   # nothing removed yet
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))      # "Yes?" + ENT
+    assert g._remove_confirm is None
     assert [w.ident for w in g.fpl.waypoints] == ["ALFA", "CHAR"]
+
+
+def test_flight_plan_page_clr_confirmation_can_be_cancelled(g):
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    _to_fpl_page(g)
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))
+    g._fpl_edit["row"] = 1
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))      # CLR again cancels the window
+    assert g._remove_confirm is None
+    assert [w.ident for w in g.fpl.waypoints] == ["ALFA", "BRAVO", "CHAR"]
 
 
 def _to_fpl_page(g):
