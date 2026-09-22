@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pygame
 
-from navmath import Point, arc_points, destination, great_circle_nm, initial_bearing, norm360
+from navmath import Point, arc_points, destination, great_circle_nm, initial_bearing, norm180, norm360
 from gpsnav import VARIANT_530
 import instruments as instr
 
@@ -1436,6 +1436,42 @@ class Renderer:
             self._t("ENT = standby" if f_on else "small knob: airport", b.right, b.y,
                     font=self.f_sm, color=DIM, right=True)
 
+    def _draw_nrst_facility(self, sc: Scene, b: pygame.Rect, hits, on: bool):
+        """Nearest ARTCC / FSS: "one facility at a time" (Pilot's Guide p.119) - name, bearing, distance, then its
+        frequency list; the small knob steps the facility, the large knob the highlighted frequency."""
+        gns = sc.gns
+        i = max(0, min(len(hits) - 1, getattr(gns, "nrst_facility", 0)))
+        fac = hits[i]
+        brg = norm360(initial_bearing(sc.own.pos, fac.pos) - sc.magvar)
+        dis = great_circle_nm(sc.own.pos, fac.pos)
+        # the guide's "facility name" is the controlling ARTCC/FSS, not the ground site itself; full ARTCC names
+        # aren't in this data (only the 3-letter id, F62), so "ZDC CENTER" stands in for "WASHINGTON CENTER"
+        name = f"{fac.voice_call} RADIO" if hasattr(fac, "voice_call") else f"{fac.artcc} CENTER"
+        self._t(f"{name}  ({i + 1}/{len(hits)})", b.x, b.y + 20, font=self.f_md, color=GPS_GREEN)
+        self._t(f"{fac.ident}  {brg:03.0f}°  {dis:5.1f}nm", b.x, b.y + 40, font=self.f_sm, color=TEXT)
+        rows = gns.facility_frequencies(fac)
+        self._draw_freq_rows(rows, getattr(gns, "nrst_freq_sel", 0) if on else -1, b.x, b.y + 60, b.bottom, b.right)
+
+    def _draw_nrst_airspace(self, sc: Scene, b: pygame.Rect, hits, on: bool, sel: int, y: int):
+        """Nearest Airspace: name/class, a simple proximity status, then floor/ceiling (Pilot's Guide p.121-122).
+        No frequency or drill-down page - see FINDINGS F62 for what isn't modelled here."""
+        room = max(1, (b.bottom - y) // 30)
+        top = max(0, min(max(0, len(hits) - room), sel - room // 2))
+        for i, aw in enumerate(hits[top:top + room], start=top):
+            d = aw.distance_nm(sc.own.pos)
+            status = "Inside of airspace" if d <= 0.0 else ("Within 2nm of airspace" if d < 2.0 else f"{d:4.1f}nm")
+            row_on = on and i == sel
+            mk = ">" if row_on else " "
+            self._t(f"{mk} {aw.ident:<5} CLASS {aw.cls}  {status}", b.x, y,
+                    font=self.f_sm, color=AMBER if row_on else TEXT)
+            floor = "SFC" if (aw.floor_ft or 0) == 0 else f"{aw.floor_ft}ft"
+            ceil = f"{aw.ceiling_ft}ft" if aw.ceiling_ft is not None else "---"
+            self._t(f"   {floor} - {ceil}", b.x, y + 15, font=self.f_sm, color=DIM)
+            y += 30
+        if len(hits) > room:
+            more = ("^" if top > 0 else " ") + ("v" if top + room < len(hits) else " ")
+            self._t(more, b.right - 2, b.y + 16, font=self.f_sm, color=AMBER, right=True)
+
     def _draw_nrst_page(self, sc: Scene, b: pygame.Rect, sub: str):
         gns = sc.gns
         hits = gns.nearest_for_page(sub) if hasattr(gns, "nearest_for_page") else []
@@ -1443,16 +1479,29 @@ class Renderer:
         sel = getattr(gns, "nrst_sel", 0)
         self._t(sub.upper(), b.x, b.y, font=self.f_sm, color=DIM)
         if on:
-            hint = "ENT = standby" if getattr(gns, "nrst_col", 0) == 1 else "ENT = info  D-> = DCT"
-            self._t(hint, b.right - 16, b.y, font=self.f_sm, color=DIM, right=True)
+            if sub in ("Nearest ARTCC", "Nearest FSS"):
+                hint = "sm=site lg=freq"
+            elif sub == "Nearest Airspace":
+                hint = ""
+            else:
+                hint = "ENT = standby" if getattr(gns, "nrst_col", 0) == 1 else "ENT = info  D-> = DCT"
+            if hint:
+                self._t(hint, b.right - 16, b.y, font=self.f_sm, color=DIM, right=True)
         mv = sc.magvar
         y = b.y + 20
         room = max(1, (b.height - 20) // 15)
         if not hits:
-            self._t("none within range", b.x, y, font=self.f_sm, color=DIM)
+            msg = "no user waypoints stored" if sub == "Nearest User" else "none within range"
+            self._t(msg, b.x, y, font=self.f_sm, color=DIM)
             return
         if sub == "Nearest APT":
             self._draw_nrst_airports(sc, b, hits, on, sel, y)
+            return
+        if sub in ("Nearest ARTCC", "Nearest FSS"):
+            self._draw_nrst_facility(sc, b, hits, on)
+            return
+        if sub == "Nearest Airspace":
+            self._draw_nrst_airspace(sc, b, hits, on, sel, y)
             return
         # scroll the window to keep the selection on-screen (same idea as the
         # Weather page's CRSR scroll) - the list always started at the top
@@ -1845,6 +1894,36 @@ class Renderer:
                     return
             placed.append(rr)
             self.surf.blit(img, rr)
+
+        # Class B/C/D airspace (F62) - sectional-chart-like outline colors; own-position bounding-box prefilter
+        # so a nationwide airspace list costs nothing once off-screen.
+        db = getattr(sc, "db", None)
+        if db is not None and getattr(db, "airspaces", None):
+            clat = max(math.cos(math.radians(own.pos.lat)), 0.1)
+            dlat = rng / 60.0 * 1.2
+            dlon = dlat / clat
+            _AIRSPACE_COLOR = {"B": (60, 110, 220), "C": (200, 60, 190), "D": (60, 130, 210)}
+            for aw in db.airspaces:
+                pts0 = aw.rings[0] if aw.rings else ()
+                if not pts0 or all(
+                    abs(p.lat - own.pos.lat) > dlat or abs(norm180(p.lon - own.pos.lon)) > dlon for p in pts0
+                ):
+                    continue
+                col = _AIRSPACE_COLOR.get(aw.cls, (90, 90, 90))
+                for ring in aw.rings:
+                    poly = [project(p) for p in ring]
+                    if aw.cls == "D":                     # sectional convention: Class D is a dashed blue line
+                        for i in range(len(poly)):
+                            a, b_ = poly[i], poly[(i + 1) % len(poly)]
+                            seg = math.hypot(b_[0] - a[0], b_[1] - a[1])
+                            n = max(1, int(seg // 6))
+                            for k in range(0, n, 2):
+                                t0, t1 = k / n, min(1.0, (k + 1) / n)
+                                pygame.draw.line(self.surf, col,
+                                                 (a[0] + (b_[0] - a[0]) * t0, a[1] + (b_[1] - a[1]) * t0),
+                                                 (a[0] + (b_[0] - a[0]) * t1, a[1] + (b_[1] - a[1]) * t1), 1)
+                    else:
+                        pygame.draw.lines(self.surf, col, True, poly, 1)
 
         # flight-plan legs (labels are forced - they always win)
         wps = getattr(sc.gns.fpl, "waypoints", [])

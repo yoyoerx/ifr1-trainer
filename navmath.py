@@ -42,6 +42,8 @@ __all__ = [
     "standard_rate_turn_radius_nm",
     "turn_anticipation_nm",
     "hold_entry",
+    "point_in_polygon",
+    "distance_to_polygon_nm",
 ]
 
 
@@ -398,3 +400,56 @@ def hold_entry(inbound_course_deg: float, heading_deg: float, turn: str = "R") -
         if to_course < 180.0:
             return "direct"
         return "teardrop" if to_recip < 70.0 else "parallel"
+
+
+# --------------------------------------------------------------------------- #
+# polygon geometry (airspace boundaries: simple lat/lon rings, GA-scale areas
+# small enough that an equirectangular projection local to the polygon is
+# plenty accurate - no need for great-circle-correct polygon math here)
+# --------------------------------------------------------------------------- #
+def point_in_polygon(pt: Point, rings: list[list[Point]]) -> bool:
+    """True if ``pt`` is inside the (possibly multi-ring) polygon, even-odd
+    rule - correct for a simple outer ring plus disjoint holes, which is all
+    FAA Class Airspace shapes are."""
+    inside = False
+    x, y = pt.lon, pt.lat
+    for ring in rings:
+        n = len(ring)
+        if n < 3:
+            continue
+        for i in range(n):
+            x1, y1 = ring[i].lon, ring[i].lat
+            x2, y2 = ring[(i + 1) % n].lon, ring[(i + 1) % n].lat
+            if (y1 > y) != (y2 > y):
+                x_at = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+                if x < x_at:
+                    inside = not inside
+    return inside
+
+
+def _dist_to_segment_nm(pt: Point, a: Point, b: Point) -> float:
+    clat = max(math.cos(math.radians(pt.lat)), 0.01)
+    px, py = pt.lon * clat, pt.lat
+    ax, ay = a.lon * clat, a.lat
+    bx, by = b.lon * clat, b.lat
+    dx, dy = bx - ax, by - ay
+    if dx == dy == 0.0:
+        t = 0.0
+    else:
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+    qx, qy = ax + t * dx, ay + t * dy
+    return math.hypot(px - qx, py - qy) * 60.0   # 1 deg lat = 60 nm
+
+
+def distance_to_polygon_nm(pt: Point, rings: list[list[Point]]) -> float:
+    """Distance from ``pt`` to the nearest edge of the polygon, ``0.0`` when
+    ``pt`` is inside it. A flat local-equirectangular approximation (see
+    ``_dist_to_segment_nm``) - fine at the size of a Class B/C/D boundary."""
+    if point_in_polygon(pt, rings):
+        return 0.0
+    best = math.inf
+    for ring in rings:
+        n = len(ring)
+        for i in range(n):
+            best = min(best, _dist_to_segment_nm(pt, ring[i], ring[(i + 1) % n]))
+    return best

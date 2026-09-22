@@ -1709,3 +1709,28 @@ def test_manual_ap_course_shows_the_nav1_pointer_on_a_gps_cdi_and_auto_slaves_it
 def test_ap_course_defaults_to_manual_and_is_a_cli_flag():
     assert main_mod.parse_args(["--headless", "--no-device"]).ap_course == "manual"
     assert main_mod.parse_args(["--headless", "--no-device", "--ap-course", "auto"]).ap_course == "auto"
+
+
+# --------------------------------------------------------------------------- #
+# Class B/C/D airspace overlay on the moving map (F62)                       #
+# --------------------------------------------------------------------------- #
+def test_map_draws_class_airspace_rings_near_ownship(db):
+    from navdata.model import Airspace
+
+    near = Airspace(ident="NEAR", name="", cls="D", floor_ft=0, ceiling_ft=2500,
+                    rings=((Point(39.9, -74.1), Point(39.9, -73.9), Point(40.1, -73.9),
+                            Point(40.1, -74.1)),))
+    far = Airspace(ident="FAR", name="", cls="B", floor_ft=0, ceiling_ft=10000,
+                   rings=((Point(10.0, 10.0), Point(10.0, 10.1), Point(10.1, 10.1), Point(10.1, 10.0)),))
+    db.add_airspace(near)
+    db.add_airspace(far)
+    surf = pygame.display.get_surface()
+    surf.fill((0, 0, 0))
+    Renderer(surf).draw(_scene(db))
+    arr = pygame.surfarray.array2d(surf)
+    assert (arr != arr[0, 0]).sum() > 5000   # still draws fine with airspace present
+
+
+def test_map_with_no_airspaces_does_not_crash(db):
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(_scene(db))          # db.airspaces == [] by default - must be a no-op, not an error

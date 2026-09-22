@@ -7,6 +7,15 @@ Products (see ARCHITECTURE.md sec. 5):
   years, so several candidates are tried.
 * **NASR 28 Day Subscription** -- a zip of CSVs. Its file name has drifted even
   more, so the per-cycle landing page is scraped for the ``.zip`` link.
+* **artcc** -- ``AFF.txt`` (ARTCC remote air/ground comm sites + frequencies),
+  parsed into ``artcc.json`` (see ``datasrc.aff``). Small (~170 KB), not fetched
+  by default - opt in with ``--kinds cifp,nasr,artcc``.
+* **airspace** -- the Class Airspace shapefile (Class B/C/D boundaries), parsed
+  and simplified into ``airspace.json`` (see ``datasrc.shp``). A large one-time
+  download (~150 MB zipped); never fetched by default - opt in explicitly with
+  ``--kinds cifp,nasr,artcc,airspace``.
+
+See FINDINGS.md F62 for what each of these does and does not cover.
 
 Nothing here runs in the trainer loop. Network access goes through
 ``_http_get`` / ``_http_get_text`` so tests can stub it.
@@ -60,7 +69,13 @@ NASR_KEEP = {
     "FRQ.csv",
     "FIX_BASE.csv",
     "AWY_BASE.csv",
+    "FSS_BASE.csv",
 }
+
+# both are date-stamped directly under the per-cycle folder - no landing-page scrape needed (verified against a
+# live cycle: https://www.faa.gov/.../NASR_Subscription/{eff}/ links both by this exact pattern)
+AFF_URL = "https://nfdc.faa.gov/webContent/28DaySub/{eff}/AFF.zip"
+CLASS_AIRSPACE_URL = "https://nfdc.faa.gov/webContent/28DaySub/{eff}/class_airspace_shape_files.zip"
 
 
 class DataUnavailable(RuntimeError):
@@ -239,6 +254,43 @@ def _download_zip(candidates: list[str], *, get=_http_get) -> tuple[str, bytes]:
     ) from last
 
 
+def _extract_artcc(blob: bytes, dest: Path) -> list[str]:
+    """AFF.zip -> ``artcc.json``: RCAG ground-station sites with their VHF COM
+    frequencies (see ``datasrc.aff``). UHF military frequencies are dropped -
+    the trainer's COM window only tunes 118.000-136.990."""
+    from .aff import parse_aff
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        text = zf.read("AFF.txt").decode("latin1")
+    sites = parse_aff(text)
+    out = [
+        {"artcc": s.artcc, "name": s.name, "lat": s.lat, "lon": s.lon,
+         "freqs": [[mhz, band] for mhz, band in s.freqs if 118.0 <= mhz <= 136.99]}
+        for s in sites
+    ]
+    out = [s for s in out if s["freqs"]]           # a site with only UHF/HF is of no use to this trainer
+    (dest / "artcc.json").write_text(json.dumps(out), encoding="utf-8")
+    return ["artcc.json"]
+
+
+def _extract_airspace(blob: bytes, dest: Path) -> list[str]:
+    """``class_airspace_shape_files.zip`` -> ``airspace.json``: Class B/C/D
+    polygons, simplified (see ``datasrc.shp``). Class E is dropped - it is
+    nearly ubiquitous (surface extensions at almost every instrument
+    airport) and would swamp both the Nearest Airspace list and the map."""
+    from .shp import extract_class_airspace
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        shp = zf.read("Shape_Files/Class_Airspace.shp")
+        dbf = zf.read("Shape_Files/Class_Airspace.dbf")
+    recs = extract_class_airspace(shp, dbf)
+    out = [
+        {"ident": r.ident, "name": r.name, "class": r.cls, "floor_ft": r.floor_ft,
+         "ceiling_ft": r.ceiling_ft, "rings": [[list(pt) for pt in ring] for ring in r.rings]}
+        for r in recs
+    ]
+    (dest / "airspace.json").write_text(json.dumps(out), encoding="utf-8")
+    return ["airspace.json"]
+
+
 def fetch(
     cycle: Cycle,
     *,
@@ -268,16 +320,22 @@ def fetch(
             continue
         if kind == "cifp":
             url, blob = _download_zip(cifp_url_candidates(cycle), get=get)
-            keep = None  # keep everything in the (small) CIFP zip
+            files = _safe_extract(zipfile.ZipFile(io.BytesIO(blob)), dest, None)
         elif kind == "nasr":
             url = resolve_nasr_url(cycle, get_text=get_text)
             _, blob = _download_zip([url], get=get)
-            keep = set(NASR_KEEP)
+            files = _safe_extract(zipfile.ZipFile(io.BytesIO(blob)), dest, set(NASR_KEEP))
+        elif kind == "artcc":
+            url = AFF_URL.format(eff=cycle.effective.isoformat())
+            _, blob = _download_zip([url], get=get)
+            files = _extract_artcc(blob, dest)
+        elif kind == "airspace":
+            url = CLASS_AIRSPACE_URL.format(eff=cycle.effective.isoformat())
+            _, blob = _download_zip([url], get=get)
+            files = _extract_airspace(blob, dest)
         else:
             raise ValueError(f"unknown product kind: {kind!r}")
 
-        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-            files = _safe_extract(zf, dest, keep)
         if not files:
             raise DataUnavailable(f"{kind}: zip from {url} held none of the expected files")
         manifest.products[kind] = ProductRecord(

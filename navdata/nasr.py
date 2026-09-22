@@ -139,3 +139,52 @@ def merge_runways(db: NavDatabase, data_dir: Path) -> int:
             apt.rwy_info = dict(info)
             updated += 1
     return updated
+
+
+def load_fss(data_dir: Path) -> list:
+    """Flight Service remote comm outlets (F62): FRQ.csv FACILITY_TYPE 'RCO' rows give position + frequency,
+    grouped by (controlling FSS, site name); FSS_BASE.csv gives the controlling FSS's on-air callsign. Raises
+    ``FileNotFoundError`` if either CSV is absent."""
+    from .model import Fss
+    from navmath import Point
+
+    voice_call: dict[str, str] = {}
+    for row in _rows(Path(data_dir) / "FSS_BASE.csv"):
+        fid = row.get("FSS_ID", "").strip()
+        if fid:
+            voice_call[fid] = row.get("VOICE_CALL", "").strip() or row.get("NAME", "").strip()
+
+    sites: dict[tuple[str, str], dict] = {}
+    for row in _rows(Path(data_dir) / "FRQ.csv"):
+        if row.get("FACILITY_TYPE") != "RCO":
+            continue
+        fid = row.get("ARTCC_OR_FSS_ID", "").strip()
+        name = (row.get("SERVICED_FAC_NAME") or row.get("FAC_NAME") or "").strip()
+        if not fid or not name:
+            continue
+        mhz = _vhf_voice(row.get("FREQ", ""))
+        if mhz is None:
+            continue
+        try:
+            lat = float(row.get("LAT_DECIMAL", "") or "nan")
+            lon = float(row.get("LONG_DECIMAL", "") or "nan")
+        except ValueError:
+            continue
+        if lat != lat or lon != lon:                    # NaN check without importing math for one spot
+            continue
+        key = (fid, name)
+        entry = sites.setdefault(key, {"pos": Point(lat, lon), "freqs": []})
+        if mhz not in entry["freqs"]:
+            entry["freqs"].append(mhz)
+
+    return [
+        Fss(fss_id=fid, voice_call=voice_call.get(fid, fid), ident=name, pos=v["pos"],
+            freqs=tuple(sorted(v["freqs"])))
+        for (fid, name), v in sites.items()
+    ]
+
+
+def merge_fss(db: NavDatabase, data_dir: Path) -> int:
+    sites = load_fss(data_dir)
+    db.fss = sites
+    return len(sites)

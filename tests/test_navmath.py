@@ -20,12 +20,14 @@ from navmath import (  # noqa: E402
     angle_diff,
     cross_track_nm,
     destination,
+    distance_to_polygon_nm,
     final_bearing,
     great_circle_nm,
     hold_entry,
     initial_bearing,
     intersect_radials,
     norm180,
+    point_in_polygon,
     norm360,
     radial_dme,
     reciprocal,
@@ -318,3 +320,36 @@ def test_arc_points_lie_on_the_circle():
     pts = arc_points(c, s, e, "R")
     assert pts[0] == s and pts[-1] == e and len(pts) > 20
     assert all(abs(great_circle_nm(c, p) - 15.0) < 0.05 for p in pts)
+
+
+# --------------------------------------------------------------------------- #
+# polygon geometry (airspace boundaries, F62)                                #
+# --------------------------------------------------------------------------- #
+def test_point_in_polygon_simple_square():
+    square = [Point(0.0, 0.0), Point(1.0, 0.0), Point(1.0, 1.0), Point(0.0, 1.0)]
+    assert point_in_polygon(Point(0.5, 0.5), [square])
+    assert not point_in_polygon(Point(2.0, 2.0), [square])
+    assert not point_in_polygon(Point(0.5, 1.5), [square])
+
+
+def test_point_in_polygon_with_a_hole():
+    outer = [Point(0.0, 0.0), Point(4.0, 0.0), Point(4.0, 4.0), Point(0.0, 4.0)]
+    hole = [Point(1.0, 1.0), Point(3.0, 1.0), Point(3.0, 3.0), Point(1.0, 3.0)]
+    assert point_in_polygon(Point(0.5, 0.5), [outer, hole])       # in the outer ring, outside the hole
+    assert not point_in_polygon(Point(2.0, 2.0), [outer, hole])   # inside the hole -> not "in" the shape
+
+
+def test_distance_to_polygon_zero_when_inside():
+    square = [Point(39.0, -77.0), Point(39.0, -76.0), Point(40.0, -76.0), Point(40.0, -77.0)]
+    assert distance_to_polygon_nm(Point(39.5, -76.5), [square]) == 0.0
+
+
+def test_distance_to_polygon_positive_outside_and_roughly_right():
+    # a 1x1 degree square near 39N; 0.5 deg east of its edge is ~26 nm (60nm/deg * cos(39))
+    square = [Point(39.0, -77.0), Point(39.0, -76.0), Point(40.0, -76.0), Point(40.0, -77.0)]
+    d = distance_to_polygon_nm(Point(39.5, -75.5), [square])
+    assert 20.0 < d < 30.0
+
+
+def test_distance_to_polygon_empty_rings_is_infinite_and_not_inside():
+    assert distance_to_polygon_nm(Point(0.0, 0.0), []) == float("inf")

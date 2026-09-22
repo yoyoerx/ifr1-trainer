@@ -1165,6 +1165,72 @@ approach**, tower / CTAF frequency and the **longest runway**, "detailed informa
 * The trainer screen has room for three airports at a time, not four (the list scrolls).
 * Not modelled: the AUX > Setup "Nearest Airport Criteria" (minimum runway length / surface filter, p.152).
 
+### F62 - Nearest ARTCC / FSS / Airspace / User pages, and Class B/C/D on the map
+
+The last four NRST pages (Pilot's Guide p.113, "eight pages ... under the NRST group") and airspace on the moving
+map. Page order now matches the guide exactly: Airport, Intersection, NDB, VOR, User Waypoint, ARTCC, FSS, Airspace
+(p.113) - the first four were reordered from the trainer's original APT/VOR/NDB/INT.
+
+**New public data, none of it in the CSV NASR product this trainer already used:**
+
+* **ARTCC "points of communication"** (p.119: "the five nearest ... points of communication", not one frequency per
+  ARTCC). The 28-Day NASR *CSV* subscription has no per-sector ARTCC frequency data at all - `FRQ.csv`'s own ARTCC
+  rows carry only the emergency/backup frequencies (121.5, 243.0). The real per-site data is in `AFF.txt`, a legacy
+  fixed-width text file at the root of the *full* 28-Day NASR zip (undocumented field widths, so `datasrc/aff.py`
+  parses it by anchor - a `RCAG`/`ARTCC` + date marker splits each line, then DMS lat/lon is regexed out of the
+  tail) - each RCAG (remote air/ground) ground station, its controlling ARTCC, and its frequencies (UHF military
+  frequencies are dropped; the trainer's COM window only tunes 118.000-136.990). Cached as `artcc.json`
+  (`db.centers`, `db.nearest_centers`).
+* **FSS "points of communication"** (p.119, same wording). `FSS_BASE.csv`'s own facility positions turned out to be
+  mostly decommissioned local stations (18 nationwide, nearly all Alaska) - in the contiguous US, Flight Service was
+  consolidated years ago to a handful of hubs (e.g. Leesburg) reached through many **RCO** (remote comm outlet)
+  ground sites, which is what a real Nearest FSS query needs. `navdata/nasr.py`'s `load_fss` now reads `FRQ.csv`
+  rows with `FACILITY_TYPE` "RCO" (position + frequency, grouped by controlling FSS + site name) and
+  `FSS_BASE.csv`'s `VOICE_CALL` for the on-air callsign ("Leesburg Radio"). `FSS_BASE.csv` is newly kept from NASR
+  (re-run `python -m datasrc.faa update --kinds nasr --force` on an existing cache).
+* **Class B/C/D airspace** (p.121, map legend p.11/36). Not in the CSV NASR product either (`CLS_ARSP.csv` is a
+  per-airport Y/N flag with no shape). The FAA separately publishes a **Class Airspace shapefile**
+  (`class_airspace_shape_files.zip`, ~150 MB) each cycle. `datasrc/shp.py` is a small stdlib-only .shp/.dbf reader
+  (no pyshp/shapely dependency) plus an iterative Douglas-Peucker simplifier: the raw boundaries run to ~3,200
+  points/ring on average (surveyed to a few metres) - at a trainer map's 5-40 nm range that's pointless precision,
+  so each ring is simplified to ~0.0008 deg (~90 m) tolerance, cutting the Class B/C/D total from ~4.15M points to
+  ~42,500 with no visible change at map scale. Class E is dropped (nearly ubiquitous - a surface extension at
+  almost every instrument airport - and would swamp both the list and the map). Cached as `airspace.json`
+  (`db.airspaces`, `db.nearest_airspaces` - by distance to the nearest **boundary**, `0.0` when inside, not
+  centroid distance).
+
+Both are large/one-time enough that they are **opt-in**, not part of the default `cifp,nasr` fetch:
+`python -m datasrc.faa update --kinds cifp,nasr,artcc,airspace`. Without them the pages are correctly empty (a
+`db.notes` line says so, same convention as a missing NASR comms cache) rather than the trainer pretending they
+don't exist.
+
+**Nearest ARTCC / Nearest FSS.** "The Nearest ARTCC and Nearest FSS Pages present detailed information for up to
+five nearby facilities - displaying only one facility at a time" (p.114) - the small knob steps the facility, the
+large knob its frequency list, ENT tunes COM standby (p.119) - the opposite knob assignment from every other NRST
+page, per the guide's own steps ("rotate the small right knob to select the desired center, then rotate the large
+right knob to highlight the desired frequency"). Direct-To is **not** offered on these two pages or Airspace - the
+guide's Direct-To list (p.115) is airport/VOR/NDB/intersection/user waypoint only.
+
+**Nearest User Waypoint.** Always empty - the trainer has no user-waypoint store (creation is a separate feature,
+deferred by design decision). This is correct behaviour for a unit that has never had one entered, not a stub.
+
+**Nearest Airspace - what's built and what's not.** Built: the list (name, class, floor/ceiling, distance), sorted
+by boundary distance; two simple proximity words, "Inside of airspace" and "Within 2nm of airspace" (p.121, exact
+wording), else a bare distance. Class B/C/D outlines on the moving map, sectional-ish colors (B blue, C magenta, D
+dashed blue), own-position bounding-box prefiltered so a nationwide list costs nothing off-screen (~10 ms/frame
+with the overlay on, well inside a 33 ms/30 Hz budget). **Not built** (p.121-123): the course-projected alerts
+("Airspace ahead - less than 10 minutes", "Airspace near and ahead") - these need a lookahead track/intercept
+prediction this trainer doesn't have; the MSG-annunciator alert workflow; the drill-down "Airspace Information
+Page" (controlling agency, "View Frequencies?" -> tune) - no controlling-agency frequency data exists in anything
+fetched here; the "Done?" field; the yellow/background alert coloring on the map. ENT and the large-knob
+column-toggle are inert on this page (verified not to crash or tune anything).
+
+**Trainer choices, undocumented in the guide:** the 30 s round-trip through `AFF.txt`'s anchor-based parsing
+instead of fixed columns (the FAA no longer publishes the column layout for this legacy file); showing "ZDC
+CENTER"/"<callsign> RADIO" as the facility name in place of the ARTCC's full name (not in this data, only the
+3-letter id); the 0.0008 deg simplification tolerance; Douglas-Peucker over a simpler decimation (kept concave
+detail - a Class B "wedding cake" shelf stays recognizable - unlike, say, every-Nth-point).
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

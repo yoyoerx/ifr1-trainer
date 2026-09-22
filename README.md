@@ -232,7 +232,7 @@ hardware at all). This is the full list, straight from `main._on_key`.
 |---|---|
 | `PgUp` / `PgDn` | Page within the current group (small knob) |
 | `Shift+PgUp` / `Shift+PgDn` | Page **group**: NAV → WPT → AUX → NRST (large knob) — the only keyboard route to WPT, AUX (incl. Weather), and NRST |
-| GNS pages, cursor on | On Nearest Airport / Nearest VOR, WPT > Airport Freq / VOR and NAV > NAV/COM, the large knob highlights a frequency and **ENT** puts it in the COM or VLOC **standby** field (then flip-flop) - FINDINGS F59 |
+| GNS pages, cursor on | On Nearest Airport / Nearest VOR, WPT > Airport Freq / VOR and NAV > NAV/COM, the large knob highlights a frequency and **ENT** puts it in the COM or VLOC **standby** field (then flip-flop) - FINDINGS F59. On Nearest ARTCC / Nearest FSS the knobs swap: **small** picks the facility, **large** the frequency - FINDINGS F62 |
 | `Tab` | CRSR (cursor on/off) |
 | `D` | Open the Direct-To entry page |
 | `C` | CLR — cancels an active Direct-To (resumes the nearest flight-plan leg), deletes the selected Flight Plan/Catalog row, or backs out to Default NAV |
@@ -331,8 +331,14 @@ X-Plane install:
 
 * **CIFP** (`FAACIFP18`, one ARINC 424-18 file) — instrument procedures, enroute
   airways, VHF/NDB navaids, waypoints, runways.
-* **28-Day NASR Subscription** (CSV bundle) — comm frequencies merged onto
-  airports, FAA↔ICAO crosswalk.
+* **28-Day NASR Subscription** (CSV bundle) — comm frequencies, runway surface/
+  lighting, and Flight Service remote comm outlets, merged onto airports.
+* **artcc** (`AFF.txt`, opt-in) — ARTCC remote ground-station sites and their
+  frequencies, for the Nearest Center page. Small; not fetched by default.
+* **airspace** (Class Airspace shapefile, opt-in) — Class B/C/D boundaries, for
+  the Nearest Airspace page and the map overlay. ~150 MB zipped; not fetched
+  by default — `python -m datasrc.faa update --kinds cifp,nasr,artcc,airspace`.
+  See FINDINGS F62.
 
 `python -m datasrc.faa update` fetches + caches them under `data/faa/<cycle>/`
 with a `manifest.json`; `navdata.load()` parses them and stamps the validity

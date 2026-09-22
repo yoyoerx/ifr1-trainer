@@ -12,9 +12,12 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
 
-from navmath import Point, great_circle_nm
+from navmath import Point, distance_to_polygon_nm, great_circle_nm
 
 __all__ = [
+    "CenterSite",
+    "Fss",
+    "Airspace",
     "Waypoint",
     "VhfNavaid",
     "NdbNavaid",
@@ -143,6 +146,47 @@ class Airport:
             if self.comms.get(u):
                 return self.comms[u][0]
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class CenterSite:
+    """One ARTCC remote air/ground (RCAG) communication site - what the GNS 530's Nearest Center page calls a
+    "point of communication" (Pilot's Guide p.119, F62): not the ARTCC's own facility, one of the ground stations
+    it transmits/receives through. No ARINC identifier exists for these; the site name doubles as one."""
+
+    artcc: str                 # "ZDC"
+    ident: str                 # RCAG site name, e.g. "BALTIMORE"
+    pos: Point
+    freqs: tuple[tuple[float, str], ...] = ()   # (MHz, "LOW" | "HIGH" | "LOW/HIGH")
+
+
+@dataclass(frozen=True, slots=True)
+class Fss:
+    """One Flight Service remote comm outlet (RCO) - the GNS 530's Nearest FSS Page's "point of communication"
+    (Pilot's Guide p.119), same idea as ``CenterSite`` for ARTCCs (F62). ``voice_call`` is what a pilot actually
+    calls on the air ("Leesburg Radio"), which the FAA's RCO-level record does not itself carry - it's the
+    controlling FSS's own callsign (FSS_BASE.csv)."""
+
+    fss_id: str                # controlling FSS, "DCA"
+    voice_call: str            # "LEESBURG"
+    ident: str                 # RCO site name, e.g. "BUCK'S ELBOW MOUNTAIN"
+    pos: Point
+    freqs: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Airspace:
+    """One Class B/C/D airspace area (Pilot's Guide p.121 "Nearest Airspace Page"; F62 on why not Class E/SUA)."""
+
+    ident: str
+    name: str
+    cls: str                   # "B" | "C" | "D"
+    floor_ft: int | None       # None = unknown; 0 = surface
+    ceiling_ft: int | None
+    rings: tuple[tuple[Point, ...], ...] = ()
+
+    def distance_nm(self, pos: Point) -> float:
+        return distance_to_polygon_nm(pos, [list(r) for r in self.rings])
 
 
 class LegType(str, Enum):
@@ -320,6 +364,9 @@ class NavDatabase:
     ndb: dict[str, list[NdbNavaid]] = field(default_factory=dict)
     airports: dict[str, Airport] = field(default_factory=dict)  # ICAO idents are unique
     airways: dict[str, Airway] = field(default_factory=dict)  # ident -> Airway
+    centers: list[CenterSite] = field(default_factory=list)   # ARTCC RCAG sites (F62)
+    fss: list[Fss] = field(default_factory=list)
+    airspaces: list[Airspace] = field(default_factory=list)   # Class B/C/D (F62)
     # GPS approach vertical data, keyed (airport, approach ident): the SBAS path point, and which
     # levels of service the procedure publishes ("LPV", "LNAV/VNAV", "LNAV", "LP")
     path_points: dict[tuple[str, str], PathPoint] = field(default_factory=dict)
@@ -357,6 +404,15 @@ class NavDatabase:
 
     def add_airway(self, awy: Airway) -> None:
         self.airways[awy.ident] = awy
+
+    def add_center(self, site: CenterSite) -> None:
+        self.centers.append(site)
+
+    def add_fss(self, fss: Fss) -> None:
+        self.fss.append(fss)
+
+    def add_airspace(self, aw: Airspace) -> None:
+        self.airspaces.append(aw)
 
     # -- counts -------------------------------------------------------
     def __len__(self) -> int:
@@ -458,6 +514,20 @@ class NavDatabase:
     def nearest_waypoints(self, ref: Point, n: int = 9, *, max_nm: float | None = None):
         pool = [wp for lst in self.waypoints.values() for wp in lst]
         return self._nearest(pool, ref, n, max_nm)
+
+    def nearest_centers(self, ref: Point, n: int = 5, *, max_nm: float | None = None):
+        return self._nearest(self.centers, ref, n, max_nm)
+
+    def nearest_fss(self, ref: Point, n: int = 5, *, max_nm: float | None = None):
+        return self._nearest(self.fss, ref, n, max_nm)
+
+    def nearest_airspaces(self, ref: Point, n: int = 4, *, max_nm: float | None = None):
+        """By distance to the nearest boundary (``0.0`` when inside), not centroid - matches what a pilot cares
+        about ("Nearest Airspace" alerts on proximity to the boundary, p.121)."""
+        scored = sorted(((aw.distance_nm(ref), i), aw) for i, aw in enumerate(self.airspaces))
+        if max_nm is not None:
+            scored = [t for t in scored if t[0][0] <= max_nm]
+        return [aw for _, aw in scored[:n]]
 
     def find(self, ident: str, *, near: Point | None = None, kind: str | None = None):
         """All navaids / waypoints / airports matching ``ident``

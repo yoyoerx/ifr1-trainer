@@ -129,3 +129,62 @@ def test_airport_comm_helper_prefers_first_listed():
     assert a.comm("TWR") == 120.0
     assert a.comm("GND") is None
     assert a.comm("GND", "TWR") == 120.0   # falls through to the next use
+
+
+# --------------------------------------------------------------------------- #
+# load_fss / merge_fss - Flight Service remote comm outlets (F62)            #
+# --------------------------------------------------------------------------- #
+FSS_BASE = """EFF_DATE,FSS_ID,NAME,VOICE_CALL
+2026/09/03,DCA,LEESBURG,LEESBURG
+"""
+
+FSS_FRQ = """EFF_DATE,ARTCC_OR_FSS_ID,FACILITY_TYPE,FAC_NAME,SERVICED_FAC_NAME,FREQ,LAT_DECIMAL,LONG_DECIMAL
+2026/09/03,DCA,RCO,MARTINSBURG,MARTINSBURG,122.2,39.4,-77.9
+2026/09/03,DCA,RCO,MARTINSBURG,MARTINSBURG,122.2,39.4,-77.9
+2026/09/03,,RCO,NO ID,NO ID,122.5,39.0,-77.0
+2026/09/03,ABQ,ARTCC,ALBUQUERQUE,ALBUQUERQUE,121.5,35.0,-106.0
+"""
+
+
+@pytest.fixture
+def fss_dir(tmp_path):
+    (tmp_path / "FSS_BASE.csv").write_text(FSS_BASE, encoding="utf-8")
+    (tmp_path / "FRQ.csv").write_text(FSS_FRQ, encoding="utf-8")
+    return tmp_path
+
+
+def test_load_fss_groups_rco_sites_by_controlling_fss_and_dedupes(fss_dir):
+    from navdata.nasr import load_fss
+
+    sites = load_fss(fss_dir)
+    assert len(sites) == 1                              # the no-FSS-id row is dropped, dupes collapsed
+    s = sites[0]
+    assert s.fss_id == "DCA" and s.voice_call == "LEESBURG" and s.ident == "MARTINSBURG"
+    assert s.freqs == (122.2,)
+    assert s.pos.lat == pytest.approx(39.4)
+
+
+def test_load_fss_falls_back_to_the_fss_id_with_no_fss_base_row(tmp_path):
+    from navdata.nasr import load_fss
+
+    (tmp_path / "FSS_BASE.csv").write_text(FSS_BASE, encoding="utf-8")
+    (tmp_path / "FRQ.csv").write_text(
+        "EFF_DATE,ARTCC_OR_FSS_ID,FACILITY_TYPE,FAC_NAME,SERVICED_FAC_NAME,FREQ,LAT_DECIMAL,LONG_DECIMAL\n"
+        "2026/09/03,ZZZ,RCO,SOMEWHERE,SOMEWHERE,122.6,10.0,20.0\n", encoding="utf-8")
+    sites = load_fss(tmp_path)
+    assert sites[0].fss_id == "ZZZ" and sites[0].voice_call == "ZZZ"
+
+
+def test_merge_fss_sets_db_fss(fss_dir):
+    from navdata.nasr import merge_fss
+
+    db = NavDatabase()
+    assert merge_fss(db, fss_dir) == 1
+    assert len(db.fss) == 1
+
+
+def test_merge_fss_missing_csv_raises(tmp_path):
+    from navdata.nasr import merge_fss
+
+    with pytest.raises(FileNotFoundError):
+        merge_fss(NavDatabase(), tmp_path)

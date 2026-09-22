@@ -55,7 +55,7 @@ __all__ = [
 
 CIFP_FILENAME = "FAACIFP18"
 # bump when the model / parser output shape changes so stale pickles are ignored
-_CACHE_SCHEMA = 5
+_CACHE_SCHEMA = 6
 
 
 def _cache_path(cdir: Path, cifp_path: Path, *, areas, comms: bool) -> Path:
@@ -64,6 +64,55 @@ def _cache_path(cdir: Path, cifp_path: Path, *, areas, comms: bool) -> Path:
         f"|comms={comms}|areas={sorted(areas) if areas else None}".encode()
     ).hexdigest()[:16]
     return cdir / f"navdb-{tag}.pkl"
+
+
+def _load_artcc(db: NavDatabase, cdir: Path) -> None:
+    """``artcc.json`` (F62): opt-in, big-ish, not fetched by default - see ``datasrc.faa`` kind "artcc"."""
+    import json
+
+    from navmath import Point
+
+    from .model import CenterSite
+
+    path = cdir / "artcc.json"
+    if not path.exists():
+        db.notes.append("ARTCC site data not cached - Nearest Center page will be empty "
+                        "(run: python -m datasrc.faa update --kinds artcc)")
+        return
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:                                   # pragma: no cover - corrupt cache
+        return
+    db.centers = [
+        CenterSite(artcc=r["artcc"], ident=r["name"], pos=Point(r["lat"], r["lon"]),
+                   freqs=tuple((f[0], f[1]) for f in r["freqs"]))
+        for r in rows
+    ]
+
+
+def _load_airspace(db: NavDatabase, cdir: Path) -> None:
+    """``airspace.json`` (F62): opt-in, a large one-time download - see ``datasrc.faa`` kind "airspace"."""
+    import json
+
+    from navmath import Point
+
+    from .model import Airspace
+
+    path = cdir / "airspace.json"
+    if not path.exists():
+        db.notes.append("Class airspace data not cached - Nearest Airspace page and map overlay will be empty "
+                        "(run: python -m datasrc.faa update --kinds airspace)")
+        return
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:                                   # pragma: no cover - corrupt cache
+        return
+    db.airspaces = [
+        Airspace(ident=r["ident"], name=r["name"], cls=r["class"], floor_ft=r["floor_ft"],
+                 ceiling_ft=r["ceiling_ft"],
+                 rings=tuple(tuple(Point(pt[1], pt[0]) for pt in ring) for ring in r["rings"]))
+        for r in rows
+    ]
 
 
 def load(
@@ -127,10 +176,9 @@ def load(
     db.expires = manifest.expires
 
     if comms:
-        from .nasr import merge_comms
+        from .nasr import merge_comms, merge_fss, merge_runways
 
         try:
-            from .nasr import merge_runways
             merge_runways(db, cdir)
             n = merge_comms(db, cdir)
             if n:
@@ -138,6 +186,16 @@ def load(
         except FileNotFoundError:
             db.notes.append("NASR CSVs not cached - no comm frequencies "
                             "(run: python -m datasrc.faa update --kinds nasr)")
+        try:
+            n = merge_fss(db, cdir)
+            if n:
+                db.notes.append(f"{n} FSS loaded")
+        except FileNotFoundError:
+            db.notes.append("NASR FSS_BASE.csv not cached - Nearest FSS page will be empty "
+                            "(run: python -m datasrc.faa update --kinds nasr --force)")
+
+    _load_artcc(db, cdir)
+    _load_airspace(db, cdir)
 
     if cpath is not None:
         try:

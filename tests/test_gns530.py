@@ -26,6 +26,7 @@ from navdata.model import (  # noqa: E402
 )
 from ifr1 import Event, Mode  # noqa: E402
 from gns530 import FlightPlan, Gns530, PlanWaypoint, PAGE_GROUPS  # noqa: E402
+from gpsnav import FreqEntry  # noqa: E402
 
 # four fixes: ALFA -> BRAVO -> CHAR northbound, then DELT to the east
 ALFA = Point(40.0, -74.0)
@@ -2143,6 +2144,29 @@ def test_navcom_page_tunes_flight_plan_airport_frequencies(fdb):
     assert g.navcom_sel == -1
 
 
+def test_nrst_artcc_fss_airspace_and_user_pages_render(adb):
+    import pygame
+    from render import Renderer, Scene
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame.init()
+    surf = pygame.display.set_mode((1280, 800))
+    g = Gns530(adb)
+    g.load_flight_plan(["ALFA", "KTST"])
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    import main as main_mod
+    import sim_model as simmod
+    sim = simmod.SimModel(pos=Point(40.25, -74.0), heading_deg=0.0, tas_kt=120.0)
+    nav, panel, st = main_mod.step_once(g, sim, 0.1, autopilot=False, magvar=0.0)
+    sc = Scene(own=st, nav=nav, panel=panel, gns=g, db=adb, magvar=0.0, map_range_nm=20.0,
+              autopilot=False, fps=30.0, nearby=[])
+    r = Renderer(surf)
+    for page in ("Nearest ARTCC", "Nearest FSS", "Nearest Airspace", "Nearest User"):
+        _on_page(g, "NRST", page)
+        _knob(g, pressed=("KNOB",))
+        r.draw(sc)
+        _knob(g, pressed=("KNOB",))
+
+
 def test_frequency_pages_render(fdb):
     import pygame
     from render import Renderer, Scene
@@ -2223,3 +2247,80 @@ def test_best_available_approach_follows_the_guide_ranking(db):
     assert best_approach(_Db(["N04"]), "X") == "NDB"
     assert best_approach(_Db([]), "X") == "VFR"
     assert Gns530(db).best_approach("NOWHERE") == "VFR"
+
+
+# --------------------------------------------------------------------------- #
+# NRST: Nearest ARTCC / FSS / Airspace / User (F62)                          #
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def adb(fdb):
+    from navdata.model import Airspace, CenterSite, Fss
+    fdb.add_center(CenterSite(artcc="ZDC", ident="BALTIMORE", pos=Point(40.27, -74.0),
+                              freqs=((134.5, "LOW"),)))    # UHF is filtered out at fetch time (F62), not modelled here
+    fdb.add_center(CenterSite(artcc="ZDC", ident="FAR SITE", pos=Point(41.0, -74.0), freqs=((132.0, "HIGH"),)))
+    fdb.add_fss(Fss(fss_id="DCA", voice_call="LEESBURG", ident="MARTINSBURG", pos=Point(40.26, -74.0),
+                    freqs=(122.2,)))
+    fdb.add_airspace(Airspace(ident="KTST", name="TEST FIELD CLASS D", cls="D", floor_ft=0, ceiling_ft=2500,
+                              rings=((Point(40.24, -74.02), Point(40.24, -73.98), Point(40.28, -73.98),
+                                      Point(40.28, -74.02)),)))
+    return fdb
+
+
+def test_nearest_user_waypoint_page_is_always_empty(adb):
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    assert g.nearest_for_page("Nearest User") == []
+
+
+def test_nearest_artcc_small_knob_picks_site_large_knob_picks_frequency(adb):
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    _on_page(g, "NRST", "Nearest ARTCC")
+    _knob(g, pressed=("KNOB",))
+    hits = g.nearest_for_page("Nearest ARTCC")
+    assert [h.ident for h in hits] == ["BALTIMORE", "FAR SITE"]
+    assert g.facility_frequencies(hits[0]) == [FreqEntry("BALTIMOR LOW", 134.5, "COM")]
+    _knob(g, inner=1)                                   # small knob: next facility
+    assert g.nrst_facility == 1
+    _knob(g, outer=1)                                   # large knob: (only) frequency on that facility
+    assert g.nrst_freq_sel == 0
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [("COM", 132.0, "FAR SITE HIGH")]
+
+
+def test_nearest_fss_frequency_tunes_com_standby(adb):
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    _on_page(g, "NRST", "Nearest FSS")
+    _knob(g, pressed=("KNOB",))
+    _knob(g, outer=1)                                   # highlight its only frequency
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [("COM", 122.2, "MARTINSBUR")]
+
+
+def test_nearest_artcc_fss_are_not_direct_to_targets(adb):
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    _on_page(g, "NRST", "Nearest ARTCC")
+    _knob(g, pressed=("KNOB",))
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))
+    assert g._dto_dialog is not None and g._dto_dialog.ident() == ""   # no facility seeded - not a waypoint
+
+
+def test_nearest_airspace_lists_by_boundary_distance(adb):
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)            # inside KTST's Class D
+    hits = g.nearest_for_page("Nearest Airspace")
+    assert hits and hits[0].ident == "KTST" and hits[0].distance_nm(Point(40.25, -74.0)) == 0.0
+
+
+def test_nearest_airspace_ent_and_column_toggle_are_inert(adb):
+    """No frequency data or drill-down page is modelled for airspace (F62) - ENT/large-knob-column must not crash
+    or tune anything."""
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    _on_page(g, "NRST", "Nearest Airspace")
+    _knob(g, pressed=("KNOB",))
+    _knob(g, outer=1)
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [] and g.dto is None

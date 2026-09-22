@@ -326,12 +326,14 @@ PAGE_GROUPS: dict[str, list[str]] = {
             "Flight Plan Catalog", "VNAV"],
     "WPT": ["Airport", "Airport Runway", "Airport Freq", "Intersection", "NDB", "VOR"],
     "AUX": ["Trip Planning", "Utility", "Setup", "Nav Data", "Weather", "Charts"],
-    "NRST": ["Nearest APT", "Nearest VOR", "Nearest NDB", "Nearest INT"],
+    "NRST": ["Nearest APT", "Nearest INT", "Nearest NDB", "Nearest VOR", "Nearest User",
+             "Nearest ARTCC", "Nearest FSS", "Nearest Airspace"],   # guide order, p.113
 }
 _GROUP_ORDER = list(PAGE_GROUPS)
 # each WPT sub-page resolves only its own category (Pilot's Guide sec.4.2:
 # the Airport/Intersection/NDB/VOR pages are separate lookups) - the value
 # matches navdata.NavDatabase.find/nearest_fix's ``kind`` argument.
+_NRST_OPENABLE = frozenset({"Nearest APT", "Nearest VOR", "Nearest NDB", "Nearest INT"})
 _WPT_PAGES = ("Airport", "Airport Runway", "Airport Freq", "Intersection", "NDB", "VOR")
 _WPT_PAGE_KIND = {"Airport": "airport", "Airport Runway": "airport", "Airport Freq": "airport", "Intersection": "waypoint",
                   "NDB": "ndb", "VOR": "vhf"}
@@ -721,6 +723,8 @@ class GpsNav:
         self.nrst_sel = 0                            # selection row on a NRST page
         self._wpt_return: tuple[int, int] | None = None   # (group, page) to CLR back to from a WPT page opened off a NRST row
         self.nrst_col = 0                            # 0 = identifier, 1 = frequency (Nearest APT / VOR)
+        self.nrst_facility = 0                       # ARTCC/FSS: which of the 5 nearest (small knob, p.119)
+        self.nrst_freq_sel = 0                        # ARTCC/FSS: highlighted frequency within that facility (large knob)
         self.wpt_field = 0                           # WPT pages: 0 = identifier, 1 = frequency list
         self.wpt_sel = 0                             # ... the highlighted frequency
         self.navcom_apt = 0                          # NAV/COM page: which flight-plan airport
@@ -1319,6 +1323,7 @@ class GpsNav:
         else:
             self._fpl_edit = None
         self.nrst_col = self.wpt_field = self.wpt_sel = 0        # the cursor always (re)starts on the identifier
+        self.nrst_facility = self.nrst_freq_sel = 0
         self.navcom_sel = -1
 
     def _page_edit(self, page: str, outer: int, inner: int) -> None:
@@ -1362,6 +1367,16 @@ class GpsNav:
                     self.navcom_sel = 0
             elif outer:
                 self.navcom_sel = -1 if self.navcom_sel + outer < 0 else min(len(rows) - 1, self.navcom_sel + outer)
+        elif page in ("Nearest ARTCC", "Nearest FSS"):
+            # "Rotate the small right knob to select the desired center [FSS], then rotate the large right knob to
+            # highlight the desired frequency" (p.119) - the opposite knob assignment from the other NRST pages.
+            hits = self.nearest_for_page(page)
+            if inner and hits:
+                self.nrst_facility = max(0, min(len(hits) - 1, self.nrst_facility + inner))
+                self.nrst_freq_sel = 0
+            if outer and hits and 0 <= self.nrst_facility < len(hits):
+                freqs = hits[self.nrst_facility].freqs
+                self.nrst_freq_sel = max(0, min(max(0, len(freqs) - 1), self.nrst_freq_sel + outer))
         elif page.startswith("Nearest"):
             if outer:
                 hits = self.nearest_for_page(page)
@@ -1464,6 +1479,12 @@ class GpsNav:
                 self._tune(rows[self.navcom_sel])
             elif rows and self.cursor.cursor_on:   # ENT on the airport field: on to its frequency list
                 self.navcom_sel = 0
+        elif page in ("Nearest ARTCC", "Nearest FSS"):
+            hits = self.nearest_for_page(page)
+            if hits and 0 <= self.nrst_facility < len(hits):
+                freqs = self.facility_frequencies(hits[self.nrst_facility])
+                if 0 <= self.nrst_freq_sel < len(freqs):
+                    self._tune(freqs[self.nrst_freq_sel])
         elif page.startswith("Nearest"):
             hits = self.nearest_for_page(page)
             if hits and 0 <= self.nrst_sel < len(hits):
@@ -1472,7 +1493,8 @@ class GpsNav:
                     if fr is not None:
                         self._tune(fr)
                     return
-                self._open_wpt_page(page, hits[self.nrst_sel])
+                if page in _NRST_OPENABLE:
+                    self._open_wpt_page(page, hits[self.nrst_sel])
         elif page == "Flight Plan Catalog":
             if self.catalog_load(self.cat_sel):
                 self.cursor.go_to_flight_plan()
@@ -1747,6 +1769,14 @@ class GpsNav:
             return list(self.db.nearest_navaids(self._pos, 9, max_nm=200.0, vhf=False))
         if page == "Nearest INT":
             return list(self.db.nearest_waypoints(self._pos, 9, max_nm=100.0))
+        if page == "Nearest User":
+            return []   # no user-waypoint store exists yet (F62) - correctly empty, not a stub
+        if page == "Nearest ARTCC":
+            return list(self.db.nearest_centers(self._pos, 5, max_nm=200.0))
+        if page == "Nearest FSS":
+            return list(self.db.nearest_fss(self._pos, 5, max_nm=200.0))
+        if page == "Nearest Airspace":
+            return list(self.db.nearest_airspaces(self._pos, 4, max_nm=100.0))
         return []
 
     # -- frequency auto-tuning (Pilot's Guide sec.1 "Auto-Tuning", p.23-25; sec.7 p.116-118) --
@@ -1758,6 +1788,12 @@ class GpsNav:
     def pop_tune_requests(self) -> list[tuple[str, float, str]]:
         out, self.tune_requests = self.tune_requests, []
         return out
+
+    def facility_frequencies(self, facility) -> list[FreqEntry]:
+        """The tunable frequency list for one Nearest ARTCC / FSS row."""
+        if hasattr(facility, "artcc"):                             # CenterSite
+            return [FreqEntry(f"{facility.ident[:8]} {band}", mhz, "COM") for mhz, band in facility.freqs]
+        return [FreqEntry(facility.ident[:10], mhz, "COM") for mhz in facility.freqs]   # Fss
 
     def _open_wpt_page(self, page: str, entry) -> None:
         """ENT on a highlighted Nearest identifier "display[s] the Airport Location Page" / the waypoint's database
@@ -1862,7 +1898,9 @@ class GpsNav:
 
     def _nearest_row(self):
         page = self.cursor.page_name
-        if not (self.cursor.cursor_on and page.startswith("Nearest")):
+        # Direct-To only ever targets a fix (p.115: airport, VOR, NDB, intersection or user waypoint) - not an
+        # ARTCC/FSS ground station or an airspace, which aren't waypoints.
+        if not (self.cursor.cursor_on and (page in _NRST_OPENABLE or page == "Nearest User")):
             return None
         hits = self.nearest_for_page(page)
         return hits[self.nrst_sel] if 0 <= self.nrst_sel < len(hits) else None
