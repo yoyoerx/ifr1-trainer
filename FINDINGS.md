@@ -1345,7 +1345,13 @@ Two genuinely new, previously-undocumented **data** gaps turned up on the Neares
   correctly so given the data - there's nothing to mistakenly mistag, but the feature itself can't be built without
   a data source that has it.
 
-Neither is fixable from data this trainer already fetches; noted here rather than acted on.
+The RX/TX flag genuinely isn't published anywhere in the NASR CSV product (checked `FRQ.csv` and `FSS_RMK.csv`
+directly - no structured field, only free-text remarks on a handful of Alaska stations). The associated-VOR piece
+*is* available, unlike RX/TX - `NAV_BASE.csv` (already fetched by default) carries an `FSS_ID` field directly on
+VOR records (confirmed against real data: Frederick VOR/FDK 116.85 carries `FSS_ID=DCA`, i.e. Leesburg) plus a
+`SIMUL_VOICE_FLAG`. Left unbuilt by decision, not by data availability - FSS use is a low priority for this
+trainer's purposes, and building only half of a two-part guide feature (VOR reference without the RX/TX flags
+sitting beside it) was judged not worth the added Nearest FSS page complexity. Both stay documented gaps.
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 
