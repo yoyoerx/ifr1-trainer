@@ -186,3 +186,16 @@ def test_airspace_time_to_entry_bounds():
     far = Point(30.0, -73.95)                             # much more than 10 min away even at high speed
     assert aw.time_to_entry_s(far, 0.0, 150.0) is None
     assert aw.time_to_entry_s(far, 0.0, 29.9) is None      # below the 30kt projection floor
+
+
+def test_controlling_agency_lookup_by_ident_and_class():
+    from navdata.model import Airspace
+
+    d = NavDatabase()
+    square = (Point(40.0, -74.0), Point(40.0, -73.9), Point(40.1, -73.9), Point(40.1, -74.0))
+    b = Airspace(ident="TST", name="", cls="B", floor_ft=0, ceiling_ft=10000, rings=(square,))
+    d.add_airspace(b)
+    d.airspace_controlling[("TST", "B")] = ("TEST TRACON", (119.85, 124.2))
+    assert d.controlling_agency(b) == ("TEST TRACON", (119.85, 124.2))
+    other = Airspace(ident="TST", name="", cls="D", floor_ft=0, ceiling_ft=2500, rings=(square,))
+    assert d.controlling_agency(other) is None          # same ident, different class: no entry cached

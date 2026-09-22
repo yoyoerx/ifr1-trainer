@@ -55,7 +55,7 @@ __all__ = [
 
 CIFP_FILENAME = "FAACIFP18"
 # bump when the model / parser output shape changes so stale pickles are ignored
-_CACHE_SCHEMA = 6
+_CACHE_SCHEMA = 7
 
 
 def _cache_path(cdir: Path, cifp_path: Path, *, areas, comms: bool) -> Path:
@@ -176,16 +176,24 @@ def load(
     db.expires = manifest.expires
 
     if comms:
-        from .nasr import merge_comms, merge_fss, merge_runways
+        from .nasr import merge_airspace_controlling, merge_comms, merge_fss, merge_runways
 
+        comms_ok = False
         try:
             merge_runways(db, cdir)
             n = merge_comms(db, cdir)
+            comms_ok = True
             if n:
                 db.notes.append(f"{n} airports got NASR comm frequencies")
         except FileNotFoundError:
             db.notes.append("NASR CSVs not cached - no comm frequencies "
                             "(run: python -m datasrc.faa update --kinds nasr)")
+        if comms_ok:
+            # needs db.airports already comms-merged (Class D's controlling agency is the airport's own tower)
+            try:
+                merge_airspace_controlling(db, cdir)
+            except FileNotFoundError:
+                pass   # same CSVs as merge_comms, which already succeeded - defensive only
         try:
             n = merge_fss(db, cdir)
             if n:

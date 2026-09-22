@@ -2314,9 +2314,9 @@ def test_nearest_airspace_lists_by_boundary_distance(adb):
     assert hits and hits[0].ident == "KTST" and hits[0].distance_nm(Point(40.25, -74.0)) == 0.0
 
 
-def test_nearest_airspace_ent_and_column_toggle_are_inert(adb):
-    """No frequency data or drill-down page is modelled for airspace (F62) - ENT/large-knob-column must not crash
-    or tune anything."""
+def test_nearest_airspace_ent_with_no_controlling_data_is_inert(adb):
+    """`adb`'s KTST airspace has no controlling-agency entry (F64 data is a NASR merge step, not part of this
+    hand-built fixture) - ENT/large-knob-column must not crash or tune anything in that case."""
     g = Gns530(adb)
     g.update(Point(40.25, -74.0), 0.0, 100.0)
     _on_page(g, "NRST", "Nearest Airspace")
@@ -2324,6 +2324,17 @@ def test_nearest_airspace_ent_and_column_toggle_are_inert(adb):
     _knob(g, outer=1)
     _knob(g, pressed=("ENT",))
     assert g.pop_tune_requests() == [] and g.dto is None
+
+
+def test_nearest_airspace_ent_tunes_the_controlling_agencys_primary_frequency(adb):
+    aw = adb.airspaces[0]
+    adb.airspace_controlling[(aw.ident, aw.cls)] = ("POTOMAC TRACON", (119.85, 124.2))
+    g = Gns530(adb)
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    _on_page(g, "NRST", "Nearest Airspace")
+    _knob(g, pressed=("KNOB",))
+    _knob(g, pressed=("ENT",))
+    assert g.pop_tune_requests() == [("COM", 119.85, "POTOMAC TR")]
 
 
 # --------------------------------------------------------------------------- #
@@ -2380,3 +2391,27 @@ def test_airspace_time_to_entry_and_category(adb):
     assert aw.time_to_entry_s(south, 0.0, 5.0) is None           # too slow to project meaningfully
     assert aw.alert_category(P(40.25, -74.0), 90.0, 100.0) == "inside"
     assert aw.time_to_entry_s(P(40.25, -74.0), 90.0, 100.0) == 0.0
+
+
+def test_nrst_airspace_page_renders_controlling_agency_line(adb):
+    import pygame
+    from render import Renderer, Scene
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame.init()
+    surf = pygame.display.set_mode((1280, 800))
+    aw = adb.airspaces[0]
+    adb.airspace_controlling[(aw.ident, aw.cls)] = ("POTOMAC TRACON", (119.85, 124.2))
+    g = Gns530(adb)
+    g.load_flight_plan(["ALFA", "KTST"])
+    g.update(Point(40.25, -74.0), 0.0, 100.0)
+    import main as main_mod
+    import sim_model as simmod
+    sim = simmod.SimModel(pos=Point(40.25, -74.0), heading_deg=0.0, tas_kt=120.0)
+    nav, panel, st = main_mod.step_once(g, sim, 0.1, autopilot=False, magvar=0.0)
+    sc = Scene(own=st, nav=nav, panel=panel, gns=g, db=adb, magvar=0.0, map_range_nm=20.0,
+              autopilot=False, fps=30.0, nearby=[])
+    _on_page(g, "NRST", "Nearest Airspace")
+    _knob(g, pressed=("KNOB",))
+    Renderer(surf).draw(sc)
+    arr = pygame.surfarray.array2d(surf)
+    assert (arr != arr[0, 0]).sum() > 5000

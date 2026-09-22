@@ -188,3 +188,66 @@ def test_merge_fss_missing_csv_raises(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         merge_fss(NavDatabase(), tmp_path)
+
+
+# --------------------------------------------------------------------------- #
+# merge_airspace_controlling - Class B/C TRACON + Class D tower (F64)        #
+# --------------------------------------------------------------------------- #
+CTRL_FRQ = """EFF_DATE,SERVICED_FACILITY,FAC_NAME,FREQ_USE,FREQ
+2026/09/03,TST,TEST TRACON,CLASS B,119.85
+2026/09/03,TST,TEST TRACON,CLASS B,124.2
+2026/09/03,TST,TEST TRACON,CLASS B,124.2
+2026/09/03,TST,TEST TRACON,APCH/P DEP/P,119.85
+2026/09/03,TST,TEST FIELD,LCL/P,118.3
+2026/09/03,0J0,SOME OTHER TRACON,CLASS C,127.4
+2026/09/03,ZZZ,NOWHERE,CLASS B,120.0
+"""
+
+
+@pytest.fixture
+def ctrl_dir(tmp_path):
+    (tmp_path / "APT_BASE.csv").write_text(APT_BASE, encoding="utf-8")
+    (tmp_path / "FRQ.csv").write_text(CTRL_FRQ, encoding="utf-8")
+    return tmp_path
+
+
+def test_merge_airspace_controlling_class_b_from_frq_tag(ctrl_dir):
+    from navdata.nasr import merge_airspace_controlling, merge_comms
+
+    db = NavDatabase()
+    db.add_airport(Airport("KTST", Point(40, -74)))
+    merge_comms(db, ctrl_dir)                          # Class D lookup needs comms merged first
+    n = merge_airspace_controlling(db, ctrl_dir)
+    assert n >= 2
+    assert db.airspace_controlling[("TST", "B")] == ("TEST TRACON", (119.85, 124.2))
+
+
+def test_merge_airspace_controlling_class_c_at_a_different_airport(ctrl_dir):
+    from navdata.nasr import merge_airspace_controlling, merge_comms
+
+    db = NavDatabase()
+    db.add_airport(Airport("KTST", Point(40, -74)))
+    merge_comms(db, ctrl_dir)
+    merge_airspace_controlling(db, ctrl_dir)
+    assert db.airspace_controlling[("0J0", "C")] == ("SOME OTHER TRACON", (127.4,))
+
+
+def test_merge_airspace_controlling_class_d_is_the_airports_own_tower(ctrl_dir):
+    from navdata.nasr import merge_airspace_controlling, merge_comms
+
+    db = NavDatabase()
+    db.add_airport(Airport("KTST", Point(40, -74)))
+    merge_comms(db, ctrl_dir)
+    merge_airspace_controlling(db, ctrl_dir)
+    name, freqs = db.airspace_controlling[("TST", "D")]
+    assert freqs == (118.3,) and "TOWER" in name
+
+
+def test_merge_airspace_controlling_skips_class_b_with_no_matching_airport(ctrl_dir):
+    from navdata.nasr import merge_airspace_controlling, merge_comms
+
+    db = NavDatabase()                                  # no airports added at all
+    merge_comms(db, ctrl_dir)
+    merge_airspace_controlling(db, ctrl_dir)
+    assert ("ZZZ", "B") in db.airspace_controlling      # still captured - keyed by FAA id, not dependent on Airport
+    assert ("TST", "D") not in db.airspace_controlling  # ... but no tower entry without a matching Airport

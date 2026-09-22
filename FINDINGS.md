@@ -1219,10 +1219,11 @@ by boundary distance; all four alert status words in the guide's exact wording (
 2nm of airspace", "Inside of airspace") and the matching MSG-queue alert messages - see F63. Class B/C/D outlines
 on the moving map, sectional-ish colors (B blue, C magenta, D dashed blue), own-position bounding-box prefiltered
 so a nationwide list costs nothing off-screen (~10 ms/frame with the overlay on, well inside a 33 ms/30 Hz
-budget). **Not built** (p.121-123): the drill-down "Airspace Information Page" (controlling agency, "View
-Frequencies?" -> tune) - no controlling-agency frequency data exists in anything fetched here; the "Done?" field;
-the yellow/background alert coloring on the map; the Setup page's alert-messages-enabled toggle (F63). ENT and the
-large-knob column-toggle are inert on this page (verified not to crash or tune anything).
+budget). Controlling agency + primary frequency, tunable by ENT: F64. **Not built** (p.121-123): the separate
+drill-down "Airspace Information Page" and its "View Frequencies?" sectorized list (F64 shows/tunes only the
+primary frequency directly on the list row); the "Done?" field; the yellow/background alert coloring on the map;
+the Setup page's alert-messages-enabled toggle (F63). The large-knob column-toggle other NRST pages use is inert
+here (verified not to crash or tune anything) - ENT alone does the tuning.
 
 **Trainer choices, undocumented in the guide:** the 30 s round-trip through `AFF.txt`'s anchor-based parsing
 instead of fixed columns (the FAA no longer publishes the column layout for this legacy file); showing "ZDC
@@ -1264,6 +1265,34 @@ own numbers, not tunable. Considering only the 6 *nearest-by-boundary-distance* 
 simplification - guide behaviour is presumably exhaustive within range; in the crowded DC Class B "wedding cake"
 this can occasionally let a closer-but-behind area crowd out a farther one that's actually dead ahead, which
 hasn't come up in testing but is a known edge case worth flagging.
+
+### F64 - Airspace controlling agency + frequency (Pilot's Guide p.123)
+
+The other gap F62 left open: "additional details are provided - including controlling agency, communication
+frequencies and floor/ceiling limits" for a Nearest Airspace Page entry. This data is already in `FRQ.csv` - the
+same NASR file the trainer already fetches by default (no new datasrc kind, unlike F62's `artcc`/`airspace`):
+
+* **Class B / Class C**: FRQ.csv rows literally tagged `FREQ_USE` = `"CLASS B"` / `"CLASS C"`, keyed by
+  `SERVICED_FACILITY` (the same FAA id `Airspace.ident` uses) - the TRACON's own name (`FAC_NAME`, e.g. "POTOMAC
+  TRACON") and its sectorized frequencies (e.g. Washington's Class B: 119.850 west/south, 124.200 east). These
+  rows are otherwise invisible to the trainer - they don't match any of `merge_comms`'s existing `_USE_MAP`
+  substrings ("APCH"/"DEP"/...), so a Class B/C airport's approach frequency was never being captured at all
+  before this.
+* **Class D**: FRQ.csv has no "CLASS D" tag anywhere (0 rows checked) - a Class D's controlling agency simply *is*
+  the airport's own tower, already merged onto `Airport.comms["TWR"]` by `merge_comms` (F1). `merge_airspace_controlling`
+  runs after `merge_comms` for exactly this reason and reads that back out, labelled "<airport name> TOWER".
+
+`NavDatabase.airspace_controlling: dict[(FAA id, class), (facility name, frequencies)]`, `controlling_agency(aw)`.
+`GpsNav.airspace_controlling`/`airspace_controlling_entry` (a `FreqEntry` for the *primary* - first/lowest -
+frequency only). The Nearest Airspace Page now shows a third line per entry (controlling agency name + primary
+frequency, "+N" if there are more) and **ENT tunes it to COM standby** - real Washington data: `DCA CLASS B
+Inside of airspace / 1500ft - 10000ft / POTOMAC TRACON 119.850 +1`.
+
+**Trainer simplification, not in the guide**: the guide's own workflow is a separate drill-down "Airspace
+Information Page" with a "View Frequencies?" field to scroll every sectorized frequency (p.123) - not built here
+(F62's gap still stands). Instead the primary frequency tunes directly from the list row, one knob-and-ENT away
+like every other NRST page, at the cost of the other sector frequencies (e.g. Potomac's 124.200 EAST) not being
+reachable from this page at all.
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

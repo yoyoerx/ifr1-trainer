@@ -1463,12 +1463,15 @@ class Renderer:
 
     def _draw_nrst_airspace(self, sc: Scene, b: pygame.Rect, hits, on: bool, sel: int, y: int):
         """Nearest Airspace: name/class, the alert status (F63: the same four conditions that post an MSG-queue
-        alert, in the page's own wording), then floor/ceiling (Pilot's Guide p.121-123). No frequency or
-        drill-down page - see FINDINGS F62/F63 for what isn't modelled here."""
+        alert, in the page's own wording), floor/ceiling, then the controlling agency and its primary frequency
+        (F64 - ENT on a highlighted row tunes it to COM standby). No drill-down page or sectorized frequency
+        list - see FINDINGS F62/F64 for what isn't modelled here."""
+        gns = sc.gns
         own = sc.own
         track = getattr(own, "track_deg", 0.0)
         gs = getattr(own, "gs_kt", 0.0) or 0.0
-        room = max(1, (b.bottom - y) // 30)
+        row_h = 45
+        room = max(1, (b.bottom - y) // row_h)
         top = max(0, min(max(0, len(hits) - room), sel - room // 2))
         for i, aw in enumerate(hits[top:top + room], start=top):
             d = aw.distance_nm(own.pos)
@@ -1481,7 +1484,13 @@ class Renderer:
             floor = "SFC" if (aw.floor_ft or 0) == 0 else f"{aw.floor_ft}ft"
             ceil = f"{aw.ceiling_ft}ft" if aw.ceiling_ft is not None else "---"
             self._t(f"   {floor} - {ceil}", b.x, y + 15, font=self.f_sm, color=DIM)
-            y += 30
+            agency = gns.airspace_controlling(aw) if hasattr(gns, "airspace_controlling") else None
+            if agency is not None and agency[1]:
+                name, freqs = agency
+                more = f" +{len(freqs) - 1}" if len(freqs) > 1 else ""
+                self._t(f"   {name[:14]:<14} {freqs[0]:7.3f}{more}", b.x, y + 30,
+                        font=self.f_sm, color=AMBER if row_on else CYAN)
+            y += row_h
         if len(hits) > room:
             more = ("^" if top > 0 else " ") + ("v" if top + room < len(hits) else " ")
             self._t(more, b.right - 2, b.y + 16, font=self.f_sm, color=AMBER, right=True)
@@ -1496,7 +1505,7 @@ class Renderer:
             if sub in ("Nearest ARTCC", "Nearest FSS"):
                 hint = "sm=site lg=freq"
             elif sub == "Nearest Airspace":
-                hint = ""
+                hint = "ENT = standby"
             else:
                 hint = "ENT = standby" if getattr(gns, "nrst_col", 0) == 1 else "ENT = info  D-> = DCT"
             if hint:

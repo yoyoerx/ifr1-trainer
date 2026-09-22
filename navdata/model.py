@@ -396,6 +396,8 @@ class NavDatabase:
     centers: list[CenterSite] = field(default_factory=list)   # ARTCC RCAG sites (F62)
     fss: list[Fss] = field(default_factory=list)
     airspaces: list[Airspace] = field(default_factory=list)   # Class B/C/D (F62)
+    # (FAA airport id, "B"|"C"|"D") -> (controlling facility name, its frequencies) - F64
+    airspace_controlling: dict[tuple[str, str], tuple[str, tuple[float, ...]]] = field(default_factory=dict)
     # GPS approach vertical data, keyed (airport, approach ident): the SBAS path point, and which
     # levels of service the procedure publishes ("LPV", "LNAV/VNAV", "LNAV", "LP")
     path_points: dict[tuple[str, str], PathPoint] = field(default_factory=dict)
@@ -557,6 +559,11 @@ class NavDatabase:
         if max_nm is not None:
             scored = [t for t in scored if t[0][0] <= max_nm]
         return [aw for _, aw in scored[:n]]
+
+    def controlling_agency(self, aw: Airspace) -> tuple[str, tuple[float, ...]] | None:
+        """(facility name, frequencies) for the agency that controls ``aw`` (F64) - a Class B/C TRACON's own
+        "CLASS B"/"CLASS C"-tagged FRQ.csv frequencies, or a Class D's own tower. ``None`` if not cached."""
+        return self.airspace_controlling.get((aw.ident, aw.cls))
 
     def find(self, ident: str, *, near: Point | None = None, kind: str | None = None):
         """All navaids / waypoints / airports matching ``ident``

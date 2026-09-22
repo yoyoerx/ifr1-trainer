@@ -16,7 +16,8 @@ from pathlib import Path
 
 from .model import NavDatabase
 
-__all__ = ["merge_runways", "merge_comms", "load_frequencies", "faa_icao_crosswalk"]
+__all__ = ["merge_runways", "merge_comms", "load_frequencies", "faa_icao_crosswalk",
+          "load_fss", "merge_fss", "merge_airspace_controlling"]
 
 # FREQ_USE (may be a space-joined combo) -> our category. Checked as substrings.
 _USE_MAP = [
@@ -188,3 +189,34 @@ def merge_fss(db: NavDatabase, data_dir: Path) -> int:
     sites = load_fss(data_dir)
     db.fss = sites
     return len(sites)
+
+
+def merge_airspace_controlling(db: NavDatabase, data_dir: Path) -> int:
+    """The controlling agency for each Class B/C/D airspace (F64): Class B/C from FRQ.csv rows tagged
+    FREQ_USE "CLASS B" / "CLASS C" (the TRACON's own sectorized frequencies, e.g. "POTOMAC TRACON"); Class D
+    from the airport's own tower frequency (no "CLASS D" tag exists in FRQ.csv - a Class D's controlling agency
+    *is* the airport's ATCT, already merged onto ``Airport.comms`` by ``merge_comms``, which must run first).
+    Keyed the same way ``Airspace.ident`` is - the FAA airport id, not ICAO."""
+    out: dict[tuple[str, str], dict] = {}
+    for row in _rows(Path(data_dir) / "FRQ.csv"):
+        use = row.get("FREQ_USE", "").strip()
+        if use not in ("CLASS B", "CLASS C"):
+            continue
+        faa_id = row.get("SERVICED_FACILITY", "").strip()
+        if not faa_id:
+            continue
+        mhz = _vhf_voice(row.get("FREQ", ""))
+        if mhz is None:
+            continue
+        entry = out.setdefault((faa_id, use[-1]), {"name": row.get("FAC_NAME", "").strip(), "freqs": []})
+        if mhz not in entry["freqs"]:
+            entry["freqs"].append(mhz)
+
+    for faa_id, icao in faa_icao_crosswalk(data_dir).items():
+        apt = db.airports.get(icao)
+        twr = apt.comms.get("TWR") if apt is not None else None
+        if twr:
+            out[(faa_id, "D")] = {"name": f"{apt.name or icao} TOWER", "freqs": list(twr)}
+
+    db.airspace_controlling = {k: (v["name"], tuple(sorted(v["freqs"]))) for k, v in out.items()}
+    return len(db.airspace_controlling)

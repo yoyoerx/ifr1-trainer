@@ -1497,6 +1497,12 @@ class GpsNav:
                 freqs = self.facility_frequencies(hits[self.nrst_facility])
                 if 0 <= self.nrst_freq_sel < len(freqs):
                     self._tune(freqs[self.nrst_freq_sel])
+        elif page == "Nearest Airspace":
+            hits = self.nearest_for_page(page)
+            if hits and 0 <= self.nrst_sel < len(hits):
+                fr = self.airspace_controlling_entry(hits[self.nrst_sel])
+                if fr is not None:
+                    self._tune(fr)
         elif page.startswith("Nearest"):
             hits = self.nearest_for_page(page)
             if hits and 0 <= self.nrst_sel < len(hits):
@@ -1806,6 +1812,21 @@ class GpsNav:
         if hasattr(facility, "artcc"):                             # CenterSite
             return [FreqEntry(f"{facility.ident[:8]} {band}", mhz, "COM") for mhz, band in facility.freqs]
         return [FreqEntry(facility.ident[:10], mhz, "COM") for mhz in facility.freqs]   # Fss
+
+    def airspace_controlling(self, aw) -> tuple[str, tuple[float, ...]] | None:
+        """(facility name, frequencies) controlling ``aw`` - F64. ``None`` if not cached (no `--kinds
+        airspace`/`nasr` data, or this particular airspace's controller isn't in the FAA data)."""
+        return self.db.controlling_agency(aw)
+
+    def airspace_controlling_entry(self, aw) -> FreqEntry | None:
+        """The one frequency ENT tunes from the Nearest Airspace page: the controlling agency's *primary*
+        frequency. A Class B TRACON often publishes several sectorized frequencies (F64) - only the first
+        (lowest) is offered here; the others aren't reachable from this page, a trainer simplification."""
+        agency = self.airspace_controlling(aw)
+        if agency is None or not agency[1]:
+            return None
+        name, freqs = agency
+        return FreqEntry(name[:10], freqs[0], "COM")
 
     def _open_wpt_page(self, page: str, entry) -> None:
         """ENT on a highlighted Nearest identifier "display[s] the Airport Location Page" / the waypoint's database
