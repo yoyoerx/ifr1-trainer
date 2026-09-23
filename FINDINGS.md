@@ -191,6 +191,12 @@ the hardware — cancels Direct-To / resumes the nearest leg, deletes the
 selected Flight Plan or Catalog row, or backs out to Default NAV depending on
 context, same as the IFR-1's CLR key.
 
+**Superseded by F73:** the "cancels Direct-To" part of this was wrong - the
+Pilot's Guide has no bare-CLR shortcut for that; it's MENU > "Cancel
+Direct-To NAV?" > ENT. `C` still sends a plain CLR event (correct for
+everything else this finding covers), it just no longer cancels an active
+Direct-To on its own.
+
 ### F15 — GNS 530 bezel legend missing VNAV; GNS 430 legend on the wrong cutouts
 Playtest round 3: the 530's bottom softkey row is 6 keys (CDI/OBS/MSG/FPL/
 VNAV/PROC); the legend loop only had 5 `fx` positions, so VNAV was never
@@ -1540,6 +1546,28 @@ the Kollsman setting in its window) - the barometric setting (`sc.baro_inhg`, ed
 genuinely reachable nowhere on that layout. Added as a fourth row in `_stack_hdg_actuals`, the existing
 actual-HDG/IAS/ALT readout beside the heading indicator - exactly where suggested, and the same "actual value,
 read-only" placement convention that panel already uses.
+
+### F73 - Cancelling Direct-To used a bare CLR press instead of the documented MENU path
+
+Playtest review: F14 (playtest round 3) added a bare `CLR` press as a shortcut to cancel an
+active Direct-To, justified as "matching the hardware." Pulling the actual Pilot's Guide text
+(sec.3 pp.47-48) shows that's wrong - the documented procedure is "1. Press the direct-to key
+to display the Select Direct-to Waypoint Page. 2. Press MENU to display the Direct-to Options
+menu. 3. With 'Cancel Direct-To NAV?' highlighted, press ENT." There is no bare-CLR shortcut on
+the real unit; `CLR` alone only closes whatever dialog/page happens to be open (or backs out to
+Default NAV), same as everywhere else.
+
+**Fix:** removed the `elif self.dto is not None: cancel_direct_to()` branch from `GpsNav._cancel`
+(the F14 approximation). Added the real path instead: `_dto_menu: FplMenu | None`, opened by
+`MNU` while the Select Direct-to Waypoint Page (`_dto_dialog`) is up, offering the single entry
+`"CANCEL DIRECT-TO NAV?"`; `ENT` applies it via `_apply_dto_menu` (calls `cancel_direct_to`,
+closes both the menu and the dialog); `CLR`/a second `MNU` backs out of the menu without
+cancelling anything. Rendered as `render._dto_menu_page`, styled like the existing
+`_fpl_menu_page` pop-up, drawn with priority over the dialog beneath it. Keyboard: `X` (the
+existing MNU key) now routes to this menu whenever the DTO dialog has the keyboard - previously
+swallowed silently, since `main._on_key`'s dedicated DTO-dialog keyboard block returned
+unconditionally for any unhandled key. `C` (CLR) no longer cancels an active Direct-To by
+itself.
 
 ## Deferred — milestone-scale, tracked in WORKING.md
 

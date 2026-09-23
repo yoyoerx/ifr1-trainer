@@ -953,6 +953,8 @@ class Renderer:
             self._remove_confirm_page(sc, scr)
         elif getattr(sc.gns, "_restart_confirm", None) is not None:
             self._restart_confirm_page(sc, scr)
+        elif getattr(sc.gns, "_dto_menu", None) is not None:
+            self._dto_menu_page(sc, scr)
         elif getattr(sc.gns, "_dto_dialog", None) is not None:
             self._direct_to_page(sc, scr)
         elif getattr(sc, "show_messages", False):
@@ -1377,6 +1379,22 @@ class Renderer:
     def _fpl_menu_page(self, sc: Scene, scr: pygame.Rect):
         """MNU pop-up on the Flight Plan / Flight Plan Catalog pages."""
         menu = sc.gns._fpl_menu
+        box = pygame.Rect(scr.x + 24, scr.y + 30, scr.w - 48,
+                          20 + 16 * len(menu.options))
+        pygame.draw.rect(self.surf, (10, 14, 18), box)
+        pygame.draw.rect(self.surf, AMBER, box, width=1)
+        y = box.y + 8
+        for i, opt in enumerate(menu.options):
+            col = AMBER if i == menu.sel else TEXT
+            mk = ">" if i == menu.sel else " "
+            self._t(f"{mk} {opt}", box.x + 8, y, font=self.f_sm, color=col)
+            y += 16
+
+    def _dto_menu_page(self, sc: Scene, scr: pygame.Rect):
+        """MNU pop-up on the Select Direct-to Waypoint Page ("Direct-to
+        Options" - Pilot's Guide sec.3 p.47-48): its one entry cancels the
+        active Direct-To and resumes the flight plan on the closest leg."""
+        menu = sc.gns._dto_menu
         box = pygame.Rect(scr.x + 24, scr.y + 30, scr.w - 48,
                           20 + 16 * len(menu.options))
         pygame.draw.rect(self.surf, (10, 14, 18), box)

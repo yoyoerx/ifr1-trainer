@@ -183,7 +183,7 @@ The IFR-1 was built around this interaction model, so FMS mode is close to 1:1:
 | outer knob             | large (outer) knob - page group / cursor field (stops at the ends, no wrap) |
 | inner knob             | small (inner) knob - page / character (no wrap) |
 | KNOB push              | CRSR                                    |
-| DCT                    | opens the **Select Direct-To** page: big knob = cursor, small knob = character, ENT resolves + activates, CLR cancels |
+| DCT                    | opens the **Select Direct-To** page: big knob = cursor, small knob = character, ENT resolves + activates, CLR closes the page. MENU opens **Direct-to Options** → "Cancel Direct-To NAV?" → ENT cancels an active Direct-To and resumes the flight plan on the closest leg. |
 | MNU                    | MENU                                    |
 | CLR                    | CLR (idle press = Default NAV)          |
 | ENT                    | ENT                                     |
@@ -235,9 +235,9 @@ hardware at all). This is the full list, straight from `main._on_key`.
 | GNS pages, cursor on | On Nearest Airport / Nearest VOR, WPT > Airport Freq / VOR and NAV > NAV/COM, the large knob highlights a frequency and **ENT** puts it in the COM or VLOC **standby** field (then flip-flop) - FINDINGS F59. On Nearest ARTCC / Nearest FSS the knobs swap: **small** picks the facility, **large** the frequency - FINDINGS F62 |
 | `Tab` | CRSR (cursor on/off) |
 | `D` | Open the Direct-To entry page |
-| `C` | CLR — cancels an active Direct-To (resumes the nearest flight-plan leg), deletes the selected Flight Plan/Catalog row, or backs out to Default NAV |
+| `C` | CLR — closes the Direct-To page or backs out of "Activate?", deletes the selected Flight Plan/Catalog row, or backs out to Default NAV (does **not** cancel an active Direct-To by itself — see `X` below) |
 | `R` | Open PROC (approach/SID/STAR selector) |
-| `X` | MNU — opens the Flight Plan / Flight Plan Catalog page menu (Invert/Copy/Sort/Delete); Up/Down/Enter/Esc drive it once open |
+| `X` | MNU — opens the Flight Plan / Flight Plan Catalog page menu (Invert/Copy/Sort/Delete), or, with the Direct-To page open, **Direct-to Options** → "Cancel Direct-To NAV?" (the documented way to cancel an active Direct-To and resume the flight plan on the closest leg); Up/Down/Enter/Esc drive it once open |
 | `[` / `]` | Map range out / in |
 | `Home` | Jump to Default NAV page |
 | `S` | Suspend (SUSP) |

@@ -769,17 +769,38 @@ def test_direct_to_needs_a_position(db):
     assert g.direct_to("BRAVO") is False               # no position yet
 
 
-def test_clr_cancels_an_active_direct_to_and_resumes_the_nearest_leg(g):
-    """Pilot's Guide sec.4: cancelling a Direct-To resumes the flight plan on
-    whichever leg is nearest the present position. Previously ``CLR`` (via
-    ``handle_event``, the actual IFR-1 input path) did nothing here - the
-    Direct-To just stayed active forever, with no way to back out of it."""
+def test_clr_alone_does_not_cancel_an_active_direct_to(g):
+    """F73: a bare CLR press (no dialog open) does NOT cancel an active
+    Direct-To - the Pilot's Guide's only documented way is DCT > MENU >
+    "Cancel Direct-To NAV?" > ENT (sec.3 p.47-48). An earlier CLR shortcut
+    here was a keyboard-convenience approximation, not the real unit's
+    behavior, and has been dropped."""
     g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
     g.update(ALFA, 0.0, 120.0)
     assert g.direct_to("DELT")
     g.update(Point(40.7, -74.0), 0.0, 120.0)           # off toward DELT, nowhere near it
     assert g.dto is not None
     g.handle_event(_fms(pressed=("CLR",)))
+    assert g.dto is not None                           # unaffected
+
+
+def test_menu_cancel_direct_to_nav_resumes_the_nearest_leg(g):
+    """Pilot's Guide sec.3 p.47-48: DCT > MENU > "Cancel Direct-To NAV?" >
+    ENT is the documented way to cancel an active Direct-To; if a flight
+    plan is still active it resumes navigating on whichever leg is nearest
+    the present position."""
+    g.load_flight_plan(["ALFA", "BRAVO", "CHAR", "DELT"])
+    g.update(ALFA, 0.0, 120.0)
+    assert g.direct_to("DELT")
+    g.update(Point(40.7, -74.0), 0.0, 120.0)           # off toward DELT, nowhere near it
+    assert g.dto is not None
+    g.handle_event(_fms(pressed=("DCT",)))             # re-open the Select Direct-to page
+    g.handle_event(_fms(pressed=("MNU",)))             # -> Direct-to Options
+    assert g._dto_menu is not None
+    assert g._dto_menu.current == "CANCEL DIRECT-TO NAV?"
+    g.handle_event(_fms(pressed=("ENT",)))
+    assert g._dto_menu is None
+    assert g._dto_dialog is None
     assert g.dto is None
     ns = g.update(Point(40.7, -74.0), 0.0, 120.0)
     assert ns.mode == "LEG"                            # back on the plan, not DTO

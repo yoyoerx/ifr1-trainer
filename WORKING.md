@@ -245,6 +245,15 @@ Pilot-selectable intercept angle (R9), control-wheel steering, yaw damper: not w
 
 ## Done log
 
+- **2026-09-23** — F73: cancelling an active Direct-To used a bare CLR
+  press (F14's approximation) instead of the Pilot's Guide's documented
+  DCT > MENU > "Cancel Direct-To NAV?" > ENT (sec.3 pp.47-48). Added
+  `GpsNav._dto_menu`/`_apply_dto_menu` (the Direct-to Options pop-up,
+  reusing the existing `FplMenu` machinery) and `render._dto_menu_page`;
+  dropped the CLR shortcut. Keyboard `X` (MNU) now reaches this menu while
+  the DTO dialog has the keyboard (`main._on_key` previously swallowed
+  every unhandled key there). 1047 tests pass.
+
 - **2026-09-20/21** — `faa2xp/` built and installed (see the side-project
   section above): FAA CIFP -> X-Plane 12 `Custom Data`, reversible. F48 fixed a
   trainer CIFP parser bug found on the way (letter-category localizers dropped).

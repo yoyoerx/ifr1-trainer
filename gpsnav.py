@@ -593,6 +593,7 @@ class ProcSelect:
 # --------------------------------------------------------------------------- #
 _FPL_MENU = ["INVERT FLT PLAN", "COPY FLT PLAN", "DELETE FLT PLAN"]
 _CATALOG_MENU = ["COPY FLT PLAN", "SORT CATALOG", "DELETE FLT PLAN"]
+_DTO_MENU = ["CANCEL DIRECT-TO NAV?"]   # Select Direct-to Waypoint Page > MNU (Pilot's Guide sec.3 p.47-48)
 
 
 @dataclass
@@ -759,6 +760,7 @@ class GpsNav:
         self._course_msg: str | None = None     # the live "Set course to ###" message, if posted
         self._steep_key: tuple | None = None    # the leg "Steep turn ahead" was last posted for
         self._dto_dialog: DirectToEntry | None = None
+        self._dto_menu: FplMenu | None = None    # DCT page > MNU: "Cancel Direct-To NAV?"
         self._proc_dialog: ProcSelect | None = None   # PROC key selector overlay
         self._proc_airport = ""                        # airport of the last-loaded procedure
         self.wpt_entry = DirectToEntry.seeded("")   # WPT-page identifier lookup
@@ -1359,6 +1361,18 @@ class GpsNav:
                     self._restart_confirm = None
             return
 
+        # the Direct-to page's own MNU pop-up ("Direct-to Options": Cancel
+        # Direct-To NAV?) is a modal overlay on top of the dialog itself
+        if self._dto_menu is not None:
+            for btn in pressed:
+                if btn == "ENT":
+                    self._apply_dto_menu()
+                elif btn in ("CLR", "MNU"):
+                    self._dto_menu = None
+            if self._dto_menu is not None:
+                self._dto_menu.move(outer)
+            return
+
         # the Direct-To dialog is a modal overlay - it owns every input
         if self._dto_dialog is not None:
             for btn in pressed:
@@ -1369,6 +1383,13 @@ class GpsNav:
                     # Guide sec.4 p.60): swap to the "Activate Leg?" confirmation
                     self._leg_confirm = {"row": self._dto_dialog.leg_row}
                     self._dto_dialog = None
+                elif btn == "MNU":
+                    # Pilot's Guide sec.3 p.47-48: MENU on the Select Direct-to
+                    # Waypoint Page opens the Direct-to Options menu, whose only
+                    # entry cancels an active Direct-To (resuming the flight
+                    # plan on the closest leg) - the documented way to back out,
+                    # not a bare CLR press.
+                    self._dto_menu = FplMenu(list(_DTO_MENU))
                 elif btn in ("CLR", "DCT"):
                     self._cancel()
             # once "Activate?" is highlighted the identifier is locked in -
@@ -1741,6 +1762,20 @@ class GpsNav:
                 self.catalog_sort()
             elif choice == "DELETE FLT PLAN":
                 self.catalog_delete(self.cat_sel)
+
+    def _apply_dto_menu(self) -> None:
+        """ENT on the Direct-to Options menu (its one entry, "Cancel
+        Direct-To NAV?" - Pilot's Guide sec.3 p.47-48): cancels the active
+        Direct-To, closes the Select Direct-to Waypoint Page, and - if a
+        flight plan is still loaded - resumes it on the closest leg."""
+        menu = self._dto_menu
+        if menu is None:
+            return
+        choice = menu.current
+        self._dto_menu = None
+        if choice == "CANCEL DIRECT-TO NAV?":
+            self.cancel_direct_to()
+            self._dto_dialog = None
 
     def invert_flight_plan(self) -> None:
         """MNU > Invert Flight Plan: reverse waypoint order and fly it
@@ -2192,10 +2227,12 @@ class GpsNav:
             self._dto_dialog.confirming = False    # back out of "Activate?" to editing
         elif self._dto_dialog is not None:
             self._dto_dialog = None
-        elif self.dto is not None:
-            # CLR with no dialog open and a Direct-To active cancels it and
-            # resumes the flight plan on the nearest leg (Pilot's Guide sec.4).
-            self.cancel_direct_to()
+        # Note: a bare CLR press does NOT cancel an active Direct-To (no
+        # dialog open) - the Pilot's Guide's only documented way to do that
+        # is DCT > MENU > "Cancel Direct-To NAV?" > ENT (sec.3 p.47-48),
+        # handled by `_apply_dto_menu`. An earlier CLR shortcut here (F14)
+        # was a keyboard-convenience approximation, not the real unit's
+        # behavior - dropped (F73).
         elif self.cursor.cursor_on:
             self.cursor.toggle_cursor()
         else:                                   # nothing to cancel -> Default NAV

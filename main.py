@@ -1306,6 +1306,21 @@ def _on_key(e, w: World, ui: dict) -> None:
             g.handle_event(Event(mode=Mode.FMS1, outer=1))
         return
 
+    # Direct-to Options pop-up ("Cancel Direct-To NAV?" - DCT > MENU) has the
+    # keyboard, same pattern as the Flight Plan menu above; it sits on top of
+    # the Direct-To dialog itself, so this check comes first.
+    ddlg = getattr(g, "_dto_menu", None)
+    if ddlg is not None:
+        if k in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
+        elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("ENT",)))
+        elif k in (pygame.K_UP, pygame.K_LEFT):
+            g.handle_event(Event(mode=Mode.FMS1, outer=-1))
+        elif k in (pygame.K_DOWN, pygame.K_RIGHT):
+            g.handle_event(Event(mode=Mode.FMS1, outer=1))
+        return
+
     if getattr(g, "_leg_confirm", None) is not None:     # "Activate Leg?" window
         if k in (pygame.K_ESCAPE, pygame.K_BACKSPACE, pygame.K_d):
             g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
@@ -1317,6 +1332,8 @@ def _on_key(e, w: World, ui: dict) -> None:
     if dlg is not None:                       # Direct-To page has the keyboard
         if k == pygame.K_d and dlg.leg_row is not None and not dlg.confirming:
             g.handle_event(Event(mode=Mode.FMS1, pressed=("DCT",)))   # 2nd DCT -> Activate Leg?
+        elif k == pygame.K_x:
+            g.handle_event(Event(mode=Mode.FMS1, pressed=("MNU",)))   # -> Direct-to Options
         elif k == pygame.K_ESCAPE or k == pygame.K_BACKSPACE:
             g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
         elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -1411,12 +1428,12 @@ def _on_key(e, w: World, ui: dict) -> None:
     elif k == pygame.K_HOME:
         g.cursor.go_to_default_nav()
     elif k == pygame.K_c:
-        # the CLR bezel key outside any modal page/dialog - cancels an
-        # active Direct-To (resumes the nearest flight-plan leg), deletes
-        # the selected Flight Plan/Catalog row, or backs out to Default
-        # NAV. `Home` above only jumps pages; this was the missing
-        # keyboard route to a bare CLR press (no-device users had no way
-        # to cancel a Direct-To without it).
+        # the CLR bezel key - closes whatever modal page/dialog is open
+        # (backing "Activate?" out to editing, or the DCT/MNU page out
+        # entirely), deletes the selected Flight Plan/Catalog row, or backs
+        # out to Default NAV. Does NOT cancel an active Direct-To by itself
+        # (F73) - `Home` above only jumps pages; this was the missing
+        # keyboard route to a bare CLR press otherwise.
         g.handle_event(Event(mode=Mode.FMS1, pressed=("CLR",)))
     elif k == pygame.K_F11:
         w.radios.com1.set_emergency()
@@ -1455,8 +1472,10 @@ def _on_key(e, w: World, ui: dict) -> None:
     elif k == pygame.K_r:
         g.begin_proc_select()                                     # PROC key
     elif k == pygame.K_x:
-        # MNU key - the Flight Plan / Flight Plan Catalog page menu (Invert/
-        # Copy/Sort/Delete). Previously had no keyboard route at all.
+        # MNU key - context-sensitive: the Flight Plan / Flight Plan Catalog
+        # page menu (Invert/Copy/Sort/Delete), or - with the Select Direct-to
+        # Waypoint Page open - the Direct-to Options menu ("Cancel Direct-To
+        # NAV?"). Previously had no keyboard route at all.
         g.handle_event(Event(mode=Mode.FMS1, pressed=("MNU",)))
     elif k == pygame.K_PAGEUP:
         # plain = small (inner) knob: page within the group, e.g. Default NAV -> Map;

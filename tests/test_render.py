@@ -829,10 +829,13 @@ def test_on_key_plain_pageup_pagedown_changes_page_within_group(db):
     assert w.gns.cursor.page == page0
 
 
-def test_on_key_c_cancels_direct_to(db):
-    """A bare CLR press (no dialog open) had no keyboard binding at all -
-    a no-device user had no way to cancel an active Direct-To. `C` now
-    routes a plain CLR event through, same as the IFR-1's CLR key."""
+def test_on_key_c_does_not_cancel_direct_to(db):
+    """F73: a bare CLR press does NOT cancel an active Direct-To - the
+    Pilot's Guide's only documented way is DCT > MENU > "Cancel Direct-To
+    NAV?" > ENT (sec.3 p.47-48). An earlier CLR shortcut here (F14) was a
+    keyboard-convenience approximation, not the real unit's behavior, and
+    has been dropped; `C` with no dialog open now just falls through to the
+    ordinary CLR fallback (Default NAV)."""
     w = _bare_world(db)
     ui = {"layout": "gps", "map_range": 20.0, "nav1_hsi": False, "running": True,
           "time_warp": 1}
@@ -841,8 +844,51 @@ def test_on_key_c_cancels_direct_to(db):
     assert w.gns.direct_to("CHAR")
     assert w.gns.dto is not None
     main_mod._on_key(_key(pygame.K_c), w, ui)
+    assert w.gns.dto is not None                     # unaffected by a bare CLR
+
+
+def test_menu_cancel_direct_to_nav_resumes_the_closest_leg(db):
+    """F73: DCT > MENU > "Cancel Direct-To NAV?" > ENT is the Pilot's Guide's
+    documented way to cancel an active Direct-To (sec.3 p.47-48) - it drops
+    the Direct-To, closes the Select Direct-to Waypoint Page, and resumes
+    the flight plan on the closest leg, same as the old CLR shortcut did."""
+    w = _bare_world(db)
+    ui = {"layout": "gps", "map_range": 20.0, "nav1_hsi": False, "running": True,
+          "time_warp": 1}
+    w.gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    w.gns.update(Point(40.0, -74.0), 0.0, 120.0)
+    assert w.gns.direct_to("CHAR")
+    assert w.gns.dto is not None
+
+    main_mod._on_key(_key(pygame.K_d), w, ui)          # DCT re-opens the page
+    assert w.gns._dto_dialog is not None
+    main_mod._on_key(_key(pygame.K_x), w, ui)          # MNU -> Direct-to Options
+    assert w.gns._dto_menu is not None
+    assert w.gns._dto_menu.current == "CANCEL DIRECT-TO NAV?"
+    main_mod._on_key(_key(pygame.K_RETURN), w, ui)     # ENT applies it
+    assert w.gns._dto_menu is None
+    assert w.gns._dto_dialog is None
     assert w.gns.dto is None
-    assert w.gns.fpl.to_wp.ident == "BRAVO"          # resumed the nearest leg
+    assert w.gns.fpl.to_wp.ident == "BRAVO"            # resumed the nearest leg
+
+
+def test_menu_on_dto_page_clr_backs_out_without_cancelling(db):
+    """CLR (or a second MNU) on the Direct-to Options menu backs out to the
+    Select Direct-to Waypoint Page without cancelling anything."""
+    w = _bare_world(db)
+    ui = {"layout": "gps", "map_range": 20.0, "nav1_hsi": False, "running": True,
+          "time_warp": 1}
+    w.gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    w.gns.update(Point(40.0, -74.0), 0.0, 120.0)
+    assert w.gns.direct_to("CHAR")
+
+    main_mod._on_key(_key(pygame.K_d), w, ui)
+    main_mod._on_key(_key(pygame.K_x), w, ui)
+    assert w.gns._dto_menu is not None
+    main_mod._on_key(_key(pygame.K_ESCAPE), w, ui)     # CLR (the DTO menu's own keyboard route)
+    assert w.gns._dto_menu is None
+    assert w.gns._dto_dialog is not None               # still on the DCT page
+    assert w.gns.dto is not None                       # not cancelled
 
 
 def test_on_key_x_opens_and_drives_the_fpl_menu(db):
