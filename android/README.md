@@ -82,3 +82,10 @@ isolation, on this machine, today — the Android build is what's still owed.
    operating every control. Write the result back into
    `docs/ANDROID_PORT_PLAN.md` §3.1 and update `input/UsbHidInput.kt`
    accordingly — this is the hard gate the whole v1 scope depends on.
+
+   The IFR-1 occupies the phone's only USB-C port, so run `adb` over Wi-Fi
+   for this: Developer options → Wireless debugging → "Pair device with
+   pairing code" (no prior USB connection needed), then
+   `adb pair <ip>:<port>` / `adb connect <ip>:<port>` from this machine.
+   Shell commands work the same over either transport. See
+   `ANDROID_PORT_PLAN.md` §3.1 step 0.

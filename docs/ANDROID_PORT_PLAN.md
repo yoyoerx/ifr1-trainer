@@ -107,6 +107,17 @@ just works in any Android app today. Whether the IFR-1's actual descriptor
 maps this way is unknown and must be tested on real hardware, not assumed.
 
 **Spike plan:**
+0. The IFR-1 occupies the Pixel 9's one USB-C port via the OTG adapter, so
+   run `adb` over Wi-Fi instead of USB — Android 11+'s Wireless debugging
+   (Developer options → Wireless debugging → "Pair device with pairing
+   code") pairs over the network with no prior USB connection needed at
+   all: `adb pair <ip>:<pairing-port>` (enter the 6-digit code), then
+   `adb connect <ip>:<debug-port>`. Shell commands (`dumpsys`, `getevent`)
+   work identically over this transport — nothing below changes because of
+   it. Don't rely on a USB-C hub to free up the port instead; whether a
+   given hub can pass both a HID device and USB debugging at once is
+   hardware-dependent and untested, and wireless adb avoids the question
+   entirely.
 1. Plug the IFR-1 into the Pixel 9 via a USB-C OTG adapter, run
    `adb shell dumpsys usb` and `adb shell getevent -lt` while operating every
    control, and see whether button/knob activity shows up as generic input
