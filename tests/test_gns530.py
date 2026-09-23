@@ -515,6 +515,20 @@ def test_proc_menu_activate_vtf_appears_after_an_approach_is_loaded(gp):
     assert gp.fpl.to_wp.ident == "BRAVO"             # steered straight to the FAF
 
 
+def test_proc_menu_lists_activate_approach_before_activate_vtf(gp):
+    """Pilot's Guide p.62: "Activate Approach?" is the option described and
+    keyed to first ("To activate an approach ... highlight 'Activate
+    Approach?'"), with "Activate Vectors-To-Final?" introduced afterward as
+    "another Procedures Page option" - it sits below Activate Approach? on
+    the actual menu, not above it. Getting this backwards means scrolling
+    down once from Select Approach? activates the wrong leg (the FAF
+    instead of the IAF, or vice versa)."""
+    gp.load_procedure("KEND", "I05", "ALFA")
+    gp.begin_proc_select()
+    opts = gp._proc_dialog.options
+    assert opts.index("ACTIVATE APPROACH") < opts.index("ACTIVATE VECTORS-TO-FINAL")
+
+
 def test_load_procedure_replaces_a_previously_loaded_approach_of_the_same_kind(gp):
     """Pilot's Guide p.56: "Select Approach? allows you to select a
     published instrument approach ... or replace the current approach with

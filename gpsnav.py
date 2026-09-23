@@ -2214,7 +2214,11 @@ class GpsNav:
         if self.db.sids(apt):
             menu.append(_PROC_DEPARTURE)
         if self._approach_active:
-            menu += [_PROC_ACT_VTF, _PROC_ACT_APPR]
+            # Pilot's Guide sec.5 p.62 lists "Activate Approach?" first,
+            # introducing "Activate Vectors-To-Final?" afterward as "another
+            # Procedures Page option" - scrolling down from Activate
+            # Approach?, not the reverse.
+            menu += [_PROC_ACT_APPR, _PROC_ACT_VTF]
         if not menu:
             self.messages.append(f"NO PROCEDURES: {apt}")
             return False

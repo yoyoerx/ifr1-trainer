@@ -1405,6 +1405,19 @@ active-leg waypoint can't be modified/deleted from *User Waypoint* memory doesn'
 has no user-waypoint-creation feature (documented gap, F62); it was not applied to FPL-page leg deletion since
 the guide's own FPL-specific deletion instructions (p.49, p.58-59) state no such restriction for that page.
 
+**5. (Follow-up, same review) The Procedures Page's `ACTIVATE VECTORS-TO-FINAL` menu item was listed *above*
+`ACTIVATE APPROACH`, the reverse of the guide.** Reported directly from playtesting: "when activating vectors to
+final from the proc menu, it activates a different leg than i was expecting." p.62's own numbered steps
+describe highlighting *"Activate Approach?"* first ("To activate an approach ... 2. Rotate the large right knob
+to highlight 'Activate Approach?' and press ENT"), then introduce VTF afterward as *"another Procedures Page
+option"* with its own separate numbered steps - i.e. Activate Approach? sits above Activate Vectors-To-Final? on
+the actual menu, not below it. `begin_proc_select()` appended them as `[_PROC_ACT_VTF, _PROC_ACT_APPR]`; scrolling
+down one row from "Select Approach?" landed on VTF (which jumps straight to the FAF) where the guide's own layout
+would land on Activate Approach? (which goes to the IAF) - exactly backwards from what a pilot following the
+guide's own muscle memory would expect. Fixed: swapped to `[_PROC_ACT_APPR, _PROC_ACT_VTF]`.
+
+## Deferred — milestone-scale, tracked in WORKING.md
+
 These are real gaps against the manual but each is a multi-day feature, not a
 defect in the implemented surface. They are consistent with the project's stated
 scope ("cheap 2D rendering", "correct avionics behaviour" first) and most are
