@@ -34,6 +34,7 @@ __all__ = [
     "destination",
     "cross_track_nm",
     "along_track_nm",
+    "point_on_runway",
     "radial_dme",
     "intersect_radials",
     "wind_triangle",
@@ -157,6 +158,22 @@ def along_track_nm(a: Point, b: Point, p: Point) -> float:
     if abs(angle_diff(initial_bearing(a, p), initial_bearing(a, b))) > 90.0:
         return -dat
     return dat
+
+
+def point_on_runway(threshold: Point, bearing_deg: float, length_ft: float, width_ft: float,
+                    pos: Point, *, margin_ft: float = 100.0) -> bool:
+    """Is ``pos`` within this runway's rectangle (``threshold`` -> the far end,
+    ``length_ft`` long, ``width_ft`` wide), plus a little forgiveness fore/aft
+    and to each side (a simulated touchdown is never pixel-perfect on the
+    centerline or exactly on the marked threshold)."""
+    far = destination(threshold, bearing_deg, length_ft / 6076.115)
+    leg_len_nm = length_ft / 6076.115
+    margin_nm = margin_ft / 6076.115
+    along = along_track_nm(threshold, far, pos)
+    if not (-margin_nm <= along <= leg_len_nm + margin_nm):
+        return False
+    xtk = cross_track_nm(threshold, far, pos)
+    return abs(xtk) <= width_ft / 2.0 / 6076.115 + margin_nm
 
 
 # --------------------------------------------------------------------------- #

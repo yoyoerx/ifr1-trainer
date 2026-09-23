@@ -214,6 +214,7 @@ class Scene:
     ias_managed: bool = False        # True once the pilot has trimmed it
     t: float = 0.0                   # elapsed session seconds - drives the VLOC ident blink
     time_warp: int = 1               # simulation speed multiplier (keys 1/2/3/4 -> 1/5/10/20x)
+    ground_status: str = ""          # "" | "LANDED" | "CRASHED" - World._check_ground_contact
 
     # -- steam-panel extras (layout="steam") --
     layout: str = "gps"               # "gps" | "steam" | "dual"
@@ -287,6 +288,22 @@ class Renderer:
             self._gns_unit(sc)
             self._map(sc)
             self._hsi(sc)
+        if sc.ground_status:
+            self._ground_status_banner(sc)
+
+    def _ground_status_banner(self, sc: Scene) -> None:
+        """LANDED / CRASHED, over everything else - the sim is frozen the
+        instant altitude reaches the ground (World._check_ground_contact)."""
+        landed = sc.ground_status == "LANDED"
+        col = GPS_GREEN if landed else RED
+        w, h = self.surf.get_width(), self.surf.get_height()
+        box = pygame.Rect(0, 0, w, h)
+        shade = pygame.Surface((w, h), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 140))
+        self.surf.blit(shade, (0, 0))
+        pygame.draw.rect(self.surf, col, box, width=3)
+        self._t(sc.ground_status, w // 2, h // 2 - 20, font=self.f_lg, color=col, center=True)
+        self._t("simulation paused", w // 2, h // 2 + 12, font=self.f_sm, color=DIM, center=True)
 
     # -- dual FMS layout (two stacked GNS units) ------------------------
     def _dual_layout(self, sc: Scene) -> None:
@@ -634,7 +651,7 @@ class Renderer:
             self._stack_hit[name] = rct
 
     def _stack_hdg_actuals(self, sc: Scene, rect: pygame.Rect) -> None:
-        """Actual HDG/IAS/ALT, read-only, next to the heading indicator's
+        """Actual HDG/IAS/ALT/BARO, read-only, next to the heading indicator's
         dial - the same placement NAV1/NAV2 use for their own OBS readout
         (playtest: "actual IAS, HDG, ALT should be displayed next to the
         heading indicator, in placement similar to the OBS displays next to
@@ -646,18 +663,26 @@ class Renderer:
         box's top edge, which would land level with the panel title).
         Values come from `sc.sixpack`, the same actual-value snapshot
         `draw_six_pack` itself reads, so this always agrees with the six-pack
-        on any layout that shows both."""
+        on any layout that shows both. BARO (the altimeter Kollsman setting)
+        has no dedicated altimeter dial of its own on "stack" - unlike
+        "steam", which shows it in the six-pack's altimeter window - so it
+        was missing from the layout entirely (playtest); it reads from
+        `sc.baro_inhg`, the same value COM2's shift knob edits."""
         sp = sc.sixpack
         specs = [
             ("HDG", f"{getattr(sp, 'heading_deg', 0):03.0f}" if sp else "---"),
             ("IAS", f"{getattr(sp, 'airspeed_kt', 0):.0f}" if sp else "---"),
             ("ALT", f"{getattr(sp, 'altitude_ft', 0):.0f}" if sp else "---"),
+            ("BARO", f"{getattr(sc, 'baro_inhg', 29.92):.2f}"),
         ]
-        row_h = max(20, rect.h // 3)
+        row_h = max(18, rect.h // len(specs))
+        # a fixed 30px label column fit "HDG"/"IAS"/"ALT" (3 chars); "BARO"
+        # (4) needs its value column pushed out too, or the two collide
+        label_w = max(self.f_sm.size(label)[0] for label, _ in specs) + 6
         y = rect.y
         for label, val in specs:
             self._t(label, rect.x, y, font=self.f_sm, color=DIM)
-            self.lcd(val, rect.x + 30, y - 2, color=TEXT)
+            self.lcd(val, rect.x + label_w, y - 2, color=TEXT)
             y += row_h
 
     def _stack_setpoint_bugs(self, sc: Scene, rect: pygame.Rect) -> None:

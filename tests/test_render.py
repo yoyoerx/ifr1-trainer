@@ -17,7 +17,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import pygame  # noqa: E402
 
 from navmath import Point, destination, great_circle_nm, initial_bearing  # noqa: E402
-from navdata.model import Airport, NavDatabase, VhfNavaid, Waypoint  # noqa: E402
+from navdata.model import Airport, NavDatabase, Runway, VhfNavaid, Waypoint  # noqa: E402
 import gns530 as gns530_mod  # noqa: E402
 import gns430 as gns430_mod  # noqa: E402
 import instruments as instr  # noqa: E402
@@ -316,6 +316,18 @@ def test_cdi_strip_service_label_does_not_overlap_the_source_label(db, monkeypat
         src_rect = pygame.Rect(sx, sy, r.f_sm.size("GPS")[0], sfont.get_height())
         svc_rect = pygame.Rect(vx, vy, r.f_sm.size(svc)[0], vfont.get_height())
         assert not src_rect.colliderect(svc_rect), f"service={svc!r} overlaps the source label"
+
+
+def test_draw_ground_status_banner(db):
+    import dataclasses
+    sc = _scene(db)
+    surf = pygame.display.get_surface()
+    for status in ("LANDED", "CRASHED"):
+        sc2 = dataclasses.replace(sc, ground_status=status)
+        Renderer(surf).draw(sc2)
+        assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
+    sc3 = dataclasses.replace(sc, ground_status="")   # no banner, must not raise
+    Renderer(surf).draw(sc3)
 
 
 def test_draw_flight_plan_page(db):
@@ -707,6 +719,7 @@ def test_steam_layout_draws_the_ias_setpoint_bug(db):
 # --------------------------------------------------------------------------- #
 def _bare_world(db, *, gns2=None):
     w = main_mod.World.__new__(main_mod.World)
+    w.db = db
     w.ap = Autopilot()
     w.radios = RadioStack()
     w.gns = gns530_mod.Gns530(db)
@@ -724,7 +737,69 @@ def _bare_world(db, *, gns2=None):
                             altitude_ft=6000.0, tas_kt=130.0)
     w.ias_target = 120.0
     w._ias_managed = False
+    w.paused = False
+    w.ground_status = ""
+    w.feed = None
+    w.feed_live = False
+    w.magvar = 0.0
+    w.t = 0.0
+    import scoring
+    w.score = scoring.ScoreTracker()
     return w
+
+
+def _ground_test_world(db, *, pos, altitude_ft):
+    thr = Point(40.0, -76.0)
+    apt = Airport("KTST", thr, elev_ft=500)
+    apt.runways["RW09"] = Runway("RW09", thr, 90.0, length_ft=6000.0, width_ft=150.0)
+    db.add_airport(apt)
+    w = _bare_world(db)
+    w.sim = simmod.SimModel(pos=pos, heading_deg=90.0, altitude_ft=altitude_ft, tas_kt=100.0)
+    return w, apt
+
+
+def test_ground_contact_landed_on_the_runway(db):
+    thr = Point(40.0, -76.0)
+    mid_runway = destination(thr, 90.0, 3000.0 / 6076.115)
+    w, apt = _ground_test_world(db, pos=mid_runway, altitude_ft=490.0)   # at/below field elev
+    w._check_ground_contact()
+    assert w.paused and w.ground_status == "LANDED"
+    assert w.sim.altitude == pytest.approx(500.0)   # clamped to the field, not left below it
+
+
+def test_ground_contact_crashed_off_the_runway(db):
+    thr = Point(40.0, -76.0)
+    off_runway = destination(thr, 0.0, 1.0)   # 1 nm north of the field, same low altitude
+    w, apt = _ground_test_world(db, pos=off_runway, altitude_ft=495.0)
+    w._check_ground_contact()
+    assert w.paused and w.ground_status == "CRASHED"
+
+
+def test_ground_contact_no_effect_while_still_above_field_elevation(db):
+    thr = Point(40.0, -76.0)
+    mid_runway = destination(thr, 90.0, 3000.0 / 6076.115)
+    w, apt = _ground_test_world(db, pos=mid_runway, altitude_ft=2000.0)
+    w._check_ground_contact()
+    assert not w.paused and w.ground_status == ""
+
+
+def test_ground_contact_no_effect_far_from_any_airport(db):
+    w, apt = _ground_test_world(db, pos=Point(41.0, -76.0), altitude_ft=100.0)  # ~60nm away, well below any real field
+    w._check_ground_contact()
+    assert not w.paused and w.ground_status == ""
+
+
+def test_tick_freezes_position_once_paused(db):
+    """The sim must actually stop advancing once ground contact is
+    declared - not just report LANDED/CRASHED while still moving."""
+    w = _bare_world(db)
+    w.gns.load_flight_plan(["OMN"])
+    w.paused = True
+    w.ground_status = "LANDED"
+    before = w.sim.state.pos
+    fr = w.tick(1.0)
+    assert w.sim.state.pos == before          # never advanced
+    assert fr.own.pos == before
 
 
 def _key(key, *, shift=False):
@@ -1410,6 +1485,37 @@ def test_stack_layout_draws_all_columns_single_unit(db):
     # tab bar + AP bug boxes registered their click rects
     assert {"tab:WX", "tab:MAP", "tab:PLATE", "tab:SETTINGS"} <= r._stack_hit.keys()
     assert "bug:hdg:+" in r._stack_hit and "bug:alt:-" in r._stack_hit
+
+
+def test_stack_hdg_actuals_shows_baro(db, monkeypatch):
+    """Playtest: "Baro read out does not display in stacked" - it was
+    missing from the layout entirely (no altimeter dial on "stack" the way
+    "steam" has one). Added next to the heading indicator, alongside the
+    existing actual HDG/IAS/ALT readout."""
+    import dataclasses
+    from render import STACK_W, STACK_H
+    surf = pygame.Surface((STACK_W, STACK_H))
+    w = _bare_world(db)
+    w.baro_inhg = 30.11
+    sc = _stack_scene(w, db)
+    sc = dataclasses.replace(sc, baro_inhg=w.baro_inhg)
+    r = Renderer(surf)
+    calls = []
+    orig_t, orig_lcd = Renderer._t, Renderer.lcd
+
+    def recording_t(self, s, x, y, *args, **kwargs):
+        calls.append(s)
+        return orig_t(self, s, x, y, *args, **kwargs)
+
+    def recording_lcd(self, value, x, y, *args, **kwargs):
+        calls.append(value)
+        return orig_lcd(self, value, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Renderer, "_t", recording_t)
+    monkeypatch.setattr(Renderer, "lcd", recording_lcd)
+    r.draw(sc)
+    assert "BARO" in calls
+    assert f"{w.baro_inhg:.2f}" in calls
 
 
 def test_stack_middle_column_is_fixed_width_not_window_width(db):

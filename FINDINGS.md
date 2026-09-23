@@ -1508,6 +1508,39 @@ handling. Verified with a render test that captures the actual `_t()` draw calls
 formula under test) and checks for pixel-rect collision across every string `level_of_service()` can produce;
 confirmed it fails against the unpatched code and passes with the fix.
 
+### F71 - Ground contact: altitude descending through field elevation now pauses the sim (LANDED / CRASHED)
+
+Requested directly ("during test flights, altitude would go below ground level, ie on lnav or glide slope. If
+ground level is reached, the simulation should pause... landed [if on a runway], otherwise crashed"). Not a
+manual-fidelity item - the trainer's own scripted flight model had no ground at all; a bad LNAV/glidepath
+intercept (or just flying an approach past minimums without missing) would silently fly the aircraft through the
+runway and out the other side, altitude going negative with nothing to stop it.
+
+The trainer has no general terrain database (CIFP/NASR don't carry one - ARCHITECTURE.md sec.5), so "ground
+level" is only checked near a known airport, using its published field elevation as real ground truth; well away
+from any airport there's nothing to check against (`main._GROUND_CHECK_NM`, 8 nm). `World._check_ground_contact`
+runs after every physics step: once altitude reaches the nearest airport's elevation, it clamps displayed
+altitude to the field (rather than showing it below-ground), checks every one of that airport's runways for
+containment (`navmath.point_on_runway` - a rectangle from each `Runway`'s own threshold/bearing/length/width,
+with a little forgiveness fore/aft and to each side for a touchdown that isn't pixel-perfect on the centerline),
+sets `LANDED`/`CRASHED` accordingly, and sets `paused = True`. `World.tick()` skips `sim.step()` entirely while
+paused, so nothing moves again until the process is restarted - render.py draws a full-screen LANDED/CRASHED
+banner over whatever layout is active. Scoped to the built-in flight model only; an X-Plane feed already has its
+own terrain and ground state.
+
+Verified with default startup (5000 ft, `config.py`) never spuriously triggering at t=0 even starting right next
+to a departure airport, plus direct tests of `_check_ground_contact` (on-runway / off-runway / still-airborne /
+no-airport-nearby) and of `tick()` actually freezing position once paused.
+
+### F72 - "stack" layout: no BARO readout anywhere on screen
+
+Requested directly ("Baro read out does not display in stacked, maybe add next to the heading indicator
+instrument"). Confirmed: "stack" has no altimeter dial at all (unlike "steam", whose six-pack altimeter shows
+the Kollsman setting in its window) - the barometric setting (`sc.baro_inhg`, edited via COM2's shift knob) was
+genuinely reachable nowhere on that layout. Added as a fourth row in `_stack_hdg_actuals`, the existing
+actual-HDG/IAS/ALT readout beside the heading indicator - exactly where suggested, and the same "actual value,
+read-only" placement convention that panel already uses.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

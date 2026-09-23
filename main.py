@@ -76,7 +76,7 @@ import os
 import sys
 import threading
 
-from navmath import Point, destination, great_circle_nm, initial_bearing
+from navmath import Point, destination, great_circle_nm, initial_bearing, point_on_runway
 
 import navdata
 import config as config_mod
@@ -91,6 +91,12 @@ import radios as radios_mod
 
 
 TIME_WARP_LEVELS = (1, 5, 10, 20)   # keyboard 1/2/3/4; see _on_key and run()'s sub-tick loop
+# `_check_ground_contact`: how far from an airport its published field
+# elevation is still trusted as "ground level" here. The trainer has no
+# general terrain database (CIFP/NASR carry none - ARCHITECTURE.md sec.5),
+# so ground contact is only ever checked near a known airport; well away
+# from one there's nothing to check against.
+_GROUND_CHECK_NM = 8.0
 
 
 # --------------------------------------------------------------------------- #
@@ -368,6 +374,8 @@ class World:
         self._last_mode = None                # mode selector position (latch resets on change)
         self.ident_timer = 0.0               # seconds left on the transponder IDENT pulse
         self.t = 0.0                          # elapsed session seconds (VLOC ident blink)
+        self.paused = False                   # frozen after ground contact (see _check_ground_contact)
+        self.ground_status = ""               # "" | "LANDED" | "CRASHED"
 
         self.feed = None
         self.feed_live = False
@@ -498,7 +506,9 @@ class World:
         else:
             self.sim.command(heading=self.manual_heading, turn_rate=_STD_RATE_DPS)
 
-        self.sim.step(dt)
+        if not self.paused:
+            self.sim.step(dt)
+            self._check_ground_contact()
         st = self.sim.state
         own_i = instr.Ownship(st.pos, st.track_deg, st.heading_deg, st.gs_kt,
                               st.altitude_ft, self.magvar)
@@ -507,6 +517,31 @@ class World:
         self.score.sample(nav, st, panel, nav_head=n1,
                           alt_target=self.ap.alt_hold_ft if self.ap.engaged else None)
         return Frame(st, nav, panel, n1, n2, sp, self._panel2(own_i))
+
+    def _check_ground_contact(self) -> None:
+        """Freeze the sim the instant altitude reaches the ground: LANDED if
+        ownship is on a runway, CRASHED otherwise. Scoped to the built-in
+        flight model only - an X-Plane feed already knows its own terrain
+        and ground state, this trainer's own model has none, so "ground
+        level" is only ever checked near a known airport (its published
+        field elevation is real ground truth there; nothing is known well
+        away from one - see `_GROUND_CHECK_NM`)."""
+        st = self.sim.state
+        near = self.db.nearest_airports(st.pos, 1, max_nm=_GROUND_CHECK_NM)
+        if not near:
+            return
+        apt = near[0]
+        if apt.elev_ft is None or st.altitude_ft > apt.elev_ft:
+            return
+        self.sim.altitude = float(apt.elev_ft)   # don't show altitude below the ground that stopped it
+        on_runway = any(
+            point_on_runway(rwy.threshold, rwy.bearing_deg, rwy.length_ft, rwy.width_ft, st.pos)
+            for rwy in apt.runways.values() if rwy.length_ft
+        )
+        self.ground_status = "LANDED" if on_runway else "CRASHED"
+        self.paused = True
+        print(f"{self.ground_status} at {apt.ident} ({st.pos.lat:.4f}, {st.pos.lon:.4f}, "
+              f"{apt.elev_ft} ft) - simulation paused")
 
     def _apply_tunes(self) -> None:
         """A frequency picked on a GNS page (NRST / WPT / NAV/COM: ENT on a highlighted frequency) goes to the STANDBY
@@ -988,6 +1023,7 @@ def run(cfg: Config) -> int:
             stack_tab=ui["stack_tab"], wind_from_deg=w.sim.current_wind()[0], wind_kt=w.sim.current_wind()[1],
             wind_aloft=w.sim.winds_aloft is not None,
             plate_filter=ui["plate_filter"], panel2=fr.panel2,
+            ground_status=w.ground_status,
         ))
         pygame.display.flip()
 

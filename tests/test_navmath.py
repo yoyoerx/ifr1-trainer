@@ -28,6 +28,7 @@ from navmath import (  # noqa: E402
     intersect_radials,
     norm180,
     point_in_polygon,
+    point_on_runway,
     norm360,
     radial_dme,
     reciprocal,
@@ -353,3 +354,32 @@ def test_distance_to_polygon_positive_outside_and_roughly_right():
 
 def test_distance_to_polygon_empty_rings_is_infinite_and_not_inside():
     assert distance_to_polygon_nm(Point(0.0, 0.0), []) == float("inf")
+
+
+# --------------------------------------------------------------------------- #
+# runway containment (ground-contact / landed-vs-crashed detection)          #
+# --------------------------------------------------------------------------- #
+def test_point_on_runway_true_on_centerline_and_within_length():
+    thr = Point(39.0, -77.0)
+    # a 6000 ft runway on true north, 150 ft wide
+    assert point_on_runway(thr, 0.0, 6000.0, 150.0, destination(thr, 0.0, 3000.0 / 6076.115))
+
+
+def test_point_on_runway_false_well_off_to_the_side():
+    thr = Point(39.0, -77.0)
+    mid = destination(thr, 0.0, 3000.0 / 6076.115)
+    off_side = destination(mid, 90.0, 1.0)          # 1 nm east of the centerline
+    assert not point_on_runway(thr, 0.0, 6000.0, 150.0, off_side)
+
+
+def test_point_on_runway_false_well_beyond_the_far_end():
+    thr = Point(39.0, -77.0)
+    beyond = destination(thr, 0.0, 3.0)             # 3 nm past a 6000 ft (~1 nm) runway
+    assert not point_on_runway(thr, 0.0, 6000.0, 150.0, beyond)
+
+
+def test_point_on_runway_margin_forgives_a_touchdown_just_short_of_the_threshold():
+    thr = Point(39.0, -77.0)
+    just_short = destination(thr, 180.0, 50.0 / 6076.115)   # 50 ft short of the threshold
+    assert point_on_runway(thr, 0.0, 6000.0, 150.0, just_short, margin_ft=100.0)
+    assert not point_on_runway(thr, 0.0, 6000.0, 150.0, just_short, margin_ft=10.0)
