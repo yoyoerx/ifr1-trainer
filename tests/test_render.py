@@ -285,6 +285,39 @@ def test_draw_remove_approach_confirmation_and_restart_approach_pages(db):
     assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
 
 
+def test_cdi_strip_service_label_does_not_overlap_the_source_label(db, monkeypatch):
+    """A 530W's flight-phase annunciation (ENR/TERM/LPV/...) and the GPS/VLOC
+    source label were both drawn at the left edge of the CDI strip, only 2px
+    apart vertically - "TERM" visibly overlapped "GPS". They must now sit
+    side by side with no overlap, for every string level_of_service() can
+    actually produce. Captures the actual `_t()` calls `_cdi_strip` makes,
+    rather than recomputing the same layout formula under test."""
+    import dataclasses
+    sc = _scene(db)
+    r = Renderer(pygame.display.get_surface())
+    strip = pygame.Rect(0, 0, 400, 40)
+    calls = []
+    orig_t = Renderer._t
+
+    def recording_t(self, s, x, y, *args, **kwargs):
+        calls.append((s, x, y, kwargs.get("font")))
+        return orig_t(self, s, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Renderer, "_t", recording_t)
+    for svc in ("ENR", "TERM", "LPV", "L/VNAV", "LNAV+V", "LP+V", "LNAV", "MAPR"):
+        calls.clear()
+        cdi = dataclasses.replace(sc.panel.cdi, source="GPS", service=svc, valid=True)
+        sc2 = dataclasses.replace(sc, panel=dataclasses.replace(sc.panel, cdi=cdi))
+        r._cdi_strip(sc2, strip)
+        by_text = {text: (x, y, font) for text, x, y, font in calls}
+        assert "GPS" in by_text and svc in by_text
+        sx, sy, sfont = by_text["GPS"]
+        vx, vy, vfont = by_text[svc]
+        src_rect = pygame.Rect(sx, sy, r.f_sm.size("GPS")[0], sfont.get_height())
+        svc_rect = pygame.Rect(vx, vy, r.f_sm.size(svc)[0], vfont.get_height())
+        assert not src_rect.colliderect(svc_rect), f"service={svc!r} overlaps the source label"
+
+
 def test_draw_flight_plan_page(db):
     sc = _scene(db)
     sc.gns.cursor.group = list(__import__("render").PAGE_GROUPS).index("NAV") \

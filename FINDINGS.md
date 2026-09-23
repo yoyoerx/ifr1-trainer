@@ -1495,6 +1495,19 @@ and eliminated once the capture check was gated to only run once genuinely estab
 Verified with `test_hold_cpa_capture_does_not_arm_until_established_inbound`, which fails against the unpatched
 code (confirmed by temporarily reverting the gate) and passes with it.
 
+### F70 - 530W: the TERM/ENR/LPV flight-phase label overlapped the GPS/VLOC source label on the CDI strip
+
+Playtest report: "the TERM is overlapping the left side of the CDI display." Real rendering bug, WAAS-only (the
+`service` annunciation is empty on a non-WAAS 530 - `level_of_service()`, gated on `variant.waas`). `_cdi_strip`
+drew the CDI source label ("GPS"/"VLOC") and the WAAS flight-phase label (ENR/TERM/LPV/L-VNAV/LNAV+V/LP+V/LNAV/
+MAPR) at the same left-edge x (`r.x + 2`) only 2px apart vertically (`cy - 8` vs `r.bottom - 30`, on a 40px-tall
+strip) - any non-empty service string visibly overlapped "GPS". Fixed: the service label now draws on the same
+row as the source label, offset past its measured width (`self.f_sm.size(src)[0]`) rather than stacked almost
+directly on top of it - it's only ever shown alongside `source == "GPS"` (never "VLOC"), so no other case needs
+handling. Verified with a render test that captures the actual `_t()` draw calls (not a copy of the same layout
+formula under test) and checks for pixel-rect collision across every string `level_of_service()` can produce;
+confirmed it fails against the unpatched code and passes with the fix.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

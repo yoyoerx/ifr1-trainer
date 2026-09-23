@@ -1935,7 +1935,12 @@ class Renderer:
                 color=GPS_GREEN if src == "GPS" else CYAN)
         svc = getattr(cdi, "service", "")
         if src == "GPS" and svc:                # a WAAS unit's flight-mode annunciation (LPV / LNAV / ENR ...)
-            self._t(svc, r.x + 2, r.bottom - 30, font=self.f_sm, color=GPS_GREEN)
+            # same row as the "GPS" source label, right after it - not
+            # stacked almost directly on top of it (both were landing within
+            # 2px of each other at the left edge, so e.g. "TERM" visibly
+            # overlapped "GPS")
+            svc_x = r.x + 2 + self.f_sm.size(src)[0] + 8
+            self._t(svc, svc_x, cy - 8, font=self.f_sm, color=GPS_GREEN)
         fs = getattr(cdi, "full_scale_nm", None)
         if src == "GPS" and fs:                 # numeric scale at both ends (sec.3.3)
             lbl = f"{fs:.2f}" if fs < 1.0 else f"{fs:.1f}"
