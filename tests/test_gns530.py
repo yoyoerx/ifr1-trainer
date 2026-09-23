@@ -177,10 +177,23 @@ def test_suspends_at_the_missed_approach_point(db):
 # --------------------------------------------------------------------------- #
 # holding patterns - GNS 530W actually flies the racetrack, not just SUSP
 # --------------------------------------------------------------------------- #
+_TEST_TURN_RATE_DPS = 6.0   # a turn-rate cap, not an instant heading snap - see note below
+
+
 def _fly_needle(g, pos, gs_kt=130.0, max_steps=2000, dt=1.0):
     """Drive ``g.update()`` with a simple xtk-correcting kinematic step -
     enough to exercise the hold-flying state machine deterministically
-    without a full SimModel. Returns the list of ``NavState`` seen."""
+    without a full SimModel. Returns the list of ``NavState`` seen.
+
+    Turn rate is capped per tick (not snapped straight to the computed
+    heading): an uncapped snap recomputes a brand-new heading every tick as
+    ``track + turn_dir*80`` while a hold's forced turn is in progress (see
+    ``_step_hold``), which - fed straight back in as next tick's ``track`` -
+    jumps by exactly 80 deg every tick forever, landing only on a handful of
+    40-deg-spaced headings and never anywhere else. That's an artifact of
+    the snap, not real turn dynamics, and it can make ``_HOLD_TURN_DONE_DEG``
+    unsatisfiable by pure chance regardless of whether the underlying hold
+    logic is actually correct."""
     trk = 0.0
     seen = []
     for _ in range(max_steps):
@@ -191,9 +204,15 @@ def _fly_needle(g, pos, gs_kt=130.0, max_steps=2000, dt=1.0):
         hdg = ns.dtk
         if ns.xtk_nm is not None:
             hdg = (hdg - max(-30.0, min(30.0, ns.xtk_nm * 15.0))) % 360.0
-        trk = hdg
-        pos = destination(pos, hdg, gs_kt * dt / 3600.0)
+        trk = _turn_toward(trk, hdg, dt)
+        pos = destination(pos, trk, gs_kt * dt / 3600.0)
     return seen
+
+
+def _turn_toward(trk: float, target: float, dt: float) -> float:
+    """One turn-rate-limited step of ``trk`` toward ``target`` - see `_fly_needle`."""
+    return (trk + max(-_TEST_TURN_RATE_DPS * dt, min(_TEST_TURN_RATE_DPS * dt,
+                                                       angle_diff(target, trk)))) % 360.0
 
 
 def test_hold_in_lieu_of_pt_is_flown_then_auto_continues(db):
@@ -326,19 +345,20 @@ def test_hold_stays_indefinitely_until_pilot_releases_suspend(db):
     g.fpl.activate_leg(g.fpl.index_of("CHAR"))
     pos = Point(40.9, -74.0)
     trk = 0.0
-    # phase 1: fly up to and into the hold
+    # phase 1: fly up to and into the hold (see _fly_needle for why this is
+    # turn-rate-limited rather than an instant heading snap)
     for _ in range(400):
         ns = g.update(pos, trk, 130.0, 1.0)
         if ns.mode == "HOLD":
             break
         hdg = ns.dtk - max(-30.0, min(30.0, (ns.xtk_nm or 0.0) * 15.0)) if ns.dtk is not None else trk
-        trk = hdg % 360.0
+        trk = _turn_toward(trk, hdg, 1.0)
         pos = destination(pos, trk, 130.0 / 3600.0)
     assert ns.mode == "HOLD"
     # phase 2: keep flying well past one lap - it must NOT auto-exit (HM, no release yet)
     for _ in range(600):
         hdg = ns.dtk - max(-30.0, min(30.0, (ns.xtk_nm or 0.0) * 15.0))
-        trk = hdg % 360.0
+        trk = _turn_toward(trk, hdg, 1.0)
         pos = destination(pos, trk, 130.0 / 3600.0)
         ns = g.update(pos, trk, 130.0, 1.0)
         if g._hold_state and g._hold_state["lap"] >= 2:
@@ -1701,6 +1721,85 @@ def test_hold_inbound_turn_follows_the_hold_direction_not_the_shortest_way(db):
         ns = g.update(end, hs["leg_hdg"], 130.0, 1.0)
         # commanded course is ahead of the track on the hold's turn side
         assert angle_diff(ns.dtk, hs["leg_hdg"]) * want > 0
+
+
+def test_hold_return_turn_never_reverses_direction_mid_turn(db):
+    """Playtest report: a KUPPS-style left-turn teardrop hold correctly began
+    turning left, then reversed to right turns about halfway around the
+    return turn onto the inbound course. Root cause: `_HOLD_TURN_DONE_DEG`
+    handed control from the forced-direction turn back to ordinary
+    (shortest-way, no memory of which way it was already turning) intercept
+    steering while still up to 100 deg off the inbound course - comfortably
+    enough for that intercept's own up-to-45-deg correction to land on the
+    far side of the current track, making "shortest way there" a reversal.
+    Flying the whole return turn, turn-rate-limited (a real airplane, not an
+    instant heading snap - see `_fly_needle`), the turn taken each tick must
+    never go against the hold's own direction once established."""
+    from autopilot import nav_intercept_deg
+
+    g = _hold_procedure(db)
+    for turn, want in (("L", -1.0), ("R", 1.0)):
+        hs = _left_hold_state(g, turn, 0.0)
+        hs["phase"] = "OUTBOUND"
+        char = next(w for w in g.fpl.waypoints if w.ident == "CHAR")
+        pos = destination(char.pos, hs["leg_hdg"], hs["leg_nm"])
+        trk = hs["leg_hdg"]
+        ns = g.update(pos, trk, 130.0, 1.0)
+        assert g._hold_state["phase"] == "INBOUND"
+        for _ in range(400):
+            hs = g._hold_state
+            if hs is None or hs["phase"] != "INBOUND":
+                break
+            intercept = nav_intercept_deg(ns.xtk_nm or 0.0, ns.cdi_scale_nm, 130.0)
+            target = (ns.dtk + intercept) % 360.0
+            new_trk = _turn_toward(trk, target, 1.0)
+            step = angle_diff(new_trk, trk)
+            # while still meaningfully off the inbound course, every turn
+            # increment must go the hold's own way - never a reversal
+            # partway through. Once nearly established (a real final-trim
+            # micro-wobble settling exactly onto the centerline) direction
+            # no longer matters - that's not the bug being guarded against.
+            if abs(step) > 0.01 and abs(angle_diff(trk, hs["inbound"])) > 45.0:
+                assert step * want > 0, f"turn={turn}: reversed mid-turn at track={trk:.1f}"
+            trk = new_trk
+            pos = destination(pos, trk, 130.0 / 3600.0)
+            ns = g.update(pos, trk, 130.0, 1.0)
+
+
+def test_hold_cpa_capture_does_not_arm_until_established_inbound(db):
+    """Root cause behind the same playtest report as the test above: distance
+    to the fix isn't monotonic while still mid-turn out of a wide entry (it
+    can dip and rebound purely from sweeping around the arc), so tracking
+    `min_dist_to_fix`/`past_cpa` there could call `_complete_hold_lap()`
+    dozens of degrees into the turn - which resets `phase` to OUTBOUND and
+    recurses into a brand new `_start_hold()`, recomputing the AIM 5-3-9
+    entry sector from whatever direction the aircraft happened to be
+    pointed mid-turn. Landing on "parallel" flips `turn_dir` to the
+    opposite of the hold's own direction (correct for a real parallel
+    entry's first turn - not for a lap that never should have completed).
+    The capture/CPA check must not even start running until the forced
+    turn-direction phase has handed off (`turn_done`)."""
+    g = _hold_procedure(db)
+    for turn in ("L", "R"):
+        hs = _left_hold_state(g, turn, 0.0)
+        hs["phase"] = "OUTBOUND"
+        char = next(w for w in g.fpl.waypoints if w.ident == "CHAR")
+        pos = destination(char.pos, hs["leg_hdg"], hs["leg_nm"])
+        trk = hs["leg_hdg"]
+        ns = g.update(pos, trk, 130.0, 1.0)
+        hs = g._hold_state
+        assert hs["phase"] == "INBOUND" and hs["lap"] == 1
+        for _ in range(200):
+            hs = g._hold_state
+            if hs is None or hs["turn_done"]:
+                break
+            assert hs["phase"] == "INBOUND" and hs["lap"] == 1
+            assert hs["min_dist_to_fix"] is None      # capture math hasn't started yet
+            trk = _turn_toward(trk, ns.dtk, 1.0)       # forced turn: xtk=0, dtk IS the target
+            pos = destination(pos, trk, 130.0 / 3600.0)
+            ns = g.update(pos, trk, 130.0, 1.0)
+        assert g._hold_state is not None and g._hold_state["turn_done"]
+        assert g._hold_state["lap"] == 1                # still lap 1 - no premature completion
 
 
 def test_parallel_entry_first_inbound_turn_is_opposite_the_hold_direction(db):

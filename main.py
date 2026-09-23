@@ -563,7 +563,14 @@ class World:
                 g.messages.append(f"TUNE VLOC {g.approach_freq:07.3f} ({g.approach_ref})")
 
         close = past_faf or (to_faf_nm is not None and to_faf_nm < 2.0)
-        if (close and on_freq and not g._auto_vloc_done and g.cdi_source == "GPS"):
+        # 500W Pilot's Guide p.117-118: "When the ILS approach is activated
+        # (and the correct ILS frequency is active in the VLOC window), the
+        # GNS 530W automatically switches [GPS to VLOC]" - this is ILS-only.
+        # A VOR/NDB-referenced approach has no such feature: the localizer's
+        # course is fixed (OBS is moot), but a VOR radial's isn't - the pilot
+        # must always set CRS1 themselves and press CDI to switch manually.
+        if (close and on_freq and not g._auto_vloc_done and g.cdi_source == "GPS"
+                and getattr(g, "approach_is_localizer", False)):
             g.toggle_cdi_source()
             g._auto_vloc_done = True
             g.messages.append(f"CDI -> VLOC ({n1.station_ident or g.approach_ref})")

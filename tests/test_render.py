@@ -928,6 +928,43 @@ def test_auto_vloc_reminds_rather_than_auto_activates_when_a_pilot_is_flying(db)
     assert w.radios.nav1.active_mhz == pytest.approx(110.30)
 
 
+def test_auto_vloc_never_auto_switches_cdi_on_a_vor_approach(db):
+    """500W Pilot's Guide p.117-118: the GPS->VLOC auto-switch is described
+    only for an activated ILS approach ("the correct ILS frequency is active
+    in the VLOC window"). A VOR-referenced approach has no such feature - a
+    localizer's course is fixed (OBS is moot), but a VOR radial's is not, so
+    the pilot must always set the external CDI's OBS/course themselves and
+    press CDI to switch manually. Frequency auto-staging/auto-tuning (the
+    general, non-WAAS-specific feature) still applies to both."""
+    from navdata.model import Airport, Procedure, ProcedureLeg, LegType
+    thr = Point(41.0, -74.0)
+    apt = Airport("KTST", thr, elev_ft=300)
+    db.add_airport(apt)
+    vor_pos = destination(thr, 270.0, 10.0)
+    db.add_vhf(VhfNavaid("TVOR", vor_pos, 113.5, nav_class="VOR"))
+    db.add_procedure(Procedure(
+        airport="KTST", ident="D09", kind="approach", route_type="D",
+        transitions={"": (
+            ProcedureLeg(10, LegType.IF, fix_ident="ALFA"),
+            ProcedureLeg(20, LegType.CF, fix_ident="BRAVO", is_faf=True, recnav_ident="TVOR"),
+            ProcedureLeg(30, LegType.CF, fix_ident="RW09", is_map=True, recnav_ident="TVOR"),
+        )},
+    ))
+    w = _bare_world(db)
+    w.gns.load_procedure("KTST", "D09")
+    assert w.gns.approach_freq == pytest.approx(113.5)      # frequency staging still happens
+    assert w.gns.approach_is_localizer is False
+    w.radios.nav1.standby_mhz = w.gns.approach_freq
+    w.radios.nav1.swap()                                     # pilot flip-flops it active themselves
+
+    ac = destination(thr, 270.0, 1.0)                        # essentially on top of the MAP
+    w.gns.fpl.activate_leg(2)
+    nav = w.gns.update(ac, 90.0, 130.0)
+    w.radios.resolve(db, ac, 3000.0)
+    w._auto_vloc(nav)
+    assert w.gns.cdi_source == "GPS"                          # never auto-switched
+
+
 def test_route_event_ap_row_drives_autopilot_and_knobs(db):
     from ifr1 import Event, Mode
     w = _bare_world(db)

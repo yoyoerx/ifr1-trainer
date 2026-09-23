@@ -105,7 +105,18 @@ _WPT_ALERT_SEC = 10.0
 # aircraft is past the fix and moving away - treat the CPA as "reached"
 # rather than waiting indefinitely for an exact _FIX_CAPTURE_NM hit that a
 # wide entry (e.g. a teardrop's ~210 deg return turn) may never quite land.
-_HOLD_TURN_DONE_DEG = 100.0   # inbound turn hands back to normal intercept steering inside this
+# Inbound turn hands back to normal intercept steering (nav_intercept_deg,
+# clamped to +-45 deg either side of the raw DTK) once within this many
+# degrees of the true inbound course. Must stay under 45 deg: normal
+# steering has no memory of which way the aircraft was already turning, so
+# it always takes whatever it computes as the shortest path to its target
+# heading - if this threshold ever let go while more than 45 deg off, that
+# target (inbound +-45 deg intercept) could land on the FAR side of the
+# aircraft's current track, and "shortest path there" would be a turn
+# REVERSAL partway through the hold's own return turn (playtest report: a
+# left-turn teardrop entry correctly turned left, then flipped to right
+# turns about halfway around). 100 deg was nowhere near safe.
+_HOLD_TURN_DONE_DEG = 15.0
 _HOLD_CPA_MARGIN_NM = 1.0
 
 # GPS CDI full-scale (each side), by phase of flight - GNS 530 Pilot's Guide
@@ -779,6 +790,15 @@ class GpsNav:
         self._approach_active = False    # an approach procedure is loaded
         self.approach_freq: float | None = None   # VLOC freq the GNS loads to standby
         self.approach_ref: str = ""               # ... its ident (ILS / VOR)
+        # A localizer has a fixed course (OBS is ignored once VLOC is tuned to
+        # one) - a VOR/NDB-referenced approach does not, and needs a pilot-set
+        # OBS/course card same as any other VOR radial. Only ever True via
+        # `_approach_vloc_freq`'s ILS path (a runway's own `ils_ident`), so
+        # `main.World._auto_vloc`'s GPS->VLOC CDI auto-switch (500W Pilot's
+        # Guide p.117-118: "When the ILS approach is activated... the GNS
+        # 530W automatically switches") can gate on it and only apply where
+        # the guide actually documents it.
+        self.approach_is_localizer: bool = False
         self._auto_vloc_done = False              # one-shot GPS->VLOC CDI switch
         self._susp_at: tuple | None = None  # (active, ident) we auto-suspended at
         self._airspace_alert_key: tuple | None = None   # (ident, category) of the last airspace alert posted
@@ -813,6 +833,7 @@ class GpsNav:
         self._approach_active = False
         self.approach_freq = None
         self.approach_ref = ""
+        self.approach_is_localizer = False
         self._auto_vloc_done = False
         self._susp_at = None
         self._hold_state = None
@@ -901,7 +922,8 @@ class GpsNav:
         if not self.fpl.has_active_leg and len(self.fpl) >= 2:
             self.fpl.active = 1
         if is_appr:
-            self.approach_freq, self.approach_ref = self._approach_vloc_freq(legs, apt)
+            self.approach_freq, self.approach_ref, self.approach_is_localizer = \
+                self._approach_vloc_freq(legs, apt)
         return added
 
     def remove_procedure(self, kind: str) -> str:
@@ -924,21 +946,24 @@ class GpsNav:
             self._approach_active = False
             self.approach_freq = None
             self.approach_ref = ""
+            self.approach_is_localizer = False
             self._auto_vloc_done = False
             self._path, self._service, self._advisory = None, frozenset(), None
             self._downgraded = self._aborted = False
         return proc_ident
 
-    def _approach_vloc_freq(self, legs, apt) -> tuple[float | None, str]:
+    def _approach_vloc_freq(self, legs, apt) -> tuple[float | None, str, bool]:
         """The VLOC frequency the GNS auto-loads to standby for a VOR/ILS
-        approach: the runway's ILS, else a VOR/LOC referenced by the final legs."""
+        approach: the runway's ILS, else a VOR/LOC referenced by the final
+        legs. The third element is True only for the ILS path - a localizer
+        has a fixed course (no OBS needed); a VOR/NDB reference does not."""
         # 1) a runway leg -> that runway's ILS localizer
         if apt is not None:
             for leg in legs:
                 rwy = apt.runways.get((leg.fix_ident or "").strip().upper())
                 if rwy is not None and rwy.ils_ident:
                     for n in self.db.vhf.get(rwy.ils_ident, []):
-                        return n.freq_mhz, n.ident
+                        return n.freq_mhz, n.ident, True
         # 2) a recommended navaid on the final segment (FAF onward)
         seen_faf = False
         for leg in legs:
@@ -946,8 +971,8 @@ class GpsNav:
             if seen_faf and leg.recnav_ident:
                 e = self._resolve(leg.recnav_ident, apt.pos if apt is not None else self._pos)
                 if e is not None and getattr(e, "freq_mhz", None):
-                    return e.freq_mhz, e.ident
-        return None, ""
+                    return e.freq_mhz, e.ident, False
+        return None, "", False
 
     # -- procedure-leg synthesis --------------------------------------
     def _magvar_at(self, pos: Point | None) -> float:
@@ -2645,13 +2670,30 @@ class GpsNav:
             # on a clean close pass (real hit), or once distance has opened
             # back up past that closest point by _HOLD_CPA_MARGIN_NM (the
             # aircraft is now moving away - this is as close as it's getting).
-            dtg = great_circle_nm(pos, fix)
-            if hs["min_dist_to_fix"] is None or dtg < hs["min_dist_to_fix"]:
-                hs["min_dist_to_fix"] = dtg
-            past_cpa = dtg > hs["min_dist_to_fix"] + _HOLD_CPA_MARGIN_NM
-            if dtg <= _FIX_CAPTURE_NM or past_cpa:
-                self._complete_hold_lap()
-                return self.update(pos, self._track, self._gs, dt)   # new lap, or resumed leg
+            #
+            # Only while ESTABLISHED inbound (`turn_done`): mid-turn, straight-
+            # line distance to the fix swings up and down non-monotonically as
+            # the aircraft sweeps around the entry/return arc, well before it's
+            # anywhere near actually tracking inbound - a dip-then-rebound
+            # there used to read as "past the CPA" and complete the lap dozens
+            # of degrees into the turn. That reset `phase` to OUTBOUND and
+            # recursed into a brand new `_start_hold()`, which recomputes the
+            # AIM 5-3-9 entry sector from whatever direction the aircraft
+            # happened to be pointed mid-turn - landing on "parallel" flips
+            # `turn_dir` to the OPPOSITE of the hold's own direction (the
+            # legitimate AIM 5-3-8 exception, triggered illegitimately).
+            # Playtest report: a left-turn teardrop hold turned left, then
+            # flipped to right turns partway around the return turn.
+            if hs["turn_done"]:
+                dtg = great_circle_nm(pos, fix)
+                if hs["min_dist_to_fix"] is None or dtg < hs["min_dist_to_fix"]:
+                    hs["min_dist_to_fix"] = dtg
+                past_cpa = dtg > hs["min_dist_to_fix"] + _HOLD_CPA_MARGIN_NM
+                if dtg <= _FIX_CAPTURE_NM or past_cpa:
+                    self._complete_hold_lap()
+                    return self.update(pos, self._track, self._gs, dt)   # new lap, or resumed leg
+            else:
+                dtg = great_circle_nm(pos, fix)
 
         scale = self._step_cdi_scale(
             self._target_cdi_scale(self._dist_to_destination(pos),

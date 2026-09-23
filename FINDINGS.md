@@ -1441,6 +1441,60 @@ Bumped `_CACHE_SCHEMA` (7 to 8) since `Airspace` gained a field - a pickle cache
 attribute and raises `AttributeError` on first `near()` call otherwise (the same stale-cache hazard as prior
 schema bumps this session).
 
+### F69 - Playtest: VOR-approach CDI auto-switch, SUSP+CDI on the missed, and a hold turn direction flip
+
+Three separate playtest reports on the same KLNS D08 missed-approach/hold scenario (F67/F68's own test flight).
+
+**1. "VLOC auto staged but the OBS card was incorrect, so the course deviated from final until CRS1 was
+corrected." Real bug: `main.World._auto_vloc` auto-switched the CDI from GPS to VLOC for *any* staged approach
+frequency**, including a VOR/DME approach like D08. The 500W Pilot's Guide (p.117-118) describes this auto-switch
+only for an activated **ILS** approach - *"When the ILS approach is activated (and the correct ILS frequency is
+active in the VLOC window), the GNS 530W automatically switches"* - because a localizer has a fixed course (OBS
+is moot once tuned to one); a VOR radial does not, and the pilot must always dial in the correct course
+themselves. Auto-switching for D08 masked that requirement instead of surfacing it. Fixed: `GpsNav` gained
+`approach_is_localizer` (set only via `_approach_vloc_freq`'s ILS path - a runway's own `ils_ident`), and
+`_auto_vloc`'s CDI switch now checks it. Frequency auto-staging itself (a general auto-tuning feature, not
+WAAS-specific) still applies to both approach types unchanged. Verified via a synthetic VOR-approach fixture
+(`test_auto_vloc_never_auto_switches_cdi_on_a_vor_approach`): CDI stays GPS through the whole approach unless the
+pilot presses CDI themselves, exactly matching what the playtest actually needed.
+
+**2. "Should both SUSP and CDI need to be pressed to get back to GPS mode?" Yes, verified - not a bug, this is
+already correct.** Traced end-to-end against real KLNS data: crossing the MAP suspends automatic sequencing
+(`suspended=True`, CDI stays on whatever source it was); pressing OBS/SUSP resumes sequencing into the missed
+approach's own legs, but **does not** touch `cdi_source` - nothing in the codebase auto-switches VLOC back to
+GPS (the only two `toggle_cdi_source()` call sites are the pilot's own SWAP key press and the ILS-only
+auto-switch above, now correctly gated). Matches the 500W guide's own statement that the GPS/VLOC switch *"does
+not automatically switch again until the approach is reactivated or another approach is selected"* - the pilot
+must press CDI themselves to get GPS lateral guidance back for the missed approach's own waypoint sequence.
+
+**3. "The hold at KUPPS starts with the correct teardrop entry to left hand turns and then changed to right hand
+turns after one half loop of the hold." Real bug, found and fixed - two compounding causes in `_step_hold`.**
+
+The proximate cause: `_HOLD_TURN_DONE_DEG = 100.0` handed the return turn from a deliberately-forced,
+always-correct-direction steering (`dtk = track + turn_dir*80`, `xtk` pinned to 0 - exactly so ordinary
+"shortest way there" steering, which has no memory of which way the aircraft was already turning, can't reverse
+it) back to *that same* ordinary steering while the aircraft could still be up to 100 deg short of the inbound
+course - comfortably enough for a course-intercept correction (clamped +-45 deg either side of the raw inbound
+course) to land on the far side of the aircraft's current track, making "shortest way there" a reversal. Fixed:
+dropped to 15 deg, safely under the 45 deg margin needed to guarantee continuing the hold's own direction always
+stays the objectively shorter path.
+
+The deeper, more direct cause, found while reproducing this against the real S-TEC 55X coupler (`autopilot.py`'s
+stateful NAV/APR/REV coupler, not just a stand-in intercept function): **the hold's closest-point-of-approach
+capture check ran on *every* INBOUND tick, including while still mid-forced-turn.** Straight-line distance to the
+fix isn't monotonic while sweeping around a wide entry/return arc (a teardrop's ~210 deg return turn especially)
+- it can dip and rebound well before the aircraft is anywhere near actually established inbound. That dip-then-
+rebound read as "past the CPA," calling `_complete_hold_lap()` dozens of degrees into the turn - which resets
+`phase` to OUTBOUND and **recurses into a brand new `_start_hold()`**, recomputing the AIM 5-3-9 entry sector
+fresh from whatever direction the aircraft happened to be pointed at that mid-turn moment. Landing on "parallel"
+flips `turn_dir` to the *opposite* of the hold's own direction - the legitimate AIM 5-3-8 exception for a real
+parallel entry's first turn, triggered illegitimately by a lap that never should have completed. This is exactly
+"correct entry, left turns, then flips to right turns partway around": reproduced directly against the real
+`Autopilot` coupler (a `dtk` value snapping to the OUTBOUND leg's heading for one tick, mid-turn, then reverting)
+and eliminated once the capture check was gated to only run once genuinely established inbound (`turn_done`).
+Verified with `test_hold_cpa_capture_does_not_arm_until_established_inbound`, which fails against the unpatched
+code (confirmed by temporarily reverting the gate) and passes with it.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a
