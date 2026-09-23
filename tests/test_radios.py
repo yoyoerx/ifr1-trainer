@@ -246,6 +246,77 @@ def test_localizer_only_received_inside_its_beam():
     assert not n.tuned
 
 
+def test_resolve_prefers_the_full_ils_record_over_a_courseless_duplicate():
+    """F74 (playtest, KJFK ILS/LOC 22R): an airport's ILS can legitimately
+    appear twice under the same ident+frequency - once as the real Section
+    P.I precision-approach record (course + runway), once as a plain
+    Section D navaid-directory duplicate of the same transmitter with no
+    course data at all. Picking by raw nearest-distance let the course-less
+    duplicate win purely because it happened to sit closer; `resolve` then
+    had to guess a runway pairing from the duplicate's own (not the real
+    antenna's) position, which resolved to the wrong runway's course
+    entirely - the autopilot then steered onto a nonsensical course the
+    instant the CDI auto-switched to VLOC near the FAF. The complete record
+    must always win, even when the duplicate is closer."""
+    rwy_thr = Point(40.00, -74.00)
+    brg = 220.0
+    real_antenna = destination(rwy_thr, brg, 1.4)
+    d = NavDatabase(source="test")
+    apt = Airport("KDUP", Point(40.0, -73.98), elev_ft=100, magvar_deg=-12.0)
+    apt.runways["RW22"] = Runway("RW22", rwy_thr, brg, length_ft=7000)
+    d.add_airport(apt)
+    # the real Section P.I record - correct course, but placed FARTHER away
+    d.add_vhf(VhfNavaid("IDUP", real_antenna, 109.90, nav_class="ILSW",
+                        loc_bearing_deg=brg, runway_ident="RW22", airport_ident="KDUP"))
+    # a course-less Section D duplicate of the same ident+frequency, placed
+    # CLOSER to the test point than the real antenna - nothing to disambiguate
+    # it from the real one except the missing course data
+    stub_pos = destination(rwy_thr, reciprocal(brg), 5.5)   # near the aircraft below
+    d.add_vhf(VhfNavaid("IDUP", stub_pos, 109.90, nav_class="ITW"))
+
+    n = NavReceiver(active_mhz=109.90)
+    on_course = destination(rwy_thr, reciprocal(brg), 6.0)   # established on final
+    n.resolve(d, on_course)
+    assert n.is_localizer
+    assert n.loc_course_deg == pytest.approx(220.0)         # the real record's course
+    assert n._station.runway_ident == "RW22"
+
+
+def test_resolve_disambiguates_parallel_runways_sharing_a_frequency():
+    """F74: real airports legitimately reuse one ILS frequency between two
+    runways whose beams point in different directions (never simultaneously
+    receivable in reality, since the beams don't overlap where it matters -
+    e.g. KJFK's 109.5 serves both 22R's course 221 and 04R's course 44). The
+    front-or-back beam cone used to decide *receivability* is deliberately
+    generous per station (it has to admit a genuine back-course approach),
+    so both can independently pass it - `resolve` must still prefer whichever
+    one the aircraft is actually established on, not whichever antenna is a
+    few tenths of a mile closer."""
+    d = NavDatabase(source="test")
+    apt = Airport("KPAR", Point(40.0, -74.0), elev_ft=100, magvar_deg=0.0)
+    # runway A: course 220, antenna near the aircraft's position below
+    thrA = Point(40.00, -74.00)
+    antA = destination(thrA, 220.0, 1.4)
+    apt.runways["RW22"] = Runway("RW22", thrA, 220.0, length_ft=7000)
+    # runway B: a parallel/crossing runway, course ~40 (near A's reciprocal),
+    # antenna placed CLOSER to the test aircraft than A's real antenna
+    thrB = Point(40.02, -74.05)
+    antB = destination(thrB, 40.0, 0.3)
+    apt.runways["RW04"] = Runway("RW04", thrB, 40.0, length_ft=7000)
+    d.add_airport(apt)
+    d.add_vhf(VhfNavaid("IPAR", antA, 109.70, nav_class="ILSW",
+                        loc_bearing_deg=220.0, runway_ident="RW22", airport_ident="KPAR"))
+    d.add_vhf(VhfNavaid("IPAR", antB, 109.70, nav_class="ILSW",
+                        loc_bearing_deg=40.0, runway_ident="RW04", airport_ident="KPAR"))
+
+    n = NavReceiver(active_mhz=109.70)
+    # established on RW22's final, well aligned with A's front course
+    on_a = destination(thrA, reciprocal(220.0), 6.0)
+    n.resolve(d, on_a)
+    assert n.is_localizer and n.loc_course_deg == pytest.approx(220.0)
+    assert n._station.runway_ident == "RW22"
+
+
 # --------------------------------------------------------------------------- #
 # transponder
 # --------------------------------------------------------------------------- #

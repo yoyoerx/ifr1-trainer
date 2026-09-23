@@ -1569,6 +1569,51 @@ swallowed silently, since `main._on_key`'s dedicated DTO-dialog keyboard block r
 unconditionally for any unhandled key. `C` (CLR) no longer cancels an active Direct-To by
 itself.
 
+### F74 - Playtest: KJFK ILS/LOC 22R, autopilot swung hard off course right as the CDI auto-switched to VLOC
+
+Reported directly ("flying the KJFK ILS OR LOC 22R approach. the aircraft when way to the right
+of course chasing the needle, then came back and shoots way to the left"). Reproduced headlessly
+with a closed-loop `World`/`SimModel` run (real KJFK CIFP data, a stiff crosswind, `NAV/APR`
+engaged, established well on the ILS 22R final) rather than guessed at from code alone - two
+separate real bugs, both landing right at the GNS's automatic GPS->VLOC CDI switch near the FAF
+(main.py's `_auto_vloc`, WAAS-era 530W behaviour):
+
+1. **Wrong localizer resolved.** KJFK's 109.5 MHz/IJOC legitimately appears twice in the FAA
+   data: the real Section P·I precision-approach record (course 221°, runway RW22R) and a plain
+   Section D navaid-directory duplicate of the same transmitter with no course data at all
+   (`loc_bearing_deg=None`). `RadioReceiver.resolve` picked by raw nearest distance, which on this
+   approach picked the course-less duplicate; `_bind` then had to guess a runway pairing from the
+   *duplicate's* own position via `_pair_runway`, resolving to a ~44° course - roughly the
+   *reciprocal* of the real 221°. Worse: KJFK's 109.5 is also legitimately reused by 04R's own ILS
+   (IJFK, course 44°) - a real-world frequency-sharing setup between two runways whose beams are
+   never meant to be received simultaneously. `_localizer_receivable`'s front-*or*-back cone check
+   (needed for genuine back-course approaches) means an aircraft established on 22R's front course
+   also satisfies IJFK's *back*-course cone, so both stations independently passed `_receivable`
+   and distance alone couldn't tell them apart correctly.
+   **Fix:** `NavReceiver.resolve`'s selection key is now `(no published course, beam-alignment
+   error, distance)` instead of plain distance - a record with real course data always beats a
+   course-less duplicate, and among course-having candidates the one the aircraft is actually
+   aligned with (front *or* back of its own beam, the same fold `_localizer_receivable` uses)
+   always wins over one merely a few tenths of a mile closer. The same key gates the "stay locked
+   to current station" hysteresis. `tests/test_radios.py::test_resolve_prefers_the_full_ils_record_over_a_courseless_duplicate`
+   and `::test_resolve_disambiguates_parallel_runways_sharing_a_frequency`.
+2. **Coupler reset on the source switch.** `Autopilot._couple` treated any change in its internal
+   `_src` label (`"APR/GPS"` -> `"APR/VLOC"`) as "a different mode/needle: start over," fully
+   resetting the S-TEC coupler - zeroing the wind-drift trim (`_xtk_i`) and restarting the whole
+   INTERCEPT -> CAP -> CAP SOFT capture timeline - even though the CDI source auto-switch is (per
+   item 1, once resolved correctly) still the same physical localizer course. That reset landed at
+   the single most course-sensitive moment of the approach.
+   **Fix:** `_couple` now only fully resets when the *lateral mode* itself changes (HDG/NAV/APR/
+   REV, the `src` prefix before `/`). A same-mode source-label change (GPS<->VLOC) keeps the
+   capture stage and trim *unless* the new source's needle reads far from centred (a genuinely
+   different/unestablished course, e.g. NAV freshly switched onto an unrelated VOR radial), in
+   which case it still resets properly rather than applying a lower-authority captured-stage gain
+   to a full-scale deflection. `tests/test_autopilot.py::test_apr_gps_to_vloc_cdi_switch_keeps_the_established_wind_trim`
+   and `::test_apr_source_switch_still_resets_on_a_genuinely_large_deviation`.
+
+With both fixed, the same closed-loop repro holds `xtk` within ~0.02 nm of centerline through the
+CDI switch and all the way to the MAP, no oscillation.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

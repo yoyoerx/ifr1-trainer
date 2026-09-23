@@ -180,23 +180,68 @@ class NavReceiver:
             return
         self._resolved_freq, self._resolved_pos, self._resolved_alt = f, ac_pos, ac_alt_ft
 
-        best, best_d = None, 1e9
+        # Sort key: (no published course, beam-alignment error, distance).
+        # Two things can make raw nearest-distance the wrong way to pick
+        # among several same-frequency candidates (F74, playtest: KJFK
+        # ILS/LOC 22R, autopilot violently swinging off course right as the
+        # CDI auto-switched to VLOC near the FAF):
+        #
+        # 1. An airport's ILS often appears twice under the same ident+
+        #    frequency - once as the real Section P·I precision-approach
+        #    record (course + runway, correct), once as a plain Section D
+        #    navaid-directory duplicate of the same transmitter with no
+        #    course data at all. `_bind` has to guess a runway pairing from
+        #    a course-less duplicate's own (not the antenna's real)
+        #    position, which can resolve to the wrong runway's course
+        #    entirely. A record with real course data is always preferred.
+        # 2. Real airports legitimately reuse one ILS frequency between two
+        #    runways whose beams point in very different directions (KJFK's
+        #    109.5 serves both 22R's IJOC, course 221, and 04R's IJFK,
+        #    course 44) - never simultaneously receivable in reality, because
+        #    an aircraft is only ever meaningfully *on* one of the two beams
+        #    at a time. `_localizer_receivable`'s cone check (same fold used
+        #    here) is deliberately generous per-station (front *or* back, to
+        #    admit a genuine back-course approach to *that* station), so both
+        #    can pass it independently - but the aircraft's alignment with
+        #    the beam it is actually flying is always far tighter than with
+        #    an unrelated station's, so ranking by that error picks the right
+        #    one the way real beam geometry would, instead of by which
+        #    antenna happens to sit a few tenths of a mile closer.
+        def _key(n, ac_pos):
+            d = great_circle_nm(n.pos, ac_pos)
+            if not _is_localizer(n):
+                return (False, 0.0, d)
+            brg = getattr(n, "loc_bearing_deg", None)
+            if brg is None:
+                return (True, 0.0, d)
+            apt = db.airport(getattr(n, "airport_ident", "") or "")
+            on_course = norm360(brg + (apt.magvar_deg if apt is not None else 0.0))
+            off = abs(angle_diff(initial_bearing(n.pos, ac_pos), on_course))
+            align_err = min(off, 180.0 - off)
+            return (False, align_err, d)
+
+        best, best_key = None, (True, 0.0, 1e9)
         for lst in db.vhf.values():
             for n in lst:
                 if abs(n.freq_mhz - f) >= 0.005:
                     continue
                 if not _receivable(db, n, ac_pos, ac_alt_ft):
                     continue
-                d = great_circle_nm(n.pos, ac_pos)
-                if d < best_d:
-                    best, best_d = n, d
+                key = _key(n, ac_pos)
+                if key < best_key:
+                    best, best_key = n, key
 
         cur = self._station
         if (cur is not None and abs(cur.freq_mhz - f) < 0.005
                 and _receivable(db, cur, ac_pos, ac_alt_ft, hysteresis=True)):
-            cur_d = great_circle_nm(cur.pos, ac_pos)
-            if best is None or best_d >= cur_d * 0.7:   # stay locked to the current
-                best, best_d = cur, cur_d
+            cur_key = _key(cur, ac_pos)
+            # a strictly better `best` (real course data / more tightly
+            # beam-aligned than `cur`) always wins, no hysteresis; otherwise
+            # stay locked to `cur` unless `best` is decisively closer at the
+            # same quality
+            better = best is not None and best_key[:2] < cur_key[:2]
+            if not better and (best is None or best_key[2] >= cur_key[2] * 0.7):
+                best, best_key = cur, cur_key
 
         self._station = best
         self._bind(db, best)

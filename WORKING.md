@@ -245,6 +245,21 @@ Pilot-selectable intercept angle (R9), control-wheel steering, yaw damper: not w
 
 ## Done log
 
+- **2026-09-23** — F74: KJFK ILS/LOC 22R playtest report ("aircraft way
+  right chasing the needle, then shoots way left"), reproduced headlessly
+  with a real closed-loop `World`/`SimModel` run rather than guessed at.
+  Two bugs, both firing at the GPS->VLOC CDI auto-switch near the FAF: (1)
+  `radios.py`'s station-resolve picked a course-less navdata duplicate /
+  the wrong same-frequency parallel-runway localizer (KJFK's 109.5 serves
+  both 22R and 04R) by raw nearest-distance - now ranks by
+  (has-course-data, beam-alignment error, distance); (2)
+  `autopilot.py`'s coupler fully reset (zeroing wind trim, restarting the
+  capture timeline) on any CDI-source label change, not just a genuine
+  lateral-mode change - now only resets fully on a real mode change or a
+  far-off-centre new reading. Fixed `xtk` holds within ~0.02 nm through
+  the switch and to the MAP now, vs. the wild swing before. 1051 tests
+  pass.
+
 - **2026-09-23** — F73: cancelling an active Direct-To used a bare CLR
   press (F14's approximation) instead of the Pilot's Guide's documented
   DCT > MENU > "Cancel Direct-To NAV?" > ENT (sec.3 pp.47-48). Added

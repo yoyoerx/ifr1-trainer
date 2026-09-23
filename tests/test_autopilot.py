@@ -163,6 +163,53 @@ def test_nav_tracks_vloc_once_cdi_source_switches():
     assert cmd.heading == pytest.approx(90.0 + 45.0)     # full-scale needle: POH sec.3.1.2 45 deg cut
 
 
+def test_apr_gps_to_vloc_cdi_switch_keeps_the_established_wind_trim():
+    """F74 (playtest, KJFK ILS/LOC 22R): the GNS's automatic GPS->VLOC CDI
+    switch near the FAF (still the SAME physical localizer course, just a
+    different needle) used to be treated as "a different mode/needle: start
+    over" - wiping the wind-drift trim and restarting the whole INTERCEPT->
+    CAP->CAP SOFT timeline right at the most course-sensitive point of the
+    approach, which combined with a real navdata bug (F74) to send the
+    autopilot violently off course. With both fixed, a small/centred needle
+    on the new source keeps the established trim and capture stage instead
+    of resetting."""
+    ap = Autopilot()
+    ap.press_ap()
+    ap.press_apr()
+    kw = dict(dt=1.0, gps_course_deg=None, vloc_is_loc=True)
+    own = Own(heading=224.0)
+    for _ in range(60):                      # fly it established, long enough to build trim
+        ap.update(Nav(dtk=224.0, xtk=0.0, cdi_source="GPS", cdi_scale_nm=0.3), own, 0.0, **kw)
+    assert ap.stage == "CAP SOFT"
+    ap._xtk_i = 0.6                          # simulate a real crosswind trim having built up
+    # the CDI auto-switches to VLOC; the new source reads nearly centred too
+    # (same physical course) - this must NOT reset the trim or the stage
+    cmd = ap.update(Nav(dtk=224.0, cdi_source="VLOC"), own, 0.0,
+                     vloc_course_deg=224.0, vloc_deflection=0.01, vloc_valid=True, **kw)
+    assert ap.stage == "CAP SOFT"
+    assert ap._xtk_i == pytest.approx(0.6, abs=0.05)         # trim carried over, not zeroed
+    assert cmd.heading == pytest.approx(224.0, abs=2.0)      # no violent swing off course
+
+
+def test_apr_source_switch_still_resets_on_a_genuinely_large_deviation():
+    """The F74 fix only skips the reset when the new source reads nearly
+    centred (a continuation of the same course under a different label). A
+    source switch landing on a full-scale needle is a genuinely different/
+    unestablished course and must still start a fresh, full-authority
+    intercept rather than applying the old (lower) captured-stage gain to a
+    100% deflection."""
+    ap = Autopilot()
+    ap.press_ap()
+    ap.press_apr()
+    own = Own(heading=90.0)
+    ap.update(Nav(dtk=90.0, xtk=0.0, cdi_source="GPS", cdi_scale_nm=0.3), own, 0.0,
+              dt=1.0, gps_course_deg=None, vloc_is_loc=True)
+    cmd = ap.update(Nav(dtk=90.0, cdi_source="VLOC"), own, 0.0, dt=1.0,
+                     vloc_course_deg=90.0, vloc_deflection=1.0, vloc_valid=True, vloc_is_loc=True)
+    assert ap.stage == "INTERCEPT"
+    assert cmd.heading == pytest.approx(90.0 + 45.0)          # POH sec.3.1.2 45 deg cut, not the CAP law
+
+
 def test_nav_press_again_engages_gpss():
     """S-TEC 55X POH sec.4.2.5: 'To enter the GPSS Mode, push the NAV button
     twice... To delete the GPSS function, push the NAV button again' - NAV

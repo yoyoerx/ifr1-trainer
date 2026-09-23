@@ -574,9 +574,31 @@ class Autopilot:
         always inside 100%..20% of full scale. At 15% deflection the course is captured
         (CAP), then authority steps down on the POH's timeline (`_RATE_FRAC`)."""
         a = abs(dev)
-        if src != self._src:                                # a different mode/needle: start over
+        mode = src.split("/", 1)[0]
+        if mode != self._src.split("/", 1)[0]:              # a genuinely different roll mode: start over
             self._reset_coupler()
-            self._src = src
+        elif src != self._src:
+            if a > _CAPTURE_FRAC:
+                # the new source's needle isn't anywhere near centred - a
+                # genuine fresh intercept (e.g. NAV switching from an
+                # on-course GPS leg to an unrelated, far-off VOR radial),
+                # not a continuation of the same course under a different
+                # label: start over properly.
+                self._reset_coupler()
+            else:
+                # same lateral mode, the new source reads nearly centred too
+                # - e.g. the ILS's automatic GPS->VLOC CDI switch near the
+                # FAF (F74), or a pilot's manual SWAP onto the same course.
+                # Keep the capture stage and the wind-drift trim built up so
+                # far - a full reset here was throwing both away at the
+                # single most course-sensitive moment of the approach. Only
+                # the low-level per-tick filters reinitialize cleanly
+                # against the new source's deflection units, which aren't
+                # directly comparable to the old source's; a genuine course
+                # change is still caught below.
+                self._dev_prev = None
+                self._closure = self._closure_peak = 0.0
+        self._src = src
         if (self._course_ref is not None and self.stage != "INTERCEPT"
                 and abs(norm180(course_deg - self._course_ref)) >= _COURSE_CHANGE_DEG):
             self.stage, self._cap_t = "CAP", 0.0            # p.3-5: new course >= 10 deg -> CAP
