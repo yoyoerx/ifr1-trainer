@@ -15,6 +15,37 @@ bug fixed against the Pilot's Guide/playtest feedback (F1–F35 so far) and is
 
 ---
 
+## Android port (started 2026-09-23, branch `feature/android-port`)
+
+Plan: `docs/ANDROID_PORT_PLAN.md`. Chaquopy hybrid (Kotlin/Compose shell +
+the existing Python brain unmodified), Octavi IFR-1 required for v1,
+landscape then portrait. First target device: Pixel 9.
+
+- [x] Plan doc written and decisions recorded (tech stack, IFR-1-required,
+      both orientations) — `docs/ANDROID_PORT_PLAN.md`.
+- [x] `androidbridge/` package: `TrainerSession` (thin `GpsNav` + `SimModel`
+      wrapper returning plain dicts) + `selftest.py` (the exact entry point
+      Kotlin's `BrainBridge.kt` calls) — pure Python, covered by
+      `tests/test_androidbridge.py`, runs under the normal desktop suite.
+- [x] `android/` Gradle/Kotlin project scaffold: Chaquopy wired to stage the
+      curated brain-module list from the repo root at build time (single
+      source of truth, no duplication), a Compose self-test screen, the
+      §3.6 draw-command-list contract shape (`DrawCommand.kt` +
+      `InstrumentCanvas.kt`, replay mechanism only — no real layout data
+      yet), an empty `UsbHidInput.kt` stub. **Unbuilt/unverified** — this
+      dev machine has no Android SDK/JDK 17/Gradle; see `android/README.md`
+      for exact status and prerequisites.
+- [ ] **Hard gate, do next**: open in Android Studio, sync, fix whatever
+      surfaces; confirm the self-test screen's `BrainBridge.selfTest()`
+      actually returns `"OK: ..."` on a device/emulator (§3.4 on-device
+      half). Then the real §3.1 spike — Pixel 9 + Octavi IFR-1 + USB-C OTG,
+      `adb shell dumpsys usb` / `getevent -lt` — the whole v1 scope (IFR-1
+      required) depends on this result.
+- [ ] Everything else in `ANDROID_PORT_PLAN.md` §6 (Phase 1 onward) waits on
+      that gate.
+
+---
+
 ## Current status (2026-09-19, 860 tests green)
 
 The trainer runs end to end on four layouts (`gps`, `steam`, `stack`,

@@ -36,7 +36,7 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["datasrc*", "navdata*", "faa2xp*"]
+include = ["datasrc*", "navdata*", "faa2xp*", "androidbridge*"]
 
 [tool.setuptools.package-data]
 "*" = ["assets/fonts/*", "assets/instruments/**/*", "assets/wmm/*"]
