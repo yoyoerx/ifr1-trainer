@@ -178,6 +178,51 @@ def test_airspace_alert_category_all_four_conditions():
     assert aw.alert_category(far_south, 180.0, 120.0) is None            # heading away: no condition at all
 
 
+def test_airspace_bbox_is_computed_once_and_near_rejects_cheaply():
+    from navdata.model import Airspace
+
+    square = (Point(40.0, -74.0), Point(40.0, -73.9), Point(40.1, -73.9), Point(40.1, -74.0))
+    aw = Airspace(ident="X", name="", cls="D", floor_ft=0, ceiling_ft=3000, rings=(square,))
+    assert aw.bbox == (40.0, 40.1, -74.0, -73.9)
+    assert aw.near(Point(40.05, -73.95), 5.0)          # inside the box
+    assert aw.near(Point(40.0, -74.5), 30.0)           # box + margin covers it
+    assert not aw.near(Point(0.0, 0.0), 5.0)           # nowhere close, even with a margin
+
+    empty = Airspace(ident="EMPTY", name="", cls="D", floor_ft=0, ceiling_ft=3000, rings=())
+    assert empty.bbox is None
+    assert empty.near(Point(0.0, 0.0), 5.0)            # no boundary data - never pre-filtered out
+
+
+def test_nearest_airspaces_bbox_prefilter_skips_distance_nm_on_far_records(monkeypatch):
+    """F62's Class B/C/D map overlay totals ~1300 records/~42k points
+    nationwide; a per-tick nearest-airspace scan (F63's alert check, every
+    gpsnav.update()) computing every one's boundary distance was a real
+    playtest CPU/framerate regression. `near()`'s O(1) bbox reject must
+    actually stop `distance_nm` from running on records nowhere close."""
+    from navdata.model import Airspace
+
+    d = NavDatabase()
+    near = Airspace(ident="NEAR", name="", cls="D", floor_ft=0, ceiling_ft=3000,
+                    rings=((Point(40.0, -74.0), Point(40.0, -73.9), Point(40.1, -73.9),
+                            Point(40.1, -74.0)),))
+    far = Airspace(ident="FAR", name="", cls="C", floor_ft=0, ceiling_ft=4000,
+                   rings=((Point(10.0, -74.0), Point(10.0, -73.9), Point(10.1, -73.9),
+                           Point(10.1, -74.0)),))
+    d.add_airspace(near)
+    d.add_airspace(far)
+    calls = []
+    orig = Airspace.distance_nm
+
+    def counting(self, pos):
+        calls.append(self.ident)
+        return orig(self, pos)
+
+    monkeypatch.setattr(Airspace, "distance_nm", counting)
+    result = d.nearest_airspaces(REF, 4, max_nm=25.0)
+    assert [aw.ident for aw in result] == ["NEAR"]
+    assert calls == ["NEAR"]                            # FAR never got the expensive call at all
+
+
 def test_airspace_time_to_entry_bounds():
     from navdata.model import Airspace
 

@@ -184,6 +184,37 @@ class Airspace:
     floor_ft: int | None       # None = unknown; 0 = surface
     ceiling_ft: int | None
     rings: tuple[tuple[Point, ...], ...] = ()
+    # (min_lat, max_lat, min_lon, max_lon) over every ring, computed once at
+    # construction - a cheap reject before the point-in-polygon/edge-distance
+    # math in `distance_nm`. Nationwide Class B/C/D totals ~42k boundary
+    # points (F62); without this, a per-tick nearest-airspace scan (every
+    # gpsnav.update() call, for the airspace-alert check, F63) walks all of
+    # them 30x/sec regardless of range - the trainer's actual perf bottleneck
+    # once that alert check shipped (playtest: CPU pegged, ~19-20 fps).
+    bbox: tuple[float, float, float, float] | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.bbox is not None:
+            return
+        pts = [p for ring in self.rings for p in ring]
+        if pts:
+            lats = [p.lat for p in pts]
+            lons = [p.lon for p in pts]
+            object.__setattr__(self, "bbox", (min(lats), max(lats), min(lons), max(lons)))
+
+    def near(self, pos: Point, margin_nm: float) -> bool:
+        """Cheap non-wrapping bounding-box test: could this airspace be
+        within ``margin_nm`` of ``pos``? False negatives only possible within
+        the box itself crossing the antimeridian (not a concern for any
+        Class B/C/D area in the continental US or Alaska outside the
+        westernmost Aleutians) - a deliberate trade for O(1) rejection."""
+        if self.bbox is None:
+            return True                  # no boundary data - don't filter it out
+        lat_pad = margin_nm / 60.0
+        lon_pad = lat_pad / max(math.cos(math.radians(pos.lat)), 0.1)
+        min_lat, max_lat, min_lon, max_lon = self.bbox
+        return (min_lat - lat_pad <= pos.lat <= max_lat + lat_pad
+                and min_lon - lon_pad <= pos.lon <= max_lon + lon_pad)
 
     def distance_nm(self, pos: Point) -> float:
         return distance_to_polygon_nm(pos, [list(r) for r in self.rings])
@@ -554,8 +585,15 @@ class NavDatabase:
 
     def nearest_airspaces(self, ref: Point, n: int = 4, *, max_nm: float | None = None):
         """By distance to the nearest boundary (``0.0`` when inside), not centroid - matches what a pilot cares
-        about ("Nearest Airspace" alerts on proximity to the boundary, p.121)."""
-        scored = sorted(((aw.distance_nm(ref), i), aw) for i, aw in enumerate(self.airspaces))
+        about ("Nearest Airspace" alerts on proximity to the boundary, p.121).
+
+        A ``max_nm`` bound also gates a cheap per-airspace bounding-box
+        reject (`Airspace.near`) before the expensive boundary-distance math
+        runs - with no bound (e.g. the Nearest Airspace Page browsing
+        unfiltered) every airspace is still scored, same as before."""
+        pool = ([aw for aw in self.airspaces if aw.near(ref, max_nm)]
+                if max_nm is not None else self.airspaces)
+        scored = sorted(((aw.distance_nm(ref), i), aw) for i, aw in enumerate(pool))
         if max_nm is not None:
             scored = [t for t in scored if t[0][0] <= max_nm]
         return [aw for _, aw in scored[:n]]

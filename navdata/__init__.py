@@ -55,7 +55,7 @@ __all__ = [
 
 CIFP_FILENAME = "FAACIFP18"
 # bump when the model / parser output shape changes so stale pickles are ignored
-_CACHE_SCHEMA = 7
+_CACHE_SCHEMA = 8   # Airspace gained a `bbox` field (perf fix, F62 follow-up) - stale pickles lack it
 
 
 def _cache_path(cdir: Path, cifp_path: Path, *, areas, comms: bool) -> Path:

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pygame
 
-from navmath import Point, arc_points, destination, great_circle_nm, initial_bearing, norm180, norm360
+from navmath import Point, arc_points, destination, great_circle_nm, initial_bearing, norm360
 from gpsnav import VARIANT_530
 import instruments as instr
 
@@ -2026,15 +2026,13 @@ class Renderer:
         # so a nationwide airspace list costs nothing once off-screen.
         db = getattr(sc, "db", None)
         if db is not None and getattr(db, "airspaces", None):
-            clat = max(math.cos(math.radians(own.pos.lat)), 0.1)
-            dlat = rng / 60.0 * 1.2
-            dlon = dlat / clat
+            # `Airspace.near` is an O(1) bounding-box reject (precomputed once
+            # at load) - walking every one of a nationwide list's boundary
+            # points here, every frame, was the map's share of a real
+            # playtest CPU/framerate regression (F62's ~42k total points).
             _AIRSPACE_COLOR = {"B": (60, 110, 220), "C": (200, 60, 190), "D": (60, 130, 210)}
             for aw in db.airspaces:
-                pts0 = aw.rings[0] if aw.rings else ()
-                if not pts0 or all(
-                    abs(p.lat - own.pos.lat) > dlat or abs(norm180(p.lon - own.pos.lon)) > dlon for p in pts0
-                ):
+                if not aw.rings or not aw.near(own.pos, rng * 1.2):
                     continue
                 col = _AIRSPACE_COLOR.get(aw.cls, (90, 90, 90))
                 for ring in aw.rings:

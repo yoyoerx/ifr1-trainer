@@ -1416,6 +1416,31 @@ down one row from "Select Approach?" landed on VTF (which jumps straight to the 
 would land on Activate Approach? (which goes to the IAF) - exactly backwards from what a pilot following the
 guide's own muscle memory would expect. Fixed: swapped to `[_PROC_ACT_APPR, _PROC_ACT_VTF]`.
 
+### F68 - Performance regression: nearest-airspace scan ran unbounded every simulation tick
+
+Playtest report: CPU pegged, framerate down to 19-20 fps, starting after F62/F63 (Class B/C/D airspace + the
+"Nearest Airspace" proximity alerts). Not a manual-fidelity finding - a straight performance bug introduced by
+those two.
+
+`gpsnav.update()` calls `_check_airspace_alerts()` **every tick, unconditionally, for every variant** (p.121-122's
+alert messages aren't WAAS-gated), which called `NavDatabase.nearest_airspaces(pos, 6, max_nm=lookahead_nm)`.
+That method scored *every* airspace in the database with `Airspace.distance_nm()` - full point-in-polygon plus
+per-edge distance math over every ring - before sorting and only then applying `max_nm`. With the real Class
+B/C/D dataset (1287 records, ~42,500 boundary points nationwide, F62), that's ~40.7 ms/call measured directly
+(`db.nearest_airspaces(pos, 6, max_nm=25.0)` against the cached 28-day cycle) - on its own already over an
+entire 33 ms/30 Hz frame budget, running once per tick on top of everything else the loop does. The Class B/C/D
+map overlay (`render._map`) had the same shape of bug: its per-frame declutter prefilter walked every point of
+every airspace's first ring to decide whether it was off-screen, instead of a cheap bounding-box test.
+
+Fixed by giving `Airspace` a `bbox` field (min/max lat/lon over all rings, computed once in `__post_init__`) and
+an O(1) `near(pos, margin_nm)` reject built from it. `nearest_airspaces()` now bbox-prefilters candidates before
+the expensive `distance_nm()` call whenever a `max_nm` bound is given (both call sites - the alert check and the
+Nearest Airspace Page - already pass one); the map overlay's prefilter calls the same `near()` instead of its own
+per-point loop. Measured: 1.25 ms/call after the fix, a ~33x improvement, comfortably inside the frame budget.
+Bumped `_CACHE_SCHEMA` (7 to 8) since `Airspace` gained a field - a pickle cached before this fix has no `bbox`
+attribute and raises `AttributeError` on first `near()` call otherwise (the same stale-cache hazard as prior
+schema bumps this session).
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a
