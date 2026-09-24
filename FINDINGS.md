@@ -1714,6 +1714,36 @@ test_flight_plan_page_scrolls_to_keep_the_cursor_visible`, plus a direct replay 
 command's exact plan+approach confirming the actual `CHANT` (last leg) becomes visible once
 scrolled to it.
 
+### F78 - Moving map: dinky airports cluttering the route, no chart symbols, NDBs never shown
+
+Reported directly ("on my course from PVD to KJFK, i see a lot of dinky airports... how does the
+530 handle it? and can we draw the standard symbols rather than just a dot?"). Checked the real
+Pilot's Guide (§2, "Map Setup," p.35-36) rather than guessing - this is a real, documented feature:
+airports are classified **Large** (runway > 8100 ft), **Medium** (runway > 5000 ft *or* has a
+control tower), **Small** (everything else), each independently shown/hidden and range-limited via
+the Map Page's Waypoint group settings; VORs, NDBs and intersections are separate toggleable groups
+too, plus a CLR-key quick-declutter cycle.
+
+Two real gaps against that: `main._nearby()` pulled the 6 nearest airports **regardless of size**
+(no classification at all) and explicitly passed `ndb=False` to `nearest_navaids`, so **NDBs never
+appeared on the map at all** even though `NavDatabase.nearest_navaids` already supports including
+them. The map then drew every airport/navaid as an identical plain dot - no VOR compass-rose, no
+NDB ring, no size distinction for airports.
+
+**Fix:** `Airport.size_class` (navdata/model.py) classifies per the manual's exact Large/Medium/
+Small definition. `main._nearby()` now applies a per-class range cap - Large always shown, Medium
+out to 60 nm, Small only within 15 nm (the manual doesn't publish its factory-default RNG values,
+a pilot-configurable setting on the real unit, not a fixed constant - these are the trainer's own
+reasonable choices) - and includes NDBs and VOR-DME/VORTAC-tagged navaids (`VhfNavaid.has_dme`).
+`render.py` gained `_draw_airport_symbol` (size-appropriate ringed dot), `_draw_vor_symbol`
+(compass-rose hexagon, boxed for a DME/TACAN-paired station), and `_draw_ndb_symbol` (ringed dot)
+replacing the uniform `pygame.draw.circle(..., 2)` for every "nearby" fix. Distinguishing a
+VORTAC's own TACAN shield from a plain VOR-DME's box needs a finer read of the raw ARINC facility
+class than `has_dme` gives, so both currently draw the same (documented in the code, not silently
+approximated). `tests/test_navdata_query.py::test_airport_size_class_matches_the_map_setup_page_definition`,
+`tests/test_render.py::test_nearby_declutters_small_airports_and_includes_ndb_vordme`, and
+`::test_map_draws_every_new_nearby_symbol_kind_without_error`.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

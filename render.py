@@ -92,6 +92,36 @@ def _pt_symbol_points(tip: Point, inbound_true: float, half_nm: float = 0.35) ->
     return [left, tip, right]
 
 
+def _draw_vor_symbol(surf, x: int, y: int, color, *, dme: bool = False, r: int = 5) -> None:
+    """The moving map's VOR symbol - a compass-rose hexagon (sectional-chart
+    shorthand), with a small inset box for a DME/TACAN-paired station
+    (VOR-DME or VORTAC - both drawn the same at this scale)."""
+    pts = [(x + r * math.cos(math.radians(60 * i - 90)),
+            y + r * math.sin(math.radians(60 * i - 90))) for i in range(6)]
+    pygame.draw.polygon(surf, color, pts, 1)
+    if dme:
+        s = max(2, round(r * 0.5))
+        pygame.draw.rect(surf, color, (x - s, y - s, s * 2, s * 2), 1)
+
+
+def _draw_ndb_symbol(surf, x: int, y: int, color, *, r: int = 4) -> None:
+    """The moving map's NDB symbol - an open circle with a centre dot
+    (a simplified stand-in for the sectional-chart ring of broadcast dots)."""
+    pygame.draw.circle(surf, color, (x, y), r, 1)
+    pygame.draw.circle(surf, color, (x, y), 1)
+
+
+def _draw_airport_symbol(surf, x: int, y: int, color, size_class: str) -> None:
+    """The moving map's airport symbol, sized by `Airport.size_class`
+    (Pilot's Guide p.36) rather than a uniform dot regardless of size -
+    Large/Medium get a filled centre dot inside the ring, Small a plain
+    outline."""
+    r = {"large": 6, "medium": 4}.get(size_class, 2)
+    pygame.draw.circle(surf, color, (x, y), r, 1)
+    if size_class in ("large", "medium"):
+        pygame.draw.circle(surf, color, (x, y), 1)
+
+
 def _fpl_tag(wp) -> str:
     """Short procedure annotation for a flight-plan waypoint (GNS Table 3-2)."""
     if getattr(wp, "is_map", False):
@@ -2149,14 +2179,31 @@ class Renderer:
         if dto is not None:
             pygame.draw.line(self.surf, MAGENTA, (cx, cy), project(dto.target.pos), 2)
 
-        # nearby fixes - dot always, label only if it fits clear
+        # nearby fixes - real chart-style symbols per kind (airport size
+        # class, VOR/VOR-DME, NDB), label only if it fits clear. `kind` is
+        # `_nearby`'s tag: "apt_large"/"apt_medium"/"apt_small", "vor",
+        # "vordme" (VOR-DME or VORTAC - both draw the same box-in-hexagon;
+        # distinguishing a VORTAC's own TACAN shield from a VOR-DME's plain
+        # DME box needs a finer read of the raw ARINC facility class than
+        # `has_dme` gives), or "ndb".
         for ident, p, kind in getattr(sc, "nearby", []):
             sp = project(p)
             if not rect.collidepoint(sp):
                 continue
-            c = CYAN if kind == "navaid" else (DIM if kind == "wpt" else GPS_GREEN)
-            pygame.draw.circle(self.surf, c, sp, 2)
-            place(ident, sp[0] + 4, sp[1] - 6, c)
+            x, y = int(sp[0]), int(sp[1])
+            if kind.startswith("apt_"):
+                c = GPS_GREEN
+                _draw_airport_symbol(self.surf, x, y, c, kind[4:])
+            elif kind in ("vor", "vordme"):
+                c = CYAN
+                _draw_vor_symbol(self.surf, x, y, c, dme=kind == "vordme")
+            elif kind == "ndb":
+                c = CYAN
+                _draw_ndb_symbol(self.surf, x, y, c)
+            else:                                    # "wpt" or anything else - plain dot
+                c = DIM
+                pygame.draw.circle(self.surf, c, (x, y), 2)
+            place(ident, x + 4, y - 6, c)
 
         # ownship
         self._ownship_symbol(cx, cy)

@@ -1260,10 +1260,32 @@ def _on_stack_click(e, w: World, ui: dict, renderer) -> None:
         return
 
 
+# Enroute declutter for the moving map's "nearby" fixes: each airport size
+# class (Pilot's Guide p.36, `Airport.size_class`) only shows out to its own
+# range, same idea as the real unit's per-category Map Setup RNG field -
+# otherwise a route between two majors is wall-to-wall dinky private strips
+# at any reasonable enroute map scale. None = always shown. The manual
+# doesn't publish its factory-default RNG values (that's a pilot-configured
+# setting on the real unit, not a fixed constant); these are the trainer's
+# own reasonable choices, not a cited number.
+_MAP_APT_RANGE_NM = {"Large": None, "Medium": 60.0, "Small": 15.0}
+
+
 def _nearby(db, pos, rng):
-    out = [(a.ident, a.pos, "apt") for a in db.nearest_airports(pos, 6, max_nm=rng * 1.4)]
-    out += [(n.ident, n.pos, "navaid")
-            for n in db.nearest_navaids(pos, 8, max_nm=rng * 1.4, ndb=False)]
+    out = []
+    for a in db.nearest_airports(pos, 20, max_nm=rng * 1.4):
+        cap = _MAP_APT_RANGE_NM[a.size_class]
+        if cap is not None and great_circle_nm(a.pos, pos) > cap:
+            continue
+        out.append((a.ident, a.pos, f"apt_{a.size_class.lower()}"))
+        if len(out) >= 6:
+            break
+    for n in db.nearest_navaids(pos, 8, max_nm=rng * 1.4, ndb=True):
+        if hasattr(n, "freq_khz"):                          # NdbNavaid has no freq_mhz/has_dme
+            kind = "ndb"
+        else:
+            kind = "vordme" if getattr(n, "has_dme", False) else "vor"
+        out.append((n.ident, n.pos, kind))
     return out
 
 

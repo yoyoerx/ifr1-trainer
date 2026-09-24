@@ -140,6 +140,21 @@ class Airport:
     def distance_nm(self, other: Point) -> float:
         return great_circle_nm(self.pos, other)
 
+    @property
+    def size_class(self) -> str:
+        """"Large" / "Medium" / "Small" - the Map Setup page's own airport
+        classification (Pilot's Guide sec.2 p.36): "Large airports are those
+        with a runway longer than 8100 feet. Medium airports include those
+        with a runway longer than 5000 feet or with a control tower." Small
+        is everything else. Used to declutter the moving map the same way
+        the real unit's Waypoint group settings do."""
+        rwy = self.longest_runway_ft or 0
+        if rwy > 8100:
+            return "Large"
+        if rwy > 5000 or "TWR" in self.comms:
+            return "Medium"
+        return "Small"
+
     def comm(self, *uses: str) -> float | None:
         """First frequency for any of the given comm uses (e.g. ``comm("TWR")``)."""
         for u in uses:

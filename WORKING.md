@@ -245,6 +245,17 @@ Pilot-selectable intercept angle (R9), control-wheel steering, yaw damper: not w
 
 ## Done log
 
+- **2026-09-24** — F78: moving map declutter + real symbols (requested
+  directly: too many small airports cluttering a PVD->KJFK route).
+  Checked the real Pilot's Guide's Map Setup page (p.35-36, a real
+  documented feature: Large/Medium/Small airport classes, separate VOR/
+  NDB groups, per-category range limits). Added `Airport.size_class`,
+  reworked `main._nearby()` to range-cap by size class and include NDBs
+  (previously `ndb=False` - never shown at all) and VOR-DME/VORTAC
+  navaids, and added real symbol-drawing (`_draw_airport_symbol`,
+  `_draw_vor_symbol` compass-rose hexagon, `_draw_ndb_symbol` ring)
+  replacing the uniform dot. 1059 tests pass.
+
 - **2026-09-24** — F77: the Flight Plan page never scrolled past its
   first screenful (reported directly: `--plan "KBOS PVD KJFK" --approach
   "KJFK I22R"`, a 15-waypoint plan on the 530W's ~11-row screen - the

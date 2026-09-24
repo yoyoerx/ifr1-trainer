@@ -341,6 +341,51 @@ def test_draw_flight_plan_page(db):
     Renderer(pygame.display.get_surface()).draw(sc)
 
 
+def test_nearby_declutters_small_airports_and_includes_ndb_vordme(db):
+    """F78 (requested directly: "a lot of dinky airports" cluttering a PVD ->
+    KJFK route). `main._nearby` used to pull the 6 nearest airports
+    regardless of size and explicitly excluded NDBs (`ndb=False`) - now it
+    classifies by `Airport.size_class` (Pilot's Guide p.36) and only shows
+    Small airports within their own, tighter range, and includes NDBs and
+    VOR-DME/VORTAC-tagged navaids too."""
+    from navdata.model import NdbNavaid
+    d = NavDatabase(source="test")
+    d.add_airport(Airport("KBIG", Point(40.0, -74.0), longest_runway_ft=10000))   # 0 nm, Large
+    d.add_airport(Airport("KFAR", Point(40.0, -73.6), longest_runway_ft=2000))    # ~28 nm, Small, far
+    d.add_airport(Airport("KNER", Point(40.02, -74.0), longest_runway_ft=2000))   # ~1.2 nm, Small, close
+    d.add_vhf(VhfNavaid("VOR1", Point(40.1, -74.0), 113.0, nav_class="V LW"))     # plain VOR
+    d.add_vhf(VhfNavaid("VDM1", Point(40.2, -74.0), 114.0, nav_class="VDHW"))     # VOR-DME
+    d.add_ndb(NdbNavaid("NDB1", Point(40.15, -74.0), 350.0))
+
+    nearby = main_mod._nearby(d, Point(40.0, -74.0), 20.0)
+    by_ident = {ident: kind for ident, _, kind in nearby}
+    assert by_ident["KBIG"] == "apt_large"
+    assert by_ident["KNER"] == "apt_small"           # close enough - still shown
+    assert "KFAR" not in by_ident                    # small and far - decluttered
+    assert by_ident["VOR1"] == "vor"
+    assert by_ident["VDM1"] == "vordme"
+    assert by_ident["NDB1"] == "ndb"                 # NDBs no longer excluded outright
+
+
+def test_map_draws_every_new_nearby_symbol_kind_without_error(db):
+    """Smoke test for the new symbol-drawing dispatch (airport size classes,
+    VOR/VOR-DME hexagons, NDB rings) - each kind must render without raising
+    and actually put pixels on screen, not silently fall through to nothing."""
+    import dataclasses
+    sc = _scene(db)
+    sc = dataclasses.replace(sc, nearby=[
+        ("BIG", destination(sc.own.pos, 10.0, 3.0), "apt_large"),
+        ("MED", destination(sc.own.pos, 30.0, 3.0), "apt_medium"),
+        ("SML", destination(sc.own.pos, 50.0, 3.0), "apt_small"),
+        ("VOR", destination(sc.own.pos, 70.0, 3.0), "vor"),
+        ("VDM", destination(sc.own.pos, 90.0, 3.0), "vordme"),
+        ("NDB", destination(sc.own.pos, 110.0, 3.0), "ndb"),
+    ])
+    surf = pygame.display.get_surface()
+    Renderer(surf).draw(sc)
+    assert (pygame.surfarray.array2d(surf) != 0).sum() > 5000
+
+
 def test_flight_plan_page_scrolls_to_keep_the_cursor_visible(db, monkeypatch):
     """Reported directly: a long flight plan (KBOS PVD KJFK plus the KJFK
     I22R approach's legs) never showed its later waypoints on the Flight

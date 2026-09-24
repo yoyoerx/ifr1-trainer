@@ -61,6 +61,21 @@ def test_nearest_airports(db):
     assert _idents(db.nearest_airports(REF, max_nm=100)) == ["K001", "K002"]  # K003 far
 
 
+def test_airport_size_class_matches_the_map_setup_page_definition():
+    """Pilot's Guide sec.2 p.36: "Large airports are those with a runway
+    longer than 8100 feet. Medium airports include those with a runway
+    longer than 5000 feet or with a control tower." (F78)"""
+    assert Airport("BIG", REF, longest_runway_ft=8101).size_class == "Large"
+    assert Airport("MED_RWY", REF, longest_runway_ft=5001).size_class == "Medium"
+    assert Airport("MED_TWR", REF, longest_runway_ft=1000,
+                   comms={"TWR": [118.1]}).size_class == "Medium"
+    assert Airport("SML", REF, longest_runway_ft=3000).size_class == "Small"
+    assert Airport("NORWY", REF).size_class == "Small"              # no runway data at all
+    # exactly at the threshold is NOT "longer than" it
+    assert Airport("EXACT8100", REF, longest_runway_ft=8100).size_class == "Medium"
+    assert Airport("EXACT5000", REF, longest_runway_ft=5000).size_class == "Small"
+
+
 def test_nearest_waypoints(db):
     assert _idents(db.nearest_waypoints(REF, n=1)) == ["WPT1"]
 
