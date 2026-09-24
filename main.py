@@ -457,7 +457,9 @@ class World:
             mv = self.feed.magvar_deg
             if mv is not None:
                 self.magvar = mv
-            self.radios.resolve(self.db, st.pos, st.altitude_ft)
+            self.radios.resolve(self.db, st.pos, st.altitude_ft,
+                                nav1_prefer_ident=self.gns.approach_ref,
+                                nav2_prefer_ident=self.gns2.approach_ref if self.gns2 else "")
             nav = self.gns.update(st.pos, st.track_deg, st.gs_kt, dt)
             self._auto_vloc(nav)
             self._apply_tunes()
@@ -474,7 +476,9 @@ class World:
             return Frame(st, nav, panel, n1, n2, sp, self._panel2(own_i))
 
         st = self.sim.state
-        self.radios.resolve(self.db, st.pos, st.altitude_ft)
+        self.radios.resolve(self.db, st.pos, st.altitude_ft,
+                            nav1_prefer_ident=self.gns.approach_ref,
+                            nav2_prefer_ident=self.gns2.approach_ref if self.gns2 else "")
         nav = self.gns.update(st.pos, st.track_deg, st.gs_kt, dt)
         self.gns.check_course_select(self._gps_pointer(), self.magvar)
         self._auto_vloc(nav)

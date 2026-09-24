@@ -245,6 +245,21 @@ Pilot-selectable intercept angle (R9), control-wheel steering, yaw damper: not w
 
 ## Done log
 
+- **2026-09-23** — F75: a randomized closed-loop validation sweep of ILS
+  approaches at major-metro airports (requested directly, follow-up to
+  F74) found one more real bug: KIAD ILS 19L swung ~172° off course at
+  the CDI's GPS->VLOC switch. Root cause distinct from F74 - KIAD's
+  110.1 is shared between the two ENDS of the same runway (ISGC/RW19L
+  and IIAD/RW01R, exact reciprocals, standard FAA practice), which are
+  too close to geometry to disambiguate reliably; ordinary track noise
+  flipped the pick mid-approach. Fixed by threading `GpsNav.
+  approach_ref` through as a `prefer_ident` hint into
+  `RadioReceiver.resolve`/`RadioStack.resolve`, so the GNS's own known
+  station always wins over a closer/marginally-better-aligned
+  reciprocal-end station. A 28-approach sweep (8 + a follow-up 20)
+  across major airports nationwide is clean after the fix. 1054 tests
+  pass.
+
 - **2026-09-23** — F74: KJFK ILS/LOC 22R playtest report ("aircraft way
   right chasing the needle, then shoots way left"), reproduced headlessly
   with a real closed-loop `World`/`SimModel` run rather than guessed at.

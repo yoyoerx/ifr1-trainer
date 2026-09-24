@@ -349,6 +349,60 @@ def test_resolve_prefers_the_full_ils_record_at_a_second_real_airport():
     assert n._station.runway_ident == "RW23"
 
 
+def test_resolve_prefers_the_gns_expected_station_on_a_reciprocal_runway_pair():
+    """F75 (validation sweep: random approaches at major-metro airports,
+    KIAD ILS 19L flagged a ~172 deg autopilot heading swing). The most
+    common real-world frequency-sharing case isn't F74's parallel-runway
+    oddity - it's one frequency shared between the two ENDS of the SAME
+    runway (a standard, intentional FAA setup; only one end is ever really
+    "on the air" at a time in reality, which this trainer's static navdata
+    doesn't model). Real KIAD 110.1 numbers: ISGC (RW19L, course 190.7) and
+    IIAD (RW01R, course 10.7, its exact reciprocal) sit almost exactly on
+    the same physical line, so beam-alignment error alone can't reliably
+    tell them apart - ordinary wind-drift noise in the aircraft's track was
+    enough to make IIAD read (very slightly) better-aligned AND closer
+    mid-approach, snapping the CDI onto the reciprocal course outright.
+    Real geometry can't fully resolve this; what actually disambiguates it
+    is the GNS's own knowledge of which station it staged the frequency
+    for (`GpsNav.approach_ref`), threaded through as `prefer_ident` - that
+    must win outright even when the other candidate is closer and (very
+    slightly) better aligned."""
+    d = NavDatabase(source="test")
+    apt = Airport("KIAD", Point(38.94, -77.44), elev_ft=313, magvar_deg=-10.0)
+    apt.runways["RW19L"] = Runway("RW19L", Point(38.955331, -77.435975), 191.0, length_ft=11500)
+    apt.runways["RW01R"] = Runway("RW01R", Point(38.923756, -77.436447), 11.0, length_ft=11500)
+    d.add_airport(apt)
+    d.add_vhf(VhfNavaid("ISGC", Point(38.919947, -77.436506), 110.1, nav_class="ILSW",
+                        loc_bearing_deg=190.7, runway_ident="RW19L", airport_ident="KIAD"))
+    d.add_vhf(VhfNavaid("IIAD", Point(38.958575, -77.435925), 110.1, nav_class="ILSW",
+                        loc_bearing_deg=10.7, runway_ident="RW01R", airport_ident="KIAD"))
+
+    # ~9nm out on 19L's final, nudged 0.05nm off the exact centreline (the
+    # kind of ordinary track noise a real crosswind-corrected approach has)
+    # - just enough for IIAD to read very slightly better-aligned AND closer
+    # than ISGC, flipping the pick to the wrong (reciprocal) station without
+    # a hint. `bearing_deg` is magnetic (navdata/model.py); navmath's
+    # destination()/reciprocal() work in true, hence the magvar conversion.
+    true_course = norm360(191.0 - 10.0)              # magnetic runway heading -> true (magvar -10)
+    base = destination(Point(38.955331, -77.435975), reciprocal(true_course), 9.0)
+    on_19l_final = destination(base, norm360(true_course + 90.0), 0.05)
+
+    unhinted = NavReceiver(active_mhz=110.1)
+    unhinted.resolve(d, on_19l_final)
+    assert unhinted._station.ident == "IIAD"                 # the (wrong) geometry-only pick
+
+    hinted = NavReceiver(active_mhz=110.1)
+    hinted.resolve(d, on_19l_final, prefer_ident="ISGC")
+    assert hinted._station.ident == "ISGC"                   # the GNS-expected station wins
+    assert hinted.loc_course_deg == pytest.approx(190.7)
+
+    # once locked onto the expected station, later hysteresis re-resolves
+    # (e.g. the aircraft moving further) must not un-pick it either
+    closer_still = destination(Point(38.955331, -77.435975), reciprocal(true_course), 6.0)
+    hinted.resolve(d, closer_still, prefer_ident="ISGC")
+    assert hinted._station.ident == "ISGC"
+
+
 # --------------------------------------------------------------------------- #
 # transponder
 # --------------------------------------------------------------------------- #

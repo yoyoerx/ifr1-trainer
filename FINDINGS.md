@@ -1622,6 +1622,41 @@ separate real bugs, both landing right at the GNS's automatic GPS->VLOC CDI swit
 With both fixed, the same closed-loop repro holds `xtk` within ~0.02 nm of centerline through the
 CDI switch and all the way to the MAP, no oscillation.
 
+### F75 - Validation sweep: random approaches at major-metro airports, KIAD ILS 19L still swung ~172°
+
+Requested directly ("select a few approaches at random from the major metropolitan areas airports
+and perform validation on them"). Built a randomized closed-loop `World`/`SimModel` sweep (real
+CIFP data, a stiff crosswind, `NAV/APR` engaged, each approach flown from ~6 nm before its FAF
+through the CDI's GPS->VLOC auto-switch) rather than eyeballing individual approaches. 7 of an
+initial random 8 (KIAH, KSFO, KJFK, KTPA, KATL, KBNA, KSAN) were clean post-F74; **KIAD ILS 19L**
+still produced a ~172° autopilot heading swing and a 0.28 nm cross-track excursion right at the
+switch. A follow-up 20-approach sweep across 20 more major airports found no further cases.
+
+Root cause is distinct from F74's two items: KIAD's 110.1 MHz is shared between **ISGC** (RW19L,
+course 190.7°) and **IIAD** (RW01R, course 10.7°) - the two ends of the *same* 11,500 ft runway, an
+intentional, completely standard FAA setup (a runway with an ILS in both directions typically
+shares one frequency, since only the active-direction installation is ever really "on the air" in
+reality). Unlike F74's two items, both records here are complete and legitimate; F74's
+beam-alignment fix can't meaningfully separate them because their courses are exact reciprocals on
+almost exactly the same physical line. Ordinary wind-drift noise in the aircraft's simulated track
+was enough to make the *wrong* end read a hair better-aligned and closer mid-approach, snapping the
+CDI onto the reciprocal course outright. No amount of RF-geometry refinement can fully solve this -
+both readings are genuinely, if fleetingly, "valid" from pure geometry.
+
+**Fix:** what actually disambiguates it is knowing which station the GNS itself expects for the
+approach it staged the frequency for - already tracked as `GpsNav.approach_ref` (e.g. `"ISGC"`).
+Threaded through as a new `prefer_ident` parameter: `NavReceiver.resolve` / `RadioStack.resolve`
+now take it, and `main.World.tick` passes `self.gns.approach_ref` (and `self.gns2.approach_ref` in
+`--dual`) on every call. `resolve`'s selection key gained a component for it -
+`(no published course, not the GNS-expected station, beam-alignment error, distance)` - so the
+expected station wins outright over a closer/marginally-better-aligned reciprocal-end station, the
+same way "has real course data" already overrides raw distance in F74. `prefer_ident` defaults to
+`""` (no preference) everywhere it isn't explicitly passed, so plain VOR/manual tuning is unaffected.
+`tests/test_radios.py::test_resolve_prefers_the_gns_expected_station_on_a_reciprocal_runway_pair`
+(unit level, real KIAD numbers) and
+`tests/test_render.py::test_world_tick_threads_the_expected_station_through_to_radios_resolve`
+(end-to-end through `World.tick`, confirming `main.py` actually wires the hint through).
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

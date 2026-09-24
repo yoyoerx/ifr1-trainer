@@ -115,6 +115,7 @@ class NavReceiver:
     _resolved_freq: float | None = field(default=None, repr=False)
     _resolved_pos: Point | None = field(default=None, repr=False)
     _resolved_alt: float | None = field(default=None, repr=False)
+    _resolved_prefer_ident: str = field(default="", repr=False)
     _station: object = field(default=None, repr=False)   # the bound VhfNavaid
 
     # -- tuning -----------------------------------------------------
@@ -158,7 +159,8 @@ class NavReceiver:
         return self.gs_ref is not None
 
     # -- binding to nav data -------------------------------------
-    def resolve(self, db, ac_pos: Point, ac_alt_ft: float = 1500.0) -> None:
+    def resolve(self, db, ac_pos: Point, ac_alt_ft: float = 1500.0, *,
+                prefer_ident: str = "") -> None:
         """Bind the active frequency to a *receivable* station, re-evaluated as
         the aircraft moves.
 
@@ -170,21 +172,27 @@ class NavReceiver:
         out of range or a decisively closer co-frequency station appears, so the
         receiver does not flicker at a service-volume edge but *does* pick up a
         new emitter when you fly into its area and time out when you leave.
+
+        ``prefer_ident``: the GNS's own expectation for the frequency it staged
+        (`GpsNav.approach_ref`, e.g. "ISGC" for a loaded ILS 19L) - see F75.
         """
         f = _round_khz(self.active_mhz)
         moved = (self._resolved_pos is None
                  or great_circle_nm(ac_pos, self._resolved_pos) > _RESOLVE_MOVE_NM)
         alt_changed = (self._resolved_alt is None
                        or abs(ac_alt_ft - self._resolved_alt) > _RESOLVE_ALT_FT)
-        if f == self._resolved_freq and not moved and not alt_changed:
+        if (f == self._resolved_freq and not moved and not alt_changed
+                and prefer_ident == self._resolved_prefer_ident):
             return
         self._resolved_freq, self._resolved_pos, self._resolved_alt = f, ac_pos, ac_alt_ft
+        self._resolved_prefer_ident = prefer_ident
 
-        # Sort key: (no published course, beam-alignment error, distance).
-        # Two things can make raw nearest-distance the wrong way to pick
-        # among several same-frequency candidates (F74, playtest: KJFK
-        # ILS/LOC 22R, autopilot violently swinging off course right as the
-        # CDI auto-switched to VLOC near the FAF):
+        # Sort key: (no published course, not the GNS-expected station,
+        # beam-alignment error, distance). Three things can make raw
+        # nearest-distance the wrong way to pick among several same-
+        # frequency candidates (F74/F75, playtest: KJFK and KIAD ILS/LOC,
+        # autopilot violently swinging off course right as the CDI
+        # auto-switched to VLOC near the FAF):
         #
         # 1. An airport's ILS often appears twice under the same ident+
         #    frequency - once as the real Section P·I precision-approach
@@ -203,24 +211,40 @@ class NavReceiver:
         #    here) is deliberately generous per-station (front *or* back, to
         #    admit a genuine back-course approach to *that* station), so both
         #    can pass it independently - but the aircraft's alignment with
-        #    the beam it is actually flying is always far tighter than with
-        #    an unrelated station's, so ranking by that error picks the right
-        #    one the way real beam geometry would, instead of by which
-        #    antenna happens to sit a few tenths of a mile closer.
+        #    the beam it is actually flying is (almost always) far tighter
+        #    than with an unrelated station's, so ranking by that error picks
+        #    the right one instead of by which antenna sits a few tenths of a
+        #    mile closer.
+        # 3. F75 (playtest validation sweep, KIAD ILS 19L): the *most common*
+        #    real-world case - one frequency shared between the two ends of
+        #    the SAME runway (19L's ISGC and 01R's IIAD both on 110.1, an
+        #    intentional, standard FAA setup; only one end is ever really "on
+        #    the air" at a time in reality, which this trainer's static
+        #    navdata doesn't model). Both stations sit almost exactly on the
+        #    same physical line, so #2's alignment check can't meaningfully
+        #    tell them apart - small, ordinary wind-drift noise in the
+        #    aircraft's track was enough to flip which one read (very
+        #    slightly) better aligned mid-approach, snapping the CDI onto the
+        #    *reciprocal* course outright. Real geometry can never fully
+        #    solve this (both readings are genuinely, if fleetingly, valid);
+        #    what actually disambiguates it is knowing which station the GNS
+        #    itself is expecting for the approach it staged this frequency
+        #    for - so that always wins outright when it's a candidate.
         def _key(n, ac_pos):
             d = great_circle_nm(n.pos, ac_pos)
+            not_expected = bool(prefer_ident) and n.ident != prefer_ident
             if not _is_localizer(n):
-                return (False, 0.0, d)
+                return (False, not_expected, 0.0, d)
             brg = getattr(n, "loc_bearing_deg", None)
             if brg is None:
-                return (True, 0.0, d)
+                return (True, not_expected, 0.0, d)
             apt = db.airport(getattr(n, "airport_ident", "") or "")
             on_course = norm360(brg + (apt.magvar_deg if apt is not None else 0.0))
             off = abs(angle_diff(initial_bearing(n.pos, ac_pos), on_course))
             align_err = min(off, 180.0 - off)
-            return (False, align_err, d)
+            return (False, not_expected, align_err, d)
 
-        best, best_key = None, (True, 0.0, 1e9)
+        best, best_key = None, (True, True, 0.0, 1e9)
         for lst in db.vhf.values():
             for n in lst:
                 if abs(n.freq_mhz - f) >= 0.005:
@@ -235,12 +259,12 @@ class NavReceiver:
         if (cur is not None and abs(cur.freq_mhz - f) < 0.005
                 and _receivable(db, cur, ac_pos, ac_alt_ft, hysteresis=True)):
             cur_key = _key(cur, ac_pos)
-            # a strictly better `best` (real course data / more tightly
-            # beam-aligned than `cur`) always wins, no hysteresis; otherwise
-            # stay locked to `cur` unless `best` is decisively closer at the
-            # same quality
-            better = best is not None and best_key[:2] < cur_key[:2]
-            if not better and (best is None or best_key[2] >= cur_key[2] * 0.7):
+            # a strictly better `best` (real course data / the GNS-expected
+            # station / more tightly beam-aligned than `cur`) always wins, no
+            # hysteresis; otherwise stay locked to `cur` unless `best` is
+            # decisively closer at the same quality
+            better = best is not None and best_key[:3] < cur_key[:3]
+            if not better and (best is None or best_key[3] >= cur_key[3] * 0.7):
                 best, best_key = cur, cur_key
 
         self._station = best
@@ -329,9 +353,10 @@ class RadioStack:
     nav2: NavReceiver = field(default_factory=lambda: NavReceiver(108.00, 113.20))
     xpdr: Transponder = field(default_factory=Transponder)
 
-    def resolve(self, db, ac_pos: Point, ac_alt_ft: float = 1500.0) -> None:
-        self.nav1.resolve(db, ac_pos, ac_alt_ft)
-        self.nav2.resolve(db, ac_pos, ac_alt_ft)
+    def resolve(self, db, ac_pos: Point, ac_alt_ft: float = 1500.0, *,
+                nav1_prefer_ident: str = "", nav2_prefer_ident: str = "") -> None:
+        self.nav1.resolve(db, ac_pos, ac_alt_ft, prefer_ident=nav1_prefer_ident)
+        self.nav2.resolve(db, ac_pos, ac_alt_ft, prefer_ident=nav2_prefer_ident)
 
 
 # --------------------------------------------------------------------------- #

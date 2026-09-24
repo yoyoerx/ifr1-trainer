@@ -16,7 +16,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pygame  # noqa: E402
 
-from navmath import Point, destination, great_circle_nm, initial_bearing  # noqa: E402
+from navmath import Point, destination, great_circle_nm, initial_bearing, norm360, reciprocal  # noqa: E402
 from navdata.model import Airport, NavDatabase, Runway, VhfNavaid, Waypoint  # noqa: E402
 import gns530 as gns530_mod  # noqa: E402
 import gns430 as gns430_mod  # noqa: E402
@@ -1117,6 +1117,56 @@ def test_auto_vloc_never_auto_switches_cdi_on_a_vor_approach(db):
     w.radios.resolve(db, ac, 3000.0)
     w._auto_vloc(nav)
     assert w.gns.cdi_source == "GPS"                          # never auto-switched
+
+
+def test_world_tick_threads_the_expected_station_through_to_radios_resolve(db):
+    """F75 (validation sweep, KIAD ILS 19L: a ~172 deg autopilot heading
+    swing): the most common real-world frequency-sharing case is one
+    frequency shared between the two ENDS of the same runway (real KIAD
+    110.1 numbers below - ISGC/RW19L and IIAD/RW01R, exact reciprocals,
+    almost exactly collinear). Beam-alignment error alone can't reliably
+    tell them apart, and ordinary track noise can make the *wrong* one read
+    marginally better. This is an end-to-end check (through `World.tick`,
+    not `radios.py` directly) that main.py actually threads
+    `GpsNav.approach_ref` into `RadioStack.resolve` every tick, so the
+    loaded approach's own station wins regardless."""
+    from navdata.model import Airport, Runway, Procedure, ProcedureLeg, LegType
+    thr19l = Point(38.955331, -77.435975)
+    thr01r = Point(38.923756, -77.436447)
+    apt = Airport("KIAD", Point(38.94, -77.44), elev_ft=313, magvar_deg=-10.0)
+    apt.runways["RW19L"] = Runway("RW19L", thr19l, 191.0, length_ft=11500, ils_ident="ISGC")
+    apt.runways["RW01R"] = Runway("RW01R", thr01r, 11.0, length_ft=11500, ils_ident="IIAD")
+    db.add_airport(apt)
+    db.add_vhf(VhfNavaid("ISGC", Point(38.919947, -77.436506), 110.1, nav_class="ILSW",
+                         loc_bearing_deg=190.7, runway_ident="RW19L", airport_ident="KIAD"))
+    db.add_vhf(VhfNavaid("IIAD", Point(38.958575, -77.435925), 110.1, nav_class="ILSW",
+                         loc_bearing_deg=10.7, runway_ident="RW01R", airport_ident="KIAD"))
+    db.add_procedure(Procedure(
+        airport="KIAD", ident="I19L", kind="approach", route_type="I",
+        transitions={"": (
+            ProcedureLeg(10, LegType.IF, fix_ident="ALFA"),
+            ProcedureLeg(20, LegType.CF, fix_ident="BRAVO", is_faf=True),
+            ProcedureLeg(30, LegType.CF, fix_ident="RW19L", is_map=True),
+        )},
+    ))
+
+    w = _bare_world(db)
+    w.gns.load_procedure("KIAD", "I19L")
+    assert w.gns.approach_ref == "ISGC"
+    w.radios.nav1.standby_mhz = w.gns.approach_freq
+    w.radios.nav1.swap()                                       # pilot activates it
+
+    # same off-centreline point that flips a geometry-only pick to IIAD
+    # (test_resolve_prefers_the_gns_expected_station_on_a_reciprocal_runway_pair)
+    true_course = norm360(191.0 - 10.0)
+    base = destination(thr19l, reciprocal(true_course), 9.0)
+    ac = destination(base, norm360(true_course + 90.0), 0.05)
+    w.sim.pos = ac
+    w.sim.heading = true_course
+    w.gns.fpl.activate_leg(2)                                  # BRAVO (FAF) -> RW19L
+
+    w.tick(0.1)
+    assert w.radios.nav1.station_ident == "ISGC"               # not IIAD
 
 
 def test_route_event_ap_row_drives_autopilot_and_knobs(db):
