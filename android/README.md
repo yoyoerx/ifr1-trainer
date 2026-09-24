@@ -63,18 +63,30 @@ isolation, on this machine, today — the Android build is what's still owed.
   `DrawScope` needs a native `Paint`/`drawText` call for this that wasn't
   worth guessing at without being able to check font-metrics behavior
   against a running app).
-- `input/UsbHidInput.kt` — still deliberately empty (needs the Android
-  Studio build to write real Kotlin against). The §3.1 spike now *has* run
-  on real hardware — see `ANDROID_PORT_PLAN.md` §3.1 "Spike result
-  (2026-09-25)" for the confirmed `BTN_*`/`REL_DIAL` mapping this file
-  should implement: an `InputDevice` listener for every button + the outer
-  knob (works today, no raw USB code needed), plus an open question on the
-  inner knob (evdev sees nothing at all for it — needs `UsbManager.
-  claimInterface()` tried from an actual app to know if raw HID access is
-  possible once `usbhid` has already claimed the interface).
+- `input/UsbHidInput.kt` — real implementation now, written against the
+  §3.1 spike's confirmed hardware topology and `ifr1.py`'s own
+  hardware-confirmed byte layout (see `ANDROID_PORT_PLAN.md` §3.1 "Spike
+  result (2026-09-25)"). Deliberately does **not** use `InputDevice`/
+  `KeyEvent` even though buttons + the outer knob work that way for free —
+  the inner knob doesn't (the kernel's `usbhid` driver claims the HID
+  interface and silently drops whatever usage its field declares, since
+  its own default translation table has no entry for it), so this claims
+  the interface itself with `force = true` (detaching `usbhid` entirely,
+  the Android equivalent of what `hidapi` does implicitly on desktop) and
+  parses the same raw report every control comes through on, one code path
+  matching the desktop protocol exactly instead of splitting logic between
+  two different Android APIs. `Ifr1Mode`/`Ifr1State`/`Ifr1Event` mirror
+  `ifr1.py`'s `Mode`/`State`/`Event` field-for-field. **Unverified** —
+  written from real captured data but not yet compiled (no Android SDK/
+  Gradle in the authoring environment); whether `claimInterface(force =
+  true)` actually succeeds against a driver `usbhid` already holds is the
+  first thing the real build needs to prove.
 - `AndroidManifest.xml` — landscape-locked (§6 Phase 1 builds landscape
-  first), no USB-host feature/intent-filter declared yet (belongs here once
-  §3.1 resolves, not declared speculatively).
+  first); now declares `android.hardware.usb.host` (`required="true"`, IFR-1
+  is required for v1) and a `USB_DEVICE_ATTACHED` intent-filter (+
+  `res/xml/usb_device_filter.xml`, VID/PID) so the app launches and gets
+  USB permission auto-granted when the IFR-1 is plugged in with the app not
+  already running.
 
 ## Next steps, in order (matches `ANDROID_PORT_PLAN.md` §6 Phase 0)
 
@@ -93,13 +105,15 @@ isolation, on this machine, today — the Android build is what's still owed.
    inner knob produces **no evdev events at all** (confirmed twice, capture
    pipeline itself verified working both times) — open question, needs
    step 4 below.
-4. **Do next**: once Android Studio is synced (step 1) and a real build
-   exists on the phone, try `UsbManager.requestPermission()` +
-   `claimInterface()` against the IFR-1's HID interface specifically to see
-   whether raw report access is possible for the inner knob despite
-   `usbhid` already having claimed it for the working controls — `adb`
-   alone can't answer this, it needs code actually running as the app.
-   Write `input/UsbHidInput.kt` for the confirmed button/outer-knob path
-   either way; the inner knob's resolution (raw HID if claiming succeeds,
-   otherwise touch-only per §3.2, or a firmware ask to Octavi) follows from
-   this result.
+4. `input/UsbHidInput.kt` is now written (2026-09-25) — a raw-HID reader for
+   *every* control (not just the inner knob), `claimInterface(force = true)`
+   detaching `usbhid` entirely rather than splitting logic between
+   `InputDevice` and raw HID. **Do next**: once Android Studio is synced
+   (step 1), wire it into a real screen (or a quick standalone test harness)
+   and run it against the actual IFR-1 to prove two things `adb` alone
+   couldn't: (a) does `claimInterface(force = true)` actually succeed
+   against a driver `usbhid` already holds, and (b) does the resulting raw
+   report stream match `ifr1.py`'s `LAYOUT` byte-for-byte on this specific
+   unit. If claiming fails, the fallback path is `InputDevice`/`KeyEvent`
+   for buttons + the outer knob (still free) with the inner knob resolved
+   some other way (touch-only per §3.2, or a firmware ask to Octavi).

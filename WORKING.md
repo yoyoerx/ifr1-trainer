@@ -56,16 +56,26 @@ landscape then portrait. First target device: Pixel 9.
       inner knob produces zero evdev events**, confirmed twice with the
       capture pipeline itself verified working both times. Full writeup:
       `ANDROID_PORT_PLAN.md` §3.1 "Spike result".
+- [x] **`input/UsbHidInput.kt` written (2026-09-25)**: rather than split
+      logic between `InputDevice`/`KeyEvent` (buttons + outer knob) and a
+      separate raw-HID path (inner knob only), it claims the whole HID
+      interface with `force = true` (detaching `usbhid` entirely, same as
+      `hidapi` does implicitly on desktop) and decodes every control - mode,
+      all buttons, both knobs - through one code path mirroring `ifr1.py`'s
+      `Mode`/`State`/`Event`/`LAYOUT` field-for-field. Also added the
+      manifest's `usb.host` feature + `USB_DEVICE_ATTACHED` intent-filter +
+      `res/xml/usb_device_filter.xml` (VID/PID). **Unverified** - not yet
+      compiled, no Android SDK/Gradle here; the real build is what proves
+      `claimInterface(force = true)` actually succeeds on this device.
 - [ ] **Do next**: Android Studio sync (still not done - unblocked, doesn't
       need the phone); confirm the self-test screen's `BrainBridge
-      .selfTest()` returns `"OK: ..."` on the Pixel 9 (§3.4); then, from an
-      actual running build, try `UsbManager.claimInterface()` against the
-      IFR-1's HID interface to see whether raw access to the inner knob is
-      possible despite `usbhid` already claiming it for the working
-      controls - `adb` alone can't answer this. Write `input/UsbHidInput.kt`
-      for the confirmed button/outer-knob path regardless of that result.
+      .selfTest()` returns `"OK: ..."` on the Pixel 9 (§3.4); then wire
+      `UsbHidInput` into a real screen (or a small standalone test harness)
+      and run it against the actual IFR-1 - this is what actually proves or
+      disproves the forced-claim approach, `adb` alone can't test in-app
+      `UsbManager` permission/claim behavior.
 - [ ] Everything else in `ANDROID_PORT_PLAN.md` §6 (Phase 1 onward) waits on
-      the inner-knob resolution.
+      that result.
 
 ---
 

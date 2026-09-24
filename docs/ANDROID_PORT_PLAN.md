@@ -194,28 +194,32 @@ didn't quite anticipate:
   encoder reports, and `usbhid` silently drops report fields it doesn't
   recognize rather than exposing them as anything.
 
-**What this means for the plan:** buttons and the outer knob are the "ideal
-case" (§3.1 step 2) - a plain `InputDevice`/`KeyEvent`/`MotionEvent` listener,
-no raw USB code, no special permission. The inner knob is a scoped-down
-version of step 3/4: it enumerates and the HID interface is *claimed* by
-`usbhid` (the same driver responsible for the working translations above),
-which is normally exactly the condition that blocks a regular app's
-`UsbManager.claimInterface()` raw-HID fallback - but this can only be proven
-by actually trying it from a built app (`UsbManager.requestPermission()` +
-`claimInterface()`), which needs the Android Studio build/sync this spike
-was explicitly sequenced before. If claiming fails as expected, the FMS
-cursor/frequency-tuning UX (which needs *two* independent knob axes) has to
-either find another signal for the inner knob (a firmware/descriptor fix
-from Octavi would be the clean answer, since usbhid's table is fixed
-kernel-side and not something this app can extend without root) or design
-around only ever having one physical rotary input, leaning harder on touch
-for the inner-knob role (§3.2 already has to build touch knob emulation
-regardless, so this isn't new UI surface, just an earlier trigger to use it).
+**What this means for the plan:** rather than splitting logic across two
+Android APIs - `InputDevice`/`KeyEvent` for the "ideal case" (buttons +
+outer knob) and something else for the inner knob - the chosen direction
+is to claim the whole HID interface with `force = true`
+(`UsbDeviceConnection.claimInterface`), which detaches `usbhid` entirely
+(the Android equivalent of what `hidapi` does implicitly on desktop), and
+parse the raw report for *every* control through one code path matching
+`ifr1.py`'s protocol exactly. `android/app/.../input/UsbHidInput.kt` is now
+written against this design (2026-09-25) - `Ifr1Mode`/`Ifr1State`/
+`Ifr1Event` mirroring `ifr1.py`'s `Mode`/`State`/`Event` field-for-field,
+the same `LAYOUT` byte offsets, the same edge-triggered diff/long-press
+logic. **Unverified**: whether `claimInterface(force = true)` actually
+succeeds against a driver `usbhid` already holds for this device can only
+be proven by running it, which needs the Android Studio build/sync this
+spike was explicitly sequenced before. If claiming fails, the fallback is
+back to `InputDevice`/`KeyEvent` for buttons + the outer knob (still free)
+with the inner knob resolved separately - either a firmware/descriptor fix
+from Octavi (usbhid's table is fixed kernel-side, not something this app
+can extend without root) or leaning on touch for the inner-knob role (§3.2
+already has to build touch knob emulation regardless, so that's an earlier
+trigger to use it, not new UI surface).
 
-Until the raw-HID-claim question is answered from an actual built app,
-treat "IFR-1 support on Android v1" as **confirmed for buttons + outer
-knob, open for the inner knob** - closer to done than the original
-all-or-nothing framing, not fully closed out.
+Until `claimInterface(force = true)` is proven from a real build, treat
+"IFR-1 support on Android v1" as **buttons + outer knob confirmed, a
+written-but-unverified raw-HID path for the inner knob** - closer to done
+than the original all-or-nothing framing, not fully closed out.
 
 ### 3.2 Touch-only operation (no IFR-1 attached)
 

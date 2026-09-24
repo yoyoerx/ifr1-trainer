@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Matches the Octavi IFR-1 (ifr1.py: VID 0x04D8 / PID 0xE6D6, confirmed on
+real hardware via `dumpsys usb` in the §3.1 spike, decimal 1240/59094 -
+Android's <usb-device> resource takes decimal, not hex).
+
+Referenced from AndroidManifest.xml's USB_DEVICE_ATTACHED intent-filter:
+when a device matching this filter is plugged in, Android launches
+MainActivity directly AND auto-grants USB permission for it - no runtime
+permission dialog needed for the expected-hardware case. UsbHidInput still
+calls UsbManager.requestPermission() itself as a fallback for the case
+where the app is already running when the IFR-1 is attached (that path
+does need the dialog, same as any other USB-host Android app).
+-->
+<resources>
+    <usb-device vendor-id="1240" product-id="59094" />
+</resources>
