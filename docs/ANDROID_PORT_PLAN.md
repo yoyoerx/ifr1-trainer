@@ -137,8 +137,85 @@ maps this way is unknown and must be tested on real hardware, not assumed.
    Octavi for firmware/descriptor changes). Worth knowing early, not after
    months of otherwise-unrelated work.
 
-Until this spike runs, treat "IFR-1 support on Android v1" as **unconfirmed
-scope**, not a given — see the decision question at the end.
+**Spike result (2026-09-25), real Pixel 9 + real IFR-1 via USB-C OTG, over wireless adb:**
+
+Steps 0-1 ran for real. The picture is better than the worst case but not the
+clean "yes" either — a **partial, mixed result** the plan's four branches
+didn't quite anticipate:
+
+- `adb shell dumpsys usb` confirms the IFR-1 enumerates correctly: VID/PID
+  1240/59094 decimal = `0x04D8`/`0xE6D6` (matches `ifr1.py`), manufacturer
+  "Octavi", product "IFR1". It's a **composite** device (class 239, IAD):
+  interface 0+1 are CDC-ACM (a virtual serial port - unused by anything
+  we've tried so far), interface 2 is HID (class 3) with one interrupt-IN
+  endpoint.
+- `adb shell getevent -pl` shows the HID interface **is** claimed by the
+  kernel's `usbhid` driver and translated to a standard evdev joystick/
+  gamepad device: `/dev/input/eventN`, name **"Octavi IFR1"**, capabilities
+  `KEY` (many `BTN_*` codes), `REL` (`REL_DIAL` only), `MSC` (`MSC_SCAN`).
+- **Every button tested works** and maps cleanly to a `BTN_*` code, one
+  press each, unambiguous (HID Button-page usage number in `MSC_SCAN`,
+  decoded alongside):
+
+  | Button | HID usage | evdev code |
+  |---|---|---|
+  | DCT | 0x05 | `BTN_WEST` |
+  | MNU | 0x06 | `BTN_Z` |
+  | CLR | 0x07 | `BTN_TL` |
+  | ENT | 0x08 | `BTN_TR` |
+  | SWAP | 0x09 | `BTN_TL2` |
+  | KNOB (push) | 0x0a | `BTN_TR2` |
+  | AP (= CDI in FMS mode) | 0x0f | `BTN_THUMBR` |
+  | HDG (= OBS) | 0x10 | raw code `0x13f`, no evdev mnemonic |
+  | NAV (= MSG) | 0x11 | `BTN_TRIGGER_HAPPY` |
+  | APR (= FPL) | 0x12 | `BTN_TRIGGER_HAPPY2` |
+  | ALT (= VNAV) | 0x13 | `BTN_TRIGGER_HAPPY3` |
+  | VS (= PROC) | 0x14 | `BTN_TRIGGER_HAPPY4` |
+
+  (HID usages 0x0b-0x0e are unaccounted for - not a gap in testing, the
+  IFR-1 has no more distinct physical buttons than these per the user:
+  "the other 8 are not real buttons, they are mode specific" - matching
+  `main.py`'s own desktop AP-row dual-labeling, `AP=CDI, HDG=OBS, NAV=MSG,
+  APR=FPL, ALT=VNAV, VS=PROC`, already the documented desktop behavior.
+  There is also no dedicated RNG key - matches the real GNS bezel, range is
+  a knob function. Mode selector and `BTN_GAMEPAD`/`BTN_EAST`/`BTN_NORTH`/
+  `BTN_C`/`BTN_START`/`BTN_SELECT`/`BTN_MODE`/`BTN_THUMBL`/`BTN_TRIGGER_HAPPY5-16`
+  remain untested - out of controls to press without a mode selector on the
+  test unit, or genuinely unused HID usages.)
+- **The outer knob works** - `REL_DIAL` value `+1`/`-1` per detent,
+  confirmed repeatedly and reliably.
+- **The inner knob produces nothing at all** - confirmed with two separate
+  dedicated capture attempts (several clicks, then a couple of full
+  rotations), zero events of any kind, while the very same capture
+  correctly saw the outer knob moments later (ruling out a broken capture
+  session). The capability list only advertises one relative axis
+  (`REL_DIAL`), so this isn't a fluke of the test - the kernel's default
+  HID-usage-to-evdev table has no entry for whatever usage the inner knob's
+  encoder reports, and `usbhid` silently drops report fields it doesn't
+  recognize rather than exposing them as anything.
+
+**What this means for the plan:** buttons and the outer knob are the "ideal
+case" (§3.1 step 2) - a plain `InputDevice`/`KeyEvent`/`MotionEvent` listener,
+no raw USB code, no special permission. The inner knob is a scoped-down
+version of step 3/4: it enumerates and the HID interface is *claimed* by
+`usbhid` (the same driver responsible for the working translations above),
+which is normally exactly the condition that blocks a regular app's
+`UsbManager.claimInterface()` raw-HID fallback - but this can only be proven
+by actually trying it from a built app (`UsbManager.requestPermission()` +
+`claimInterface()`), which needs the Android Studio build/sync this spike
+was explicitly sequenced before. If claiming fails as expected, the FMS
+cursor/frequency-tuning UX (which needs *two* independent knob axes) has to
+either find another signal for the inner knob (a firmware/descriptor fix
+from Octavi would be the clean answer, since usbhid's table is fixed
+kernel-side and not something this app can extend without root) or design
+around only ever having one physical rotary input, leaning harder on touch
+for the inner-knob role (§3.2 already has to build touch knob emulation
+regardless, so this isn't new UI surface, just an earlier trigger to use it).
+
+Until the raw-HID-claim question is answered from an actual built app,
+treat "IFR-1 support on Android v1" as **confirmed for buttons + outer
+knob, open for the inner knob** - closer to done than the original
+all-or-nothing framing, not fully closed out.
 
 ### 3.2 Touch-only operation (no IFR-1 attached)
 

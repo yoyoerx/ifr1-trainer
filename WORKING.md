@@ -42,15 +42,30 @@ landscape then portrait. First target device: Pixel 9.
       verified (`adb shell getprop ...`). This was the prerequisite for
       running the §3.1 spike without the IFR-1's OTG adapter tying up the
       phone's only USB-C port — confirmed workable, not just planned.
-- [ ] **Hard gate, do next**: open `android/` in Android Studio, sync, fix
-      whatever surfaces; confirm the self-test screen's
-      `BrainBridge.selfTest()` actually returns `"OK: ..."` on the Pixel 9
-      over this same wireless connection (§3.4 on-device half). Then the
-      real §3.1 spike itself — plug in the Octavi IFR-1 via USB-C OTG,
-      `adb shell dumpsys usb` / `getevent -lt` while operating every
-      control — the whole v1 scope (IFR-1 required) depends on this result.
+- [x] **§3.1 hardware spike run (2026-09-25)**, real Pixel 9 + real IFR-1 +
+      USB-C OTG adapter, over the wireless adb connection above. Result:
+      **every button + the outer knob work as standard input** —
+      `/dev/input/eventN` shows up as a generic evdev gamepad, name
+      "Octavi IFR1", with a confirmed 1:1 `BTN_*` mapping for all 12
+      testable buttons (`DCT`→`BTN_WEST`, `MNU`→`BTN_Z`, `CLR`→`BTN_TL`,
+      `ENT`→`BTN_TR`, `SWAP`→`BTN_TL2`, `KNOB`→`BTN_TR2`,
+      `AP/CDI`→`BTN_THUMBR`, `HDG/OBS`→raw `0x13f`,
+      `NAV/MSG`→`BTN_TRIGGER_HAPPY`, `APR/FPL`→`_HAPPY2`,
+      `ALT/VNAV`→`_HAPPY3`, `VS/PROC`→`_HAPPY4`) and the outer knob as
+      `REL_DIAL` ±1/detent — no raw USB code needed for any of that. **The
+      inner knob produces zero evdev events**, confirmed twice with the
+      capture pipeline itself verified working both times. Full writeup:
+      `ANDROID_PORT_PLAN.md` §3.1 "Spike result".
+- [ ] **Do next**: Android Studio sync (still not done - unblocked, doesn't
+      need the phone); confirm the self-test screen's `BrainBridge
+      .selfTest()` returns `"OK: ..."` on the Pixel 9 (§3.4); then, from an
+      actual running build, try `UsbManager.claimInterface()` against the
+      IFR-1's HID interface to see whether raw access to the inner knob is
+      possible despite `usbhid` already claiming it for the working
+      controls - `adb` alone can't answer this. Write `input/UsbHidInput.kt`
+      for the confirmed button/outer-knob path regardless of that result.
 - [ ] Everything else in `ANDROID_PORT_PLAN.md` §6 (Phase 1 onward) waits on
-      that gate.
+      the inner-knob resolution.
 
 ---
 

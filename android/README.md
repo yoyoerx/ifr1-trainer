@@ -63,8 +63,15 @@ isolation, on this machine, today — the Android build is what's still owed.
   `DrawScope` needs a native `Paint`/`drawText` call for this that wasn't
   worth guessing at without being able to check font-metrics behavior
   against a running app).
-- `input/UsbHidInput.kt` — deliberately empty. Nothing here until the §3.1
-  spike runs on real hardware and its result is known.
+- `input/UsbHidInput.kt` — still deliberately empty (needs the Android
+  Studio build to write real Kotlin against). The §3.1 spike now *has* run
+  on real hardware — see `ANDROID_PORT_PLAN.md` §3.1 "Spike result
+  (2026-09-25)" for the confirmed `BTN_*`/`REL_DIAL` mapping this file
+  should implement: an `InputDevice` listener for every button + the outer
+  knob (works today, no raw USB code needed), plus an open question on the
+  inner knob (evdev sees nothing at all for it — needs `UsbManager.
+  claimInterface()` tried from an actual app to know if raw HID access is
+  possible once `usbhid` has already claimed the interface).
 - `AndroidManifest.xml` — landscape-locked (§6 Phase 1 builds landscape
   first), no USB-host feature/intent-filter declared yet (belongs here once
   §3.1 resolves, not declared speculatively).
@@ -77,20 +84,22 @@ isolation, on this machine, today — the Android build is what's still owed.
 2. Run the self-test screen on an emulator or device; confirm `BrainBridge
    .selfTest()` returns its `"OK: ..."` string rather than throwing —
    this is the on-device confirmation of §3.4.
-3. Run the actual §3.1 hardware spike: Pixel 9 + Octavi IFR-1 + USB-C OTG
-   adapter, `adb shell dumpsys usb` / `adb shell getevent -lt` while
-   operating every control. Write the result back into
-   `docs/ANDROID_PORT_PLAN.md` §3.1 and update `input/UsbHidInput.kt`
-   accordingly — this is the hard gate the whole v1 scope depends on.
-
-   The IFR-1 occupies the phone's only USB-C port, so run `adb` over Wi-Fi
-   for this: Developer options → Wireless debugging → "Pair device with
-   pairing code" (no prior USB connection needed), then
-   `adb pair <ip>:<port>` / `adb connect <ip>:<port>` from this machine.
-   Shell commands work the same over either transport. See
-   `ANDROID_PORT_PLAN.md` §3.1 step 0.
-
-   **Confirmed working (2026-09-25)** against the real Pixel 9: paired and
-   connected over Wi-Fi, `adb shell` verified live. Ready to plug in the
-   IFR-1 and run the actual spike whenever the hardware's in hand — nothing
-   about the wireless-adb setup itself is still open.
+3. ~~Run the actual §3.1 hardware spike~~ **Done (2026-09-25)**, real Pixel 9
+   + real IFR-1 + USB-C OTG adapter, over wireless adb (paired/connected
+   per below). Full result in `docs/ANDROID_PORT_PLAN.md` §3.1 "Spike
+   result" — short version: every button and the outer knob show up as a
+   standard evdev gamepad device (`/dev/input/eventN`, name "Octavi IFR1")
+   with a confirmed `BTN_*` mapping table, no raw USB code needed. The
+   inner knob produces **no evdev events at all** (confirmed twice, capture
+   pipeline itself verified working both times) — open question, needs
+   step 4 below.
+4. **Do next**: once Android Studio is synced (step 1) and a real build
+   exists on the phone, try `UsbManager.requestPermission()` +
+   `claimInterface()` against the IFR-1's HID interface specifically to see
+   whether raw report access is possible for the inner knob despite
+   `usbhid` already having claimed it for the working controls — `adb`
+   alone can't answer this, it needs code actually running as the app.
+   Write `input/UsbHidInput.kt` for the confirmed button/outer-knob path
+   either way; the inner knob's resolution (raw HID if claiming succeeds,
+   otherwise touch-only per §3.2, or a firmware ask to Octavi) follows from
+   this result.
