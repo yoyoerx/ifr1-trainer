@@ -32,9 +32,8 @@ landscape then portrait. First target device: Pixel 9.
       source of truth, no duplication), a Compose self-test screen, the
       §3.6 draw-command-list contract shape (`DrawCommand.kt` +
       `InstrumentCanvas.kt`, replay mechanism only — no real layout data
-      yet), an empty `UsbHidInput.kt` stub. **Unbuilt/unverified** — this
-      dev machine has no Android SDK/JDK 17/Gradle; see `android/README.md`
-      for exact status and prerequisites.
+      yet), `UsbHidInput.kt`. **Builds and runs on real hardware
+      (2026-09-24)** — see `android/README.md` for exact status.
 - [x] **Wireless debugging confirmed working (2026-09-25)**: paired and
       connected to the real Pixel 9 over Wi-Fi (`adb pair`/`adb connect`,
       §3.1 step 0) — `192.168.1.133:44523`, model `Pixel_9` (codename
@@ -64,16 +63,25 @@ landscape then portrait. First target device: Pixel 9.
       all buttons, both knobs - through one code path mirroring `ifr1.py`'s
       `Mode`/`State`/`Event`/`LAYOUT` field-for-field. Also added the
       manifest's `usb.host` feature + `USB_DEVICE_ATTACHED` intent-filter +
-      `res/xml/usb_device_filter.xml` (VID/PID). **Unverified** - not yet
-      compiled, no Android SDK/Gradle here; the real build is what proves
-      `claimInterface(force = true)` actually succeeds on this device.
-- [ ] **Do next**: Android Studio sync (still not done - unblocked, doesn't
-      need the phone); confirm the self-test screen's `BrainBridge
-      .selfTest()` returns `"OK: ..."` on the Pixel 9 (§3.4); then wire
-      `UsbHidInput` into a real screen (or a small standalone test harness)
-      and run it against the actual IFR-1 - this is what actually proves or
-      disproves the forced-claim approach, `adb` alone can't test in-app
-      `UsbManager` permission/claim behavior.
+      `res/xml/usb_device_filter.xml` (VID/PID). **Compiles cleanly
+      (2026-09-24)**, part of a real successful `assembleDebug` build.
+      Runtime behavior still unverified — not yet wired into a screen or run
+      against the real hardware, so whether `claimInterface(force = true)`
+      actually succeeds is still open.
+- [x] **Android Studio build + on-device self-test confirmed (2026-09-24)**:
+      fixed six real build-toolchain errors (Compose-compiler plugin
+      version, JDK/Gradle version chain, AGP-vs-Gradle-9 incompatibility,
+      a missing Gradle task dependency, a missing launcher icon resource —
+      see `android/README.md` "Status" and commit `1976a11` for the full
+      chain) and got `BUILD SUCCESSFUL`. Installed + launched the APK on the
+      real Pixel 9; self-test screen confirmed: `"OK: navmath/navdata/
+      gpsnav/sim_model/androidbridge imported and ticked -
+      to='BRAVO' pos=(39.9006,-74.0000)"` — §3.4 on-device confirmation
+      done, not just a documented plan.
+- [ ] **Do next**: wire `UsbHidInput` into a real screen (or a small
+      standalone test harness) and run it against the actual IFR-1 - this is
+      what actually proves or disproves the forced-claim approach, `adb`
+      alone can't test in-app `UsbManager` permission/claim behavior.
 - [ ] Everything else in `ANDROID_PORT_PLAN.md` §6 (Phase 1 onward) waits on
       that result.
 

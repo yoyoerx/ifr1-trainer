@@ -216,9 +216,14 @@ can extend without root) or leaning on touch for the inner-knob role (§3.2
 already has to build touch knob emulation regardless, so that's an earlier
 trigger to use it, not new UI surface).
 
-Until `claimInterface(force = true)` is proven from a real build, treat
-"IFR-1 support on Android v1" as **buttons + outer knob confirmed, a
-written-but-unverified raw-HID path for the inner knob** - closer to done
+The build/sync blocker this was sequenced behind is now cleared (2026-09-24,
+see §3.4) — `UsbHidInput.kt` compiles cleanly as part of a real
+`BUILD SUCCESSFUL`. What's still unproven is its *runtime* behavior: the
+file has not yet been wired into a screen and run against the real IFR-1, so
+whether `claimInterface(force = true)` actually succeeds against a driver
+`usbhid` already holds remains open. Until that's run, treat "IFR-1 support
+on Android v1" as **buttons + outer knob confirmed, a written-and-compiling
+but runtime-unverified raw-HID path for the inner knob** - closer to done
 than the original all-or-nothing framing, not fully closed out.
 
 ### 3.2 Touch-only operation (no IFR-1 attached)
@@ -264,6 +269,19 @@ Both need to stay faithful to the same GNS behavior/labels `FINDINGS.md`
 already validates; only the on-screen composition changes per orientation.
 
 ### 3.4 Chaquopy packaging of existing dependencies
+
+**Confirmed on real hardware (2026-09-24).** After fixing six real
+build-toolchain errors (see `android/README.md` "Status" and commit
+`1976a11`), `.\gradlew.bat :app:assembleDebug` produced a working APK,
+installed and launched on a real Pixel 9. The Phase 0 self-test screen
+showed: `"OK: navmath/navdata/gpsnav/sim_model/androidbridge imported and
+ticked - to='BRAVO' pos=(39.9006,-74.0000)"` — proof the curated brain
+module set (stdlib-only slice: `navmath.py`, `gpsnav.py`, `sim_model.py`,
+`navdata/`, `androidbridge/`) genuinely imports and runs correctly under
+Chaquopy on-device, not just in theory. The risk this section originally
+flagged as second-highest is resolved for the stdlib-only slice; the
+`pypdfium2`/PDF-rasterization question below remains open (not yet
+exercised — Phase 0's self-test doesn't touch it).
 
 - `pygame-ce` itself is dropped entirely on the Chaquopy path (rendering
   moves to Kotlin) — good, since it's the dependency least likely to have
