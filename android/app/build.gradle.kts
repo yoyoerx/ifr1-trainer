@@ -112,3 +112,14 @@ val stageBrainPython = tasks.register<Copy>("stageBrainPython") {
 }
 
 tasks.named("preBuild") { dependsOn(stageBrainPython) }
+
+// `preBuild` ordering alone isn't enough: Gradle's task-graph validation
+// (real error, found via an actual build 2026-09-24) flags
+// mergeDebugPythonSources/mergeReleasePythonSources - Chaquopy's own tasks,
+// one per build variant, that read stageBrainPython's output directory -
+// for using that output without a *declared* dependency, since Gradle can't
+// otherwise guarantee ordering (or cache correctness) from a shared
+// directory path alone. Match by name instead of a fixed variant list so
+// this keeps working if/when a release variant's task appears too.
+tasks.matching { it.name.matches(Regex("merge[A-Za-z]*PythonSources")) }
+    .configureEach { dependsOn(stageBrainPython) }

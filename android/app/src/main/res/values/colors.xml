@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Phase 0 placeholder colors - just enough for a buildable launcher icon
+(ic_launcher_background.xml below). Not real app branding; that's later
+design work, not part of this scaffold.
+-->
+<resources>
+    <color name="ic_launcher_background">#1B2A3A</color>
+</resources>
