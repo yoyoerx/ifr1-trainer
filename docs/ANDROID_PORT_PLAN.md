@@ -117,7 +117,9 @@ maps this way is unknown and must be tested on real hardware, not assumed.
    it. Don't rely on a USB-C hub to free up the port instead; whether a
    given hub can pass both a HID device and USB debugging at once is
    hardware-dependent and untested, and wireless adb avoids the question
-   entirely.
+   entirely. **Confirmed working (2026-09-25)**: paired and connected to
+   the real Pixel 9 over Wi-Fi (`192.168.1.133`, model `Pixel_9`/`tokay`),
+   `adb shell` verified live — this step is no longer just a plan.
 1. Plug the IFR-1 into the Pixel 9 via a USB-C OTG adapter, run
    `adb shell dumpsys usb` and `adb shell getevent -lt` while operating every
    control, and see whether button/knob activity shows up as generic input

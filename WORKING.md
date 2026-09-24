@@ -35,12 +35,20 @@ landscape then portrait. First target device: Pixel 9.
       yet), an empty `UsbHidInput.kt` stub. **Unbuilt/unverified** — this
       dev machine has no Android SDK/JDK 17/Gradle; see `android/README.md`
       for exact status and prerequisites.
-- [ ] **Hard gate, do next**: open in Android Studio, sync, fix whatever
-      surfaces; confirm the self-test screen's `BrainBridge.selfTest()`
-      actually returns `"OK: ..."` on a device/emulator (§3.4 on-device
-      half). Then the real §3.1 spike — Pixel 9 + Octavi IFR-1 + USB-C OTG,
-      `adb shell dumpsys usb` / `getevent -lt` — the whole v1 scope (IFR-1
-      required) depends on this result.
+- [x] **Wireless debugging confirmed working (2026-09-25)**: paired and
+      connected to the real Pixel 9 over Wi-Fi (`adb pair`/`adb connect`,
+      §3.1 step 0) — `192.168.1.133:44523`, model `Pixel_9` (codename
+      `tokay`), Android build `ro.build.version.release`=17. Shell access
+      verified (`adb shell getprop ...`). This was the prerequisite for
+      running the §3.1 spike without the IFR-1's OTG adapter tying up the
+      phone's only USB-C port — confirmed workable, not just planned.
+- [ ] **Hard gate, do next**: open `android/` in Android Studio, sync, fix
+      whatever surfaces; confirm the self-test screen's
+      `BrainBridge.selfTest()` actually returns `"OK: ..."` on the Pixel 9
+      over this same wireless connection (§3.4 on-device half). Then the
+      real §3.1 spike itself — plug in the Octavi IFR-1 via USB-C OTG,
+      `adb shell dumpsys usb` / `getevent -lt` while operating every
+      control — the whole v1 scope (IFR-1 required) depends on this result.
 - [ ] Everything else in `ANDROID_PORT_PLAN.md` §6 (Phase 1 onward) waits on
       that gate.
 

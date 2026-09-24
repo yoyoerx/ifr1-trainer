@@ -89,3 +89,8 @@ isolation, on this machine, today — the Android build is what's still owed.
    `adb pair <ip>:<port>` / `adb connect <ip>:<port>` from this machine.
    Shell commands work the same over either transport. See
    `ANDROID_PORT_PLAN.md` §3.1 step 0.
+
+   **Confirmed working (2026-09-25)** against the real Pixel 9: paired and
+   connected over Wi-Fi, `adb shell` verified live. Ready to plug in the
+   IFR-1 and run the actual spike whenever the hardware's in hand — nothing
+   about the wireless-adb setup itself is still open.
