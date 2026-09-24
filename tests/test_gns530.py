@@ -151,6 +151,52 @@ def test_approach_resolves_runway_fix_and_stages_the_ils_frequency(db):
     assert g.fpl.waypoints[idents.index("BRAVO")].is_faf
 
 
+def test_rnav_approach_does_not_auto_tune_an_unrelated_runway_ils(db):
+    """F76 (validation sweep, real KIND RNP approach H05LZ: autopilot
+    steering ~35 deg off its own course): an RNAV (GPS)/RNP approach has no
+    ground-based reference at all and no reason to fly an unrelated ILS's
+    course, even when the runway it lands on happens to have one (very
+    common - most ILS runways also have an RNAV overlay). Auto-staging that
+    ILS's frequency and flagging it as a fixed-course localizer used to make
+    `_auto_vloc`'s GPS->VLOC auto-switch steer onto that unrelated course
+    once armed. Matches the real 530W, which only auto-switches CDI source
+    for a loaded ILS - an RNAV approach leaves VLOC alone entirely."""
+    from navdata.model import Airport, Runway
+    apt = Airport("KTST", Point(41.0, -74.05), elev_ft=300)
+    # RW08 has its own, unrelated ILS - a very different course than the
+    # RNAV approach below (a realistic offset/curved RNP final)
+    apt.runways["RW08"] = Runway("RW08", Point(41.0, -74.05), 80.0, ils_ident="ITST")
+    db.add_airport(apt)
+    db.add_vhf(VhfNavaid("ITST", Point(41.0, -74.02), 110.30, nav_class="ILSW"))
+    db.add_procedure(Procedure(
+        airport="KTST", ident="R08", kind="approach", route_type="R",
+        transitions={"": (
+            ProcedureLeg(10, LegType.IF, fix_ident="ALFA"),
+            ProcedureLeg(20, LegType.CF, fix_ident="BRAVO", is_faf=True),
+            ProcedureLeg(30, LegType.CF, fix_ident="RW08", is_map=True),
+        )},
+    ))
+    g = Gns530(db)
+    g.load_procedure("KTST", "R08")
+    assert g.approach_freq is None                     # no unrelated ILS staged
+    assert g.approach_ref == ""
+    assert g.approach_is_localizer is False
+
+    # a genuine ILS approach to the SAME runway still stages it correctly
+    db.add_procedure(Procedure(
+        airport="KTST", ident="I08", kind="approach", route_type="I",
+        transitions={"": (
+            ProcedureLeg(10, LegType.IF, fix_ident="ALFA"),
+            ProcedureLeg(20, LegType.CF, fix_ident="BRAVO", is_faf=True, recnav_ident="ITST"),
+            ProcedureLeg(30, LegType.CF, fix_ident="RW08", is_map=True, recnav_ident="ITST"),
+        )},
+    ))
+    g2 = Gns530(db)
+    g2.load_procedure("KTST", "I08")
+    assert g2.approach_freq == pytest.approx(110.30)
+    assert g2.approach_is_localizer is True
+
+
 def test_suspends_at_the_missed_approach_point(db):
     # ALFA -> BRAVO(FAF) -> CHAR(MAP) -> DELT ; the plan should stop at CHAR
     db.add_procedure(Procedure(

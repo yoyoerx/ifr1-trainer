@@ -404,6 +404,11 @@ def airport_frequencies(db, apt) -> list[FreqEntry]:
 _APPROACH_KIND = {"I": "ILS", "L": "LOC", "B": "LOC", "X": "LDA", "U": "SDF", "R": "GPS", "P": "GPS", "J": "GPS",
                   "V": "VOR", "S": "VOR", "D": "VOR", "H": "RNV", "N": "NDB", "Q": "NDB", "T": "TCN"}
 _APPROACH_RANK = ("ILS", "LOC", "LDA", "SDF", "GPS", "VOR", "RNV", "NDB", "TCN")
+# route types that genuinely fly a ground-based facility's own fixed course - the only ones
+# `_approach_vloc_freq` may auto-tune a runway's ILS for (F76). RNAV (GPS)/RNP ("R"/"P"/"J"/"H")
+# and VOR/NDB ("V"/"S"/"D"/"N"/"Q"/"T") approaches have no reason to share an unrelated runway
+# ILS's course, even when that runway happens to have one.
+_APPROACH_ILS_FAMILY = {"I", "L", "B", "X", "U"}
 
 
 def best_approach(db, ident: str) -> str:
@@ -924,8 +929,9 @@ class GpsNav:
         if not self.fpl.has_active_leg and len(self.fpl) >= 2:
             self.fpl.active = 1
         if is_appr:
+            route_type = getattr(proc, "route_type", "") or (ident[:1] if ident else "")
             self.approach_freq, self.approach_ref, self.approach_is_localizer = \
-                self._approach_vloc_freq(legs, apt)
+                self._approach_vloc_freq(legs, apt, route_type)
         return added
 
     def remove_procedure(self, kind: str) -> str:
@@ -954,13 +960,28 @@ class GpsNav:
             self._downgraded = self._aborted = False
         return proc_ident
 
-    def _approach_vloc_freq(self, legs, apt) -> tuple[float | None, str, bool]:
+    def _approach_vloc_freq(self, legs, apt, route_type: str = "") -> tuple[float | None, str, bool]:
         """The VLOC frequency the GNS auto-loads to standby for a VOR/ILS
         approach: the runway's ILS, else a VOR/LOC referenced by the final
         legs. The third element is True only for the ILS path - a localizer
-        has a fixed course (no OBS needed); a VOR/NDB reference does not."""
-        # 1) a runway leg -> that runway's ILS localizer
-        if apt is not None:
+        has a fixed course (no OBS needed); a VOR/NDB reference does not.
+
+        F76 (validation sweep: KIND RNP (RNAV) approach H05LZ, autopilot
+        steering ~35 deg off its own course): rule 1 used to fire for *any*
+        approach ending on a runway that happens to have its own ILS,
+        including RNAV (GPS)/RNP approaches with no ground-based reference
+        at all and no reason to share that ILS's course - H05LZ's own final
+        course is 84 true, nothing like RW05L's separate ILS at 50. Once
+        that ILS's frequency got staged and (wrongly) flagged as a fixed-
+        course localizer, `_auto_vloc`'s GPS->VLOC auto-switch treated it
+        as if H05LZ *were* that ILS, steering onto its unrelated course.
+        Gated to the ILS/LOC/LDA/SDF family (a real ground-based approach
+        that genuinely flies that facility's own course); RNAV/RNP/VOR/NDB
+        approaches skip straight to rule 2, which returns nothing when
+        there is no `recnav_ident` on the final segment - matching the real
+        530W, which only auto-switches CDI source for a loaded ILS."""
+        # 1) a runway leg -> that runway's ILS localizer (ILS/LOC/LDA/SDF only)
+        if apt is not None and route_type in _APPROACH_ILS_FAMILY:
             for leg in legs:
                 rwy = apt.runways.get((leg.fix_ident or "").strip().upper())
                 if rwy is not None and rwy.ils_ident:

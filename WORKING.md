@@ -245,6 +245,21 @@ Pilot-selectable intercept angle (R9), control-wheel steering, yaw damper: not w
 
 ## Done log
 
+- **2026-09-23** — F76: broadened the F74/F75 validation sweep beyond ILS
+  to every approach type (RNAV/GPS, RNP, LOC-only, VOR, LDA - ~90
+  approaches across ~50 major airports). Found KIND's RNP approach
+  H05LZ steering ~35° off its own course onto RW05L's unrelated,
+  separate ILS - `GpsNav._approach_vloc_freq`'s "runway -> its ILS"
+  auto-tune fired for any approach type landing on an ILS-equipped
+  runway, not just the loaded ILS itself. Gated it to the ILS/LOC/
+  LDA/SDF route-type family; RNAV/RNP/VOR/NDB approaches no longer
+  auto-tune an unrelated ILS at all. Several other large excursions the
+  broadened sweep surfaced (KIND H32-Z, KMDW H22LX, KEWR H29-Z, KRSW
+  S24, KPDX VOR-A) were traced individually and are not bugs - real
+  large course changes on offset/curved-final approaches, or the
+  validation script's own simplified FAF/MAP-adjacency assumption not
+  holding for procedures with extra legs. 1055 tests pass.
+
 - **2026-09-23** — F75: a randomized closed-loop validation sweep of ILS
   approaches at major-metro airports (requested directly, follow-up to
   F74) found one more real bug: KIAD ILS 19L swung ~172° off course at

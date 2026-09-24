@@ -1657,6 +1657,43 @@ same way "has real course data" already overrides raw distance in F74. `prefer_i
 `tests/test_render.py::test_world_tick_threads_the_expected_station_through_to_radios_resolve`
 (end-to-end through `World.tick`, confirming `main.py` actually wires the hint through).
 
+### F76 - Validation sweep continued (different approach *types*): RNAV/RNP approaches steering onto an unrelated runway ILS
+
+Requested directly ("Let's do more spot checking with different types of approaches"). F74/F75's
+sweep only sampled `I` (ILS) idents; broadened it to every approach-ident prefix actually present
+at major airports (`R`/RNAV(GPS), `H`/RNP, `L`/LOC-only, `S`/`V`/VOR, `X`/LDA - `_APPROACH_KIND`,
+gpsnav.py), ~90 approaches total across three sweeps. Found one more real bug: **KIND RNP approach
+H05LZ** was steering the autopilot ~35° off its own course (course 84° true) onto RW05L's separate,
+unrelated ILS (IIND, course 50°) the moment `NAV/APR` engaged - and, once that ILS's frequency got
+manually activated, the CDI's GPS->VLOC auto-switch made it worse by literally flying that ILS's
+course instead of the RNP approach at all.
+
+Root cause: `GpsNav._approach_vloc_freq`'s rule "a runway leg -> that runway's ILS localizer" fired
+for *any* approach terminating on a runway that happens to have its own ILS - which is most of
+them, since an RNAV/RNP overlay of an ILS runway is extremely common - regardless of whether the
+*loaded* approach was actually that ILS. An RNP approach can have a curved or offset final (real
+KIND H05LZ's own final course is nothing like the straight-in ILS's), so grabbing an unrelated
+runway's ILS course and flagging it `is_localizer=True` (which then arms `_auto_vloc`'s GPS->VLOC
+auto-switch) is simply wrong for GPS-based approach types - the real 530W only does this for a
+*loaded ILS*.
+
+**Fix:** gated rule 1 to the route types that genuinely fly a ground-based facility's own fixed
+course - ILS/LOC/LDA/SDF (`_APPROACH_ILS_FAMILY = {"I", "L", "B", "X", "U"}`) - using
+`Procedure.route_type` (already used elsewhere, e.g. the LPV/L-VNAV glidepath gate at
+`gpsnav.py:2774`), falling back to the approach ident's own first letter when `route_type` is
+unset. RNAV (GPS)/RNP (`R`/`P`/`J`/`H`) and VOR/NDB (`V`/`S`/`D`/`N`/`Q`/`T`) approaches now fall
+straight through to rule 2 (a `recnav_ident` on the final segment), which correctly returns nothing
+for a pure RNAV/RNP approach - no VLOC auto-tune at all, matching the real unit.
+`tests/test_gns530.py::test_rnav_approach_does_not_auto_tune_an_unrelated_runway_ils`.
+
+The remaining large heading/cross-track excursions surfaced by the broadened sweep (KIND H32-Z,
+KMDW H22LX, KEWR H29-Z, KRSW S24, KPDX VOR-A) were traced individually and are not bugs: they are
+either genuine large (20-60°) course changes on approaches with a legitimately offset/curved final
+segment - correctly triggering the documented "new course >= 10 deg reverts to CAP" rule
+(`autopilot.py`, POH p.3-5) and converging smoothly - or artifacts of the validation script's own
+simplified "FAF leg immediately followed by the MAP leg" geometry assumption, which doesn't hold
+for procedures with extra legs (holds, procedure turns) between the FAF and the runway.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a
