@@ -1694,6 +1694,26 @@ segment - correctly triggering the documented "new course >= 10 deg reverts to C
 simplified "FAF leg immediately followed by the MAP leg" geometry assumption, which doesn't hold
 for procedures with extra legs (holds, procedure turns) between the FAF and the runway.
 
+### F77 - Flight Plan page never scrolled past its first screenful
+
+Reported directly ("the bottom of the flight plan is not shown in the 530, the list of waypoints
+does not scroll"), from `python main.py --plan "KBOS PVD KJFK" --approach "KJFK I22R" --layout
+stack ...` - a 15-waypoint combined plan (3 route fixes + I22R's 12 approach legs), well past the
+530W's ~11-12 visible rows. `render._draw_fpl` always drew `wps[:cap]` - waypoint 0 through
+whatever fit on screen - with no scroll offset at all, so nothing past the first screenful (here,
+everything from `CORVT` on - the whole approach) could ever be seen, even with the cursor rotated
+straight past the bottom row. The NRST list page had the identical bug once (nearest-fix/airspace
+lists always started at row 0 too); this is the same fix applied to the Flight Plan page.
+
+**Fix:** `_draw_fpl` now computes a scroll `top` from the cursor's row - `max(0, min(max(0,
+len(wps) - cap), sel - cap // 2))`, i.e. keep the cursor roughly centred in the visible window,
+clamped so the window never runs past either end of the list - and draws `wps[top:top+cap]`
+instead of always `wps[:cap]`. With no cursor active (`sel < 0`) it still starts at the top,
+matching the page's normal at-a-glance behaviour. `tests/test_render.py::
+test_flight_plan_page_scrolls_to_keep_the_cursor_visible`, plus a direct replay of the reported
+command's exact plan+approach confirming the actual `CHANT` (last leg) becomes visible once
+scrolled to it.
+
 ## Deferred — milestone-scale, tracked in WORKING.md
 
 These are real gaps against the manual but each is a multi-day feature, not a

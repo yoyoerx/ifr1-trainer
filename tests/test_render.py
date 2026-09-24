@@ -341,6 +341,50 @@ def test_draw_flight_plan_page(db):
     Renderer(pygame.display.get_surface()).draw(sc)
 
 
+def test_flight_plan_page_scrolls_to_keep_the_cursor_visible(db, monkeypatch):
+    """Reported directly: a long flight plan (KBOS PVD KJFK plus the KJFK
+    I22R approach's legs) never showed its later waypoints on the Flight
+    Plan page, and scrolling the cursor down didn't reveal them either -
+    `_draw_fpl` always drew from waypoint 0, with no scrolling at all (the
+    NRST page had the same bug once, fixed the same way - see the comment
+    at its own fix). Build a plan longer than the 530W's visible rows,
+    scroll the cursor near the end, and confirm a late waypoint's ident
+    actually gets drawn (not just present in the underlying flight plan)."""
+    from ifr1 import Event, Mode
+    d = NavDatabase(source="test")
+    idents = [f"WP{i:02d}" for i in range(20)]
+    for i, ident in enumerate(idents):
+        d.add_waypoint(Waypoint(ident, Point(40.0 + i * 0.1, -74.0)))
+    from gns530 import PAGE_GROUPS
+    g = gns530_mod.Gns530(d)
+    g.load_flight_plan(idents)
+    assert len(g.fpl.waypoints) == 20 > 12          # longer than the 530W ever shows unscrolled
+    g.cursor.group = list(PAGE_GROUPS).index("NAV")
+    g.cursor.page = PAGE_GROUPS["NAV"].index("Flight Plan")
+    g.handle_event(Event(mode=Mode.FMS1, pressed=("KNOB",)))   # cursor on
+    g._fpl_edit["row"] = 18                                     # scroll near the bottom
+
+    a, b = d.find("WP00")[0].pos, d.find("WP01")[0].pos
+    sim = simmod.SimModel(pos=a, heading_deg=initial_bearing(a, b), tas_kt=130.0)
+    nav, panel, st = main_mod.step_once(g, sim, 0.1, autopilot=True, magvar=0.0)
+    sc = Scene(own=st, nav=nav, panel=panel, gns=g, db=d, magvar=0.0,
+              map_range_nm=20.0, autopilot=True, fps=30.0)
+
+    r = Renderer(pygame.display.get_surface())
+    calls = []
+    orig_t = Renderer._t
+
+    def recording_t(self, s, x, y, *args, **kwargs):
+        calls.append(s)
+        return orig_t(self, s, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Renderer, "_t", recording_t)
+    r._draw_fpl(sc, pygame.Rect(0, 0, 300, 200))     # the Flight Plan page itself, not the
+    drawn = " ".join(calls)                          # always-from-top compact sidebar strip
+    assert "WP18" in drawn                           # the cursor's own row is visible
+    assert "WP00" not in drawn                        # scrolled well past the top
+
+
 def test_draw_map_page_inside_the_screen(db):
     from gns530 import PAGE_GROUPS
     sc = _scene(db)

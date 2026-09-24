@@ -1254,8 +1254,14 @@ class Renderer:
         ed = getattr(sc.gns, "_fpl_edit", None)
         sel = ed["row"] if ed else -1
         buf = ed.get("buf") if ed else None
+        # scroll the window to keep the cursor on-screen (same fix as the
+        # NRST page's list) - the plan always started at row 0 before, so a
+        # flight plan longer than the visible rows (a loaded approach easily
+        # runs past it) could never show its later waypoints at all, even
+        # with the cursor scrolled straight past the bottom of the screen.
+        top = max(0, min(max(0, len(wps) - cap), sel - cap // 2)) if sel >= 0 else 0
         prev_kind = ""
-        for i, wp in enumerate(wps[:cap]):
+        for i, wp in enumerate(wps[top:top + cap], start=top):
             if wp.proc_kind and wp.proc_kind != prev_kind:
                 # a procedure's title, "in light blue text", directly above
                 # its waypoints (Pilot's Guide sec.4 p.59) - CLR on any of

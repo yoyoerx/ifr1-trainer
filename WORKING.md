@@ -245,6 +245,14 @@ Pilot-selectable intercept angle (R9), control-wheel steering, yaw damper: not w
 
 ## Done log
 
+- **2026-09-24** — F77: the Flight Plan page never scrolled past its
+  first screenful (reported directly: `--plan "KBOS PVD KJFK" --approach
+  "KJFK I22R"`, a 15-waypoint plan on the 530W's ~11-row screen - the
+  whole approach was unreachable). `render._draw_fpl` always drew
+  `wps[:cap]`; now scrolls a `top` offset to keep the cursor centred in
+  the visible window (same fix the NRST list page already had for the
+  identical bug). 1056 tests pass.
+
 - **2026-09-23** — F76: broadened the F74/F75 validation sweep beyond ILS
   to every approach type (RNAV/GPS, RNP, LOC-only, VOR, LDA - ~90
   approaches across ~50 major airports). Found KIND's RNP approach
