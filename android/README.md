@@ -44,11 +44,12 @@ stages in (`navmath.py`, `gpsnav.py`, `instruments.py`, `autopilot.py`,
 suite, `androidbridge/` included (`tests/test_androidbridge.py`) — see the
 repo root `README.md`/`CLAUDE.md`.
 
-Not yet verified: `UsbHidInput.kt` compiles cleanly (first real proof it's
-syntactically/type-correct) but its runtime behavior —
-`claimInterface(force = true)` actually detaching `usbhid` and reading raw
-reports from the real IFR-1 — has not been exercised on-device yet. That's
-the next concrete step (see step 4 below).
+Also confirmed, on real hardware (2026-09-24): `UsbHidInput.kt`'s runtime
+behavior. `claimInterface(force = true)` **succeeds** against the real
+IFR-1, and buttons, outer knob, and inner knob all decode correctly through
+the one raw-HID code path — see §3.1's "Runtime-confirmed" writeup in
+`ANDROID_PORT_PLAN.md` for the exact observed frames. §3.1's hard project
+gate has passed.
 
 ## Prerequisites to actually open/build this
 
@@ -100,12 +101,18 @@ the next concrete step (see step 4 below).
   parses the same raw report every control comes through on, one code path
   matching the desktop protocol exactly instead of splitting logic between
   two different Android APIs. `Ifr1Mode`/`Ifr1State`/`Ifr1Event` mirror
-  `ifr1.py`'s `Mode`/`State`/`Event` field-for-field. **Compiles cleanly**
-  (confirmed 2026-09-24, part of the first successful `assembleDebug`) but
-  its runtime behavior is still unverified: whether `claimInterface(force =
-  true)` actually succeeds against a driver `usbhid` already holds hasn't
-  been tested on-device yet — the file has never been wired into a screen
-  or run against the real hardware.
+  `ifr1.py`'s `Mode`/`State`/`Event` field-for-field. **Compiles and runs
+  correctly** (confirmed 2026-09-24) — `claimInterface(force = true)`
+  succeeds against the real IFR-1, and buttons/outer knob/inner knob all
+  decode correctly through this path, verified via `input/
+  UsbHidTestScreen.kt` (a disposable test harness reachable from the
+  self-test screen's "IFR-1 raw-HID test" button).
+- `input/UsbHidTestScreen.kt` — the disposable §3.1 step 4 verification
+  harness: a Compose screen showing live connection status and a scrolling
+  log of decoded `Ifr1Event`s with raw frame hex, reachable from the
+  self-test screen's "IFR-1 raw-HID test" button. Not shipped product UI —
+  results belong in `ANDROID_PORT_PLAN.md` §3.1, not preserved as app code
+  long-term; fine to delete once Phase 1's real input-handling UI exists.
 - `AndroidManifest.xml` — landscape-locked (§6 Phase 1 builds landscape
   first); now declares `android.hardware.usb.host` (`required="true"`, IFR-1
   is required for v1) and a `USB_DEVICE_ATTACHED` intent-filter (+
@@ -131,16 +138,13 @@ the next concrete step (see step 4 below).
    inner knob produces **no evdev events at all** (confirmed twice, capture
    pipeline itself verified working both times) — open question, needs
    step 4 below.
-4. `input/UsbHidInput.kt` is written (2026-09-25) and now confirmed to
-   **compile** cleanly (2026-09-24) — a raw-HID reader for *every* control
-   (not just the inner knob), `claimInterface(force = true)` detaching
-   `usbhid` entirely rather than splitting logic between `InputDevice` and
-   raw HID. **Do next**: wire it into a real screen (or a quick standalone
-   test harness) and run it against the actual IFR-1 to prove two things
-   `adb` alone couldn't: (a) does `claimInterface(force = true)` actually
-   succeed against a driver `usbhid` already holds, and (b) does the
-   resulting raw report stream match `ifr1.py`'s `LAYOUT` byte-for-byte on
-   this specific unit. If claiming fails, the fallback path is
-   `InputDevice`/`KeyEvent` for buttons + the outer knob (still free) with
-   the inner knob resolved some other way (touch-only per §3.2, or a
-   firmware ask to Octavi).
+4. ~~Wire `UsbHidInput` into a real screen and run it against the actual
+   IFR-1~~ **Done (2026-09-24)**: `input/UsbHidTestScreen.kt` confirmed both
+   open questions — (a) `claimInterface(force = true)` succeeds, status goes
+   `CONNECTED`, no `usbhid` fallback needed; (b) the raw report stream
+   matches `ifr1.py`'s `LAYOUT` byte-for-byte (inner knob CW/CCW, `KNOB`
+   button, mode byte all observed decoding correctly). §3.1's hard project
+   gate has passed — see `ANDROID_PORT_PLAN.md` §3.1 "Runtime-confirmed" for
+   the full evidence. **Do next**: Phase 1 (landscape core loop with real
+   IFR-1 input wired into the actual trainer UI, per §6) — the disposable
+   test screen has served its purpose.

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -18,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.octavi.ifrtrainer.bridge.BrainBridge
+import com.octavi.ifrtrainer.input.UsbHidTestScreen
 
 /**
  * Phase 0 entry point. Proves two things end to end, nothing more yet:
@@ -36,7 +38,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    Phase0SelfTestScreen()
+                    var showUsbTest by remember { mutableStateOf(false) }
+                    if (showUsbTest) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Button(onClick = { showUsbTest = false }, modifier = Modifier.padding(8.dp)) {
+                                Text("Back to self-test")
+                            }
+                            UsbHidTestScreen()
+                        }
+                    } else {
+                        Phase0SelfTestScreen(onOpenUsbTest = { showUsbTest = true })
+                    }
                 }
             }
         }
@@ -44,7 +56,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun Phase0SelfTestScreen() {
+private fun Phase0SelfTestScreen(onOpenUsbTest: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var result by remember { mutableStateOf("running self-test...") }
 
@@ -62,5 +74,8 @@ private fun Phase0SelfTestScreen() {
     ) {
         Text("octavi-ifr-trainer — Android Phase 0", style = MaterialTheme.typography.titleLarge)
         Text(result, style = MaterialTheme.typography.bodyMedium)
+        Button(onClick = onOpenUsbTest, modifier = Modifier.padding(top = 16.dp)) {
+            Text("IFR-1 raw-HID test")
+        }
     }
 }

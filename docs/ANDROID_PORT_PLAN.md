@@ -216,15 +216,31 @@ can extend without root) or leaning on touch for the inner-knob role (§3.2
 already has to build touch knob emulation regardless, so that's an earlier
 trigger to use it, not new UI surface).
 
-The build/sync blocker this was sequenced behind is now cleared (2026-09-24,
-see §3.4) — `UsbHidInput.kt` compiles cleanly as part of a real
-`BUILD SUCCESSFUL`. What's still unproven is its *runtime* behavior: the
-file has not yet been wired into a screen and run against the real IFR-1, so
-whether `claimInterface(force = true)` actually succeeds against a driver
-`usbhid` already holds remains open. Until that's run, treat "IFR-1 support
-on Android v1" as **buttons + outer knob confirmed, a written-and-compiling
-but runtime-unverified raw-HID path for the inner knob** - closer to done
-than the original all-or-nothing framing, not fully closed out.
+**Runtime-confirmed (2026-09-24), real Pixel 9 + real IFR-1 via USB-C OTG.**
+A disposable test harness (`input/UsbHidTestScreen.kt`, reachable from the
+Phase 0 self-test screen's "IFR-1 raw-HID test" button) called
+`UsbHidInput.start()` against the actual device. Result: `claimInterface
+(force = true)` **succeeds** - status went straight to `CONNECTED`, detaching
+`usbhid` cleanly with no fallback needed. Both previously-open questions
+from §3.1 step 4 are answered:
+- **(a) claim succeeds**: confirmed, `CONNECTED` status reached every time
+  the IFR-1 was attached and the app (re)started.
+- **(b) raw report stream matches `ifr1.py`'s `LAYOUT` byte-for-byte**:
+  confirmed. Observed decoded events, with raw frame bytes alongside:
+  - Inner knob CW: `inner=1`, raw `0B 00 00 00 00 00 01 00` (byte 6 = `0x01`).
+  - Inner knob CCW: `inner=-1`, raw `0B 00 00 00 00 00 FF 00` (byte 6 =
+    `0xFF`, decodes as signed -1 - `sByte()` working correctly).
+  - `KNOB` button (inner-knob push) down/up: raw byte 2 toggling bit `0x02`,
+    exactly `Ifr1Layout.BUTTONS["KNOB"]`.
+  - Mode byte (`COM1` on connect) decoded correctly at byte 7.
+
+So the inner knob - the control this whole raw-HID path exists for, and
+that produces zero evdev events under the kernel's default `usbhid`
+translation (§3.1's original finding) - now works end to end on Android.
+"IFR-1 support on Android v1" is **fully confirmed**: buttons, outer knob,
+and inner knob all read correctly through the one unified raw-HID code
+path. The `InputDevice`/`KeyEvent` fallback this section describes is no
+longer needed.
 
 ### 3.2 Touch-only operation (no IFR-1 attached)
 
@@ -423,10 +439,15 @@ favorably, before any other Android work is worth starting.
    project as scoped — if it resolves to the "claimed and not usable"
    worst case, the plan needs to be revisited (root, firmware change,
    Bluetooth bridge, or reconsidering the IFR-1-required decision) before
-   continuing. Also run §3.4 (Chaquopy import of the actual brain modules
-   on-device) and a throwaway one-screen draw-command-list round trip in
-   this phase, since a Chaquopy packaging blocker is the second-highest-risk
-   unknown and is cheap to find out early alongside the USB spike.
+   continuing. **Resolved favorably (2026-09-24)**: buttons, outer knob, and
+   inner knob all confirmed working via `claimInterface(force = true)` — see
+   §3.1's "Runtime-confirmed" writeup. Also run §3.4 (Chaquopy import of the
+   actual brain modules on-device) and a throwaway one-screen
+   draw-command-list round trip in this phase, since a Chaquopy packaging
+   blocker is the second-highest-risk unknown and is cheap to find out early
+   alongside the USB spike. **§3.4 also resolved favorably (2026-09-24)** —
+   see §3.4's "Confirmed on real hardware" note. The hard gate has passed;
+   Phase 1 work is unblocked.
 2. **Phase 1 — landscape core loop with IFR-1 input.** Build landscape first
    (§3.3 — lower-risk shape, closer to existing `stack` layout to draw from)
    with real IFR-1 input wired end to end per whatever §3.1 found. Touch/

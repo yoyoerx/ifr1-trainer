@@ -41,14 +41,13 @@ import androidx.core.content.ContextCompat
  * control decoded the same way, everywhere, instead of buttons coming from
  * one Android API and the inner knob needing a different one.
  *
- * UNVERIFIED: written from the real hardware topology the §3.1 spike's
- * `dumpsys usb` captured (one HID interface, class 3, one interrupt-IN
- * endpoint, 64-byte packets) and `ifr1.py`'s own hardware-confirmed byte
- * offsets, but this specific Kotlin code has not yet been compiled or run -
- * no Android SDK/Gradle in the authoring environment. The first real build
- * + run against the actual IFR-1 is what proves `claimInterface(force =
- * true)` actually succeeds here (same caveat as the rest of `android/` -
- * see `android/README.md`), and is expected to need small fixes.
+ * Written from the real hardware topology the §3.1 spike's `dumpsys usb`
+ * captured (one HID interface, class 3, one interrupt-IN endpoint, 64-byte
+ * packets) and `ifr1.py`'s own hardware-confirmed byte offsets. Compiles
+ * cleanly (2026-09-24) as part of a real `assembleDebug` build; runtime
+ * behavior against the actual IFR-1 (does `claimInterface(force = true)`
+ * actually succeed?) is being verified via `input/UsbHidTestScreen.kt` -
+ * see `android/README.md` for the result once run.
  */
 
 // -- protocol constants, mirrors ifr1.py's module-level constants exactly -------------------
@@ -134,6 +133,7 @@ data class Ifr1Event(
     val inner: Int = 0,                        // accumulated inner delta
     val shift: Boolean = false,
     val longPress: List<String> = emptyList(), // buttons that just crossed LONG_PRESS_MS
+    val rawHex: String = "",                   // this report's raw bytes, for on-device debugging
 ) {
     val isEmpty: Boolean
         get() = !(
@@ -188,7 +188,22 @@ class UsbHidInput(private val context: Context) {
         fun onEvent(event: Ifr1Event)
     }
 
+    /** Coarse connection lifecycle, mainly so a UI can tell "no device attached" apart from
+     * "device attached but claimInterface(force=true) was refused" - the two failure modes
+     * §3.1's plan flagged as needing to be told apart. */
+    enum class Status { NO_DEVICE, AWAITING_PERMISSION, PERMISSION_DENIED, CLAIM_FAILED, CONNECTED, STOPPED }
+
+    fun interface StatusListener {
+        /** Called on the main thread whenever [Status] changes. */
+        fun onStatus(status: Status)
+    }
+
     var listener: Listener? = null
+    var statusListener: StatusListener? = null
+
+    private fun setStatus(status: Status) {
+        mainHandler.post { statusListener?.onStatus(status) }
+    }
 
     private val usbManager: UsbManager =
         context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -213,6 +228,8 @@ class UsbHidInput(private val context: Context) {
             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
             if (granted && device != null) {
                 openAndClaim(device)
+            } else {
+                setStatus(Status.PERMISSION_DENIED)
             }
             unregisterPermissionReceiver()
         }
@@ -226,10 +243,15 @@ class UsbHidInput(private val context: Context) {
      */
     fun start() {
         if (running) return
-        val device = findDevice() ?: return
+        val device = findDevice()
+        if (device == null) {
+            setStatus(Status.NO_DEVICE)
+            return
+        }
         if (usbManager.hasPermission(device)) {
             openAndClaim(device)
         } else {
+            setStatus(Status.AWAITING_PERMISSION)
             requestPermission(device)
         }
     }
@@ -252,6 +274,7 @@ class UsbHidInput(private val context: Context) {
         prev = null
         pressTimeMs.clear()
         longFired.clear()
+        setStatus(Status.STOPPED)
     }
 
     /**
@@ -332,7 +355,10 @@ class UsbHidInput(private val context: Context) {
         val hidInterface = (0 until device.interfaceCount)
             .map { device.getInterface(it) }
             .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_HID }
-            ?: return  // no HID interface - nothing to claim (shouldn't happen per the spike)
+        if (hidInterface == null) {
+            setStatus(Status.CLAIM_FAILED)  // no HID interface - shouldn't happen per the spike
+            return
+        }
         val inEndpoint = (0 until hidInterface.endpointCount)
             .map { hidInterface.getEndpoint(it) }
             .firstOrNull {
@@ -342,14 +368,22 @@ class UsbHidInput(private val context: Context) {
                             it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
                         )
             }
-            ?: return  // no readable endpoint on the HID interface
+        if (inEndpoint == null) {
+            setStatus(Status.CLAIM_FAILED)  // HID interface has no readable endpoint
+            return
+        }
 
-        val conn = usbManager.openDevice(device) ?: return
+        val conn = usbManager.openDevice(device)
+        if (conn == null) {
+            setStatus(Status.CLAIM_FAILED)
+            return
+        }
         // force=true detaches usbhid from this interface - see the file header for why. If this
         // returns false, usbhid held on (or some other claimant did); there is no fallback path
         // today - that would be the "true blocker" case the plan's §3.1 step 4 described.
         if (!conn.claimInterface(hidInterface, true)) {
             conn.close()
+            setStatus(Status.CLAIM_FAILED)
             return
         }
 
@@ -357,6 +391,7 @@ class UsbHidInput(private val context: Context) {
         claimedInterface = hidInterface
         endpointIn = inEndpoint
         running = true
+        setStatus(Status.CONNECTED)
         startReadThread()
     }
 
@@ -412,6 +447,7 @@ class UsbHidInput(private val context: Context) {
             outer = state.outer,
             inner = state.inner,
             shift = state.shift,
+            rawHex = state.raw.joinToString(" ") { "%02X".format(it) },
         )
         if (!event.isEmpty) emit(event)
     }

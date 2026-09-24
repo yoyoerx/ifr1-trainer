@@ -65,9 +65,6 @@ landscape then portrait. First target device: Pixel 9.
       manifest's `usb.host` feature + `USB_DEVICE_ATTACHED` intent-filter +
       `res/xml/usb_device_filter.xml` (VID/PID). **Compiles cleanly
       (2026-09-24)**, part of a real successful `assembleDebug` build.
-      Runtime behavior still unverified — not yet wired into a screen or run
-      against the real hardware, so whether `claimInterface(force = true)`
-      actually succeeds is still open.
 - [x] **Android Studio build + on-device self-test confirmed (2026-09-24)**:
       fixed six real build-toolchain errors (Compose-compiler plugin
       version, JDK/Gradle version chain, AGP-vs-Gradle-9 incompatibility,
@@ -78,12 +75,22 @@ landscape then portrait. First target device: Pixel 9.
       gpsnav/sim_model/androidbridge imported and ticked -
       to='BRAVO' pos=(39.9006,-74.0000)"` — §3.4 on-device confirmation
       done, not just a documented plan.
-- [ ] **Do next**: wire `UsbHidInput` into a real screen (or a small
-      standalone test harness) and run it against the actual IFR-1 - this is
-      what actually proves or disproves the forced-claim approach, `adb`
-      alone can't test in-app `UsbManager` permission/claim behavior.
-- [ ] Everything else in `ANDROID_PORT_PLAN.md` §6 (Phase 1 onward) waits on
-      that result.
+- [x] **`UsbHidInput` runtime-confirmed on real hardware (2026-09-24)**:
+      wired into a disposable test harness (`input/UsbHidTestScreen.kt`,
+      reachable from the self-test screen), run against the real Pixel 9 +
+      real IFR-1 over USB-C OTG. `claimInterface(force = true)` **succeeds**
+      (status `CONNECTED`, no `usbhid` fallback needed). Buttons, outer
+      knob, AND the inner knob (the reason this path exists — produces zero
+      evdev events under `usbhid`, per §3.1's original finding) all decode
+      correctly through the one raw-HID code path, byte-for-byte matching
+      `ifr1.py`'s `LAYOUT` (verified via on-screen raw frame hex: inner CW
+      `inner=1`/byte6=`0x01`, inner CCW `inner=-1`/byte6=`0xFF`, `KNOB`
+      button toggling byte2 bit `0x02`). Full writeup:
+      `ANDROID_PORT_PLAN.md` §3.1 "Runtime-confirmed". §3.1's hard project
+      gate has passed — IFR-1 support on Android v1 is fully confirmed, no
+      `InputDevice`/`KeyEvent` fallback needed.
+- [ ] Everything else in `ANDROID_PORT_PLAN.md` §6 (Phase 1 onward) is now
+      unblocked — landscape core loop with IFR-1 input is next.
 
 ---
 
