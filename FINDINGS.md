@@ -1597,6 +1597,14 @@ separate real bugs, both landing right at the GNS's automatic GPS->VLOC CDI swit
    always wins over one merely a few tenths of a mile closer. The same key gates the "stay locked
    to current station" hysteresis. `tests/test_radios.py::test_resolve_prefers_the_full_ils_record_over_a_courseless_duplicate`
    and `::test_resolve_disambiguates_parallel_runways_sharing_a_frequency`.
+   A scan of the whole loaded database (2026-09-23, follow-up to the user asking "is there another
+   airport with a similar frequency sharing") found the *course-less-duplicate* half of this isn't
+   a KJFK oddity at all - it's present at 116 different airports (essentially every major ILS
+   field: KORD, KDFW, KDEN, KIAH, KLAX, ...), reproduced with real KYIP (Willow Run) RW23 numbers
+   in `::test_resolve_prefers_the_full_ils_record_at_a_second_real_airport`. The *two-genuinely-
+   different-runways-on-one-frequency* half, however, appears to be unique to KJFK in the current
+   AIRAC cycle (it needs an unusual four-parallel-runway layout where two separate runway pairs
+   share a traffic-flow direction) - JFK does it twice, at both 109.5 (04R/22R) and 110.9 (04L/22L).
 2. **Coupler reset on the source switch.** `Autopilot._couple` treated any change in its internal
    `_src` label (`"APR/GPS"` -> `"APR/VLOC"`) as "a different mode/needle: start over," fully
    resetting the S-TEC coupler - zeroing the wind-drift trim (`_xtk_i`) and restarting the whole

@@ -317,6 +317,38 @@ def test_resolve_disambiguates_parallel_runways_sharing_a_frequency():
     assert n._station.runway_ident == "RW22"
 
 
+def test_resolve_prefers_the_full_ils_record_at_a_second_real_airport():
+    """F74, second real-data confirmation: the course-less-duplicate pattern
+    isn't a KJFK oddity - a scan of the loaded FAA CIFP+NASR data found it
+    at 116 different airports (essentially every major ILS field). This one
+    is KYIP (Willow Run, MI) RW23: a real Section P.I record (ident ILSW,
+    109.5, course 232.7) and a course-less Section D duplicate that happens
+    to share the same literal ident ("ILSW" is both the class-code-like
+    string used elsewhere in this file for a *different* airport's stub and,
+    coincidentally, KYIP's actual assigned ILS identifier). Numbers are the
+    real published ones (not synthesised), reproduced via the synthetic
+    fixture pattern the rest of this file uses rather than a live
+    `navdata.load()` call, since the fetched FAA data isn't available in
+    every environment this suite runs in."""
+    d = NavDatabase(source="test")
+    apt = Airport("KYIP", Point(42.240275, -83.531461), elev_ft=707, magvar_deg=-6.0)
+    apt.runways["RW23"] = Runway("RW23", Point(42.244817, -83.519575), 233.0, length_ft=7543)
+    d.add_airport(apt)
+    # the real Section P.I record for RW23
+    d.add_vhf(VhfNavaid("ILSW", Point(42.228722, -83.542567), 109.5, nav_class="ILSW",
+                        loc_bearing_deg=232.7, runway_ident="RW23", airport_ident="KYIP"))
+    # the real course-less Section D duplicate, same ident+frequency,
+    # positioned closer to the approach path than the real antenna
+    d.add_vhf(VhfNavaid("ILSW", Point(42.245803, -83.515864), 109.5, nav_class="ITW"))
+
+    n = NavReceiver(active_mhz=109.5)
+    on_course = destination(Point(42.244817, -83.519575), reciprocal(232.7), 6.0)
+    n.resolve(d, on_course)
+    assert n.is_localizer
+    assert n.loc_course_deg == pytest.approx(232.7)          # the real record's course
+    assert n._station.runway_ident == "RW23"
+
+
 # --------------------------------------------------------------------------- #
 # transponder
 # --------------------------------------------------------------------------- #
