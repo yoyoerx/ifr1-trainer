@@ -63,6 +63,64 @@ object BrainBridge {
     }
 
     /**
+     * §3.5: where `androidbridge.nav_update`/`new_real_session` read and
+     * write cached FAA data - Android's private app storage
+     * (`context.filesDir`), not `datasrc.faa.default_data_root()`'s
+     * repo-relative default, which resolves nowhere useful on Chaquopy's
+     * staged asset filesystem. A subdirectory (not `filesDir` itself) so
+     * this data has a clearly separate, easy-to-wipe location.
+     */
+    fun navDataRoot(context: Context): String =
+        context.applicationContext.filesDir.resolve("navdata").absolutePath
+
+    /**
+     * §3.5: fetches one FAA data product ("cifp"/"nasr"/"artcc"/"airspace"
+     * - see `androidbridge.nav_update.KINDS`) into [navDataRoot] for the
+     * current AIRAC cycle. **Blocking, does real network I/O** - call from
+     * a background thread/coroutine, never the main thread (Android would
+     * throw `NetworkOnMainThreadException` regardless). Returns "ok" or a
+     * message describing what went wrong - see
+     * [androidbridge.nav_update.fetch_kind]'s docstring for why this never
+     * raises across the Chaquopy boundary instead.
+     */
+    fun fetchNavDataKind(context: Context, kind: String): String {
+        ensureStarted(context)
+        val module = Python.getInstance().getModule("androidbridge.nav_update")
+        return module.callAttr("fetch_kind", navDataRoot(context), kind).toString()
+    }
+
+    /** §3.5: one line describing the newest cycle cached under [navDataRoot],
+     * or "no nav data cached" if [fetchNavDataKind] hasn't been run yet. */
+    fun navDataStatus(context: Context): String {
+        ensureStarted(context)
+        val module = Python.getInstance().getModule("androidbridge.nav_update")
+        return module.callAttr("status", navDataRoot(context)).toString()
+    }
+
+    /**
+     * §3.5: the real-nav-data equivalent of [startWorld] - builds a
+     * [androidbridge.demo_session.new_real_session] session from whatever
+     * is cached under [navDataRoot] (must have at least the "cifp" kind
+     * fetched - see [fetchNavDataKind]) and makes it the active session,
+     * **replacing** any existing demo session (same shared `sessionObj`
+     * every render/dispatch call already uses, so nothing else needs to
+     * know which kind of session is backing it). Returns "ok" or an error
+     * message (e.g. `navdata.load()`'s `FileNotFoundError` if nothing is
+     * cached yet) - never throws, same convention as every other
+     * `androidbridge` call.
+     */
+    fun startRealWorld(context: Context): String {
+        ensureStarted(context)
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        return try {
+            sessionObj = module.callAttr("new_real_session", navDataRoot(context))
+            "ok"
+        } catch (t: Throwable) {
+            "error: ${t.message}"
+        }
+    }
+
+    /**
      * Ticks the world `dtS` seconds and returns one formatted, human-readable
      * line of key state (mode/shift, heading/altitude/IAS/VS, COM/NAV
      * frequencies, XPDR, AP annunciators, CDI) - `androidbridge.demo_session

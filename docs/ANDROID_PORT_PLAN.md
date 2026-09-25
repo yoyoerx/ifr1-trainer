@@ -413,6 +413,104 @@ directory — needs:
 - Respecting that this is public-domain FAA data either way (no licensing
   change from what the desktop already redistributes/refetches).
 
+**Decision (2026-09-25): first-run download, not a bundled starter
+cycle.** Ships thinner, matches desktop's existing `datasrc.faa update`
+model, and avoids tying a release to a cycle that goes stale in up to 28
+days anyway. Trade-off accepted: no offline first launch.
+
+**First pass confirmed on real hardware (2026-09-25).** The "needs
+`requests`-equivalent networking" assumption that had kept `datasrc/` off
+`app/build.gradle.kts`'s Chaquopy-staged module list turned out to be
+wrong: `datasrc/faa.py` already does all its HTTP work through stdlib
+`urllib.request`/`urllib.error`/`urllib.parse`, confirmed by an actual
+fetch against the real FAA servers from desktop CPython (not assumed) -
+`urllib` needs no pip entry Chaquopy would have to resolve, so `datasrc`
+was simply added to `brainPackages` alongside `navdata`/`androidbridge`,
+same auto-synced single-source-of-truth staging every other brain module
+already gets (the stale comment explaining the old exclusion was fixed
+too).
+
+New `androidbridge/nav_update.py`: `fetch_kind(root, kind)` and
+`status(root)`, thin wrappers around `datasrc.faa.fetch()`/
+`newest_cached_manifest()`. Two Android-specific things beyond that
+wrapping: an explicit writable `root` argument (`datasrc.faa
+.default_data_root()` hardcodes a path relative to this repo's own file
+layout via `Path(__file__).resolve().parents[1]`, which resolves nowhere
+useful on Chaquopy's staged, effectively-read-only asset filesystem -
+Kotlin passes a `context.filesDir`-derived path instead, via
+`BrainBridge.navDataRoot`), and one call per product "kind" rather than
+one `fetch()` call for everything, so the caller can show real per-step
+progress without needing a cross-language progress callback mid-fetch
+(Chaquopy calls are synchronous/blocking regardless, so there's no way to
+get incremental byte-level progress out of a single call without one).
+Every function returns a plain string and never raises, same convention
+as the rest of `androidbridge`.
+
+New `androidbridge/demo_session.py:new_real_session(root)` - the
+real-nav-data equivalent of `new_session()`: `navdata.load(data_dir=root)`
+instead of the hand-built three-waypoint synthetic database, and no
+`start_lat`/`start_lon` override (`World`'s own `_initial_position` derives
+a sane start from a real database the same way desktop does - unlike the
+demo db, which has no airports for that logic to find). Every other
+function in that module (`render_hsi`/`render_ap_panel`/`render_gns`/
+`render_map`/`dispatch`/`tick_line`) is completely nav-data-agnostic past
+construction - they all just read whatever `self.world`/`self.world.gns`
+currently is - so nothing else needed to change to support a second kind
+of session.
+
+New Kotlin: `BrainBridge.navDataRoot`/`fetchNavDataKind`/`navDataStatus`/
+`startRealWorld` (the last one **replaces** the shared `sessionObj` every
+render/dispatch call already uses, so switching from demo to real data
+needs no change anywhere else), and `nav/NavDataScreen.kt` - a download
+button that fetches each kind in sequence with real progress text between
+steps, then a "use real nav data" button that calls `startRealWorld` and
+reports its result. Reachable from the self-test screen (`MainActivity
+.kt`'s fourth screen). `AndroidManifest.xml` gained the `INTERNET`
+permission - nothing before this had needed network access at all, so it
+was simply missing.
+
+**A real footprint mistake caught before any real-device testing.** The
+first draft's default `KINDS` list included `"airspace"` (Class B/C/D
+boundaries for the Nearest Airspace page and the moving map's overlay,
+deferred in §3.6's map slice). `datasrc/faa.py`'s own module docstring
+says plainly: airspace is "a large one-time download (~150 MB zipped);
+never fetched by default." Only the parsed, simplified `airspace.json`
+(a couple MB) is kept afterward, but the network transfer itself would
+have made Android's first-run download roughly 4x bigger than intended,
+for data that's a moving-map nicety, not core navigation - caught by
+actually reading that docstring rather than assuming "artcc/airspace are
+both small" (true only for artcc, ~170KB) and fixed before it reached
+real-device testing: Android's default kinds are now `cifp`, `nasr`
+(matching `datasrc.faa.fetch()`'s own defaults) plus the genuinely cheap
+`artcc`. `airspace` stays available via `fetch_kind(root, "airspace")` for
+a later, explicit opt-in control - not silently bundled into the default.
+
+**A real crash found via on-device testing, after switching to real
+data and entering the Phase 1 loop**: `com.chaquo.python.PyException:
+TypeError: unsupported format string passed to NoneType.__format__` in
+`demo_session.tick_line`. Root cause: `new_real_session` doesn't
+auto-load a flight plan the way `new_session`'s demo db does (there's no
+"ALFA/BRAVO/CHAR" equivalent to load without real airports/waypoints
+chosen), so `gpsnav.NavState.xtk_nm` (`float | None = None`) is `None`
+with no active leg - and `tick_line`'s debug-text format string used
+`s['nav'].get('xtk_nm', 0.0)`, which only substitutes its default for a
+**missing** dict key, not an existing key whose value is `None` (the
+`NavState` dataclass field always exists once `asdict()`'d, just
+sometimes holding `None`). Fixed with `s['nav'].get('xtk_nm') or 0.0`,
+verified against real cached data from desktop CPython before
+redeploying, then confirmed clean on the real Pixel 9: the Phase 1 loop
+now runs against real FAA data with no flight plan loaded, no crash.
+
+Confirmed end-to-end on the real Pixel 9: download (cifp+nasr+artcc),
+status line, switch to real data, and the core loop running cleanly.
+**Not yet done**: loading/dispatching a real flight plan on the
+real-nav-data session (it starts with none, same as a freshly-opened
+desktop session with no `--plan` flag) - needed before the pages/dialogs
+that require real airports/procedures (PROC, WPT/NRST with matches,
+NAV/COM, VNAV armed) can be confirmed on-device; an automatic first-run
+wizard rather than a manual test-screen button; an explicit "airspace"
+opt-in control; and a decision on auto-refresh behavior near AIRAC expiry.
+
 ### 3.6 Rendering bridge design (Chaquopy path)
 
 Crossing the Python↔Kotlin boundary once per drawn primitive at 30 Hz would

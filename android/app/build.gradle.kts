@@ -99,9 +99,12 @@ dependencies {
 // hand-ported per-instrument into render_commands.py instead - see that
 // module's docstring for why that one file is NOT auto-synced), plus
 // gdl90_out.py, foreflight_discovery.py, xplane_feed.py, wx_auto.py,
-// datasrc/, tests/ - datasrc/ in particular needs `requests`-equivalent
-// networking Chaquopy would need its own pip entry for, and isn't needed by
-// Phase 0 (nav-data acquisition on-device is §3.5, not yet scoped here).
+// tests/. `datasrc/` WAS on this excluded list too (a stale assumption
+// that it needed `requests`, which Chaquopy would need its own pip entry
+// for) - confirmed 2026-09-25 that `datasrc/faa.py`'s networking is
+// already stdlib-only `urllib` (see `androidbridge/nav_update.py`'s
+// module docstring), so it's staged like everything else now, §3.5's
+// on-device nav-data download.
 val repoRoot = rootDir.parentFile!!
 val brainModules = listOf(
     "navmath.py", "gpsnav.py", "instruments.py", "autopilot.py",
@@ -118,7 +121,7 @@ val brainModules = listOf(
     // math, no pygame - see render_commands.py's module docstring.
     "render_commands.py",
 )
-val brainPackages = listOf("navdata", "androidbridge")
+val brainPackages = listOf("navdata", "androidbridge", "datasrc")
 
 val stageBrainPython = tasks.register<Copy>("stageBrainPython") {
     val dest = layout.buildDirectory.dir("generated/pythonBrain")

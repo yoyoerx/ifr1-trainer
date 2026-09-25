@@ -12,6 +12,11 @@ translation. `required="true"` because IFR-1 support is required for v1
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+    <!-- §3.5: androidbridge/nav_update.py fetches FAA CIFP+NASR over
+         urllib.request (stdlib, no Chaquopy packaging risk) - needs this
+         declared or every request fails outright regardless of the
+         device's actual network state. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="true"

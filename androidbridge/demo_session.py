@@ -1,8 +1,12 @@
 """Phase 1 core-loop entry points BrainBridge.kt calls (see
-docs/ANDROID_PORT_PLAN.md §6). Builds a `TrainerSession` on a small
-synthetic nav database - the same one `selftest.py` already uses - since
-real FAA CIFP+NASR acquisition on-device is §3.5, not yet built. This is a
-placeholder flight, not the eventual real-nav-data experience.
+docs/ANDROID_PORT_PLAN.md §6). `new_session()` builds a `TrainerSession` on
+a small synthetic nav database - the same one `selftest.py` already uses -
+a placeholder flight for testing without real FAA data cached yet.
+`new_real_session()` (§3.5, `androidbridge/nav_update.py` fetches the data
+this loads) is the real-nav-data equivalent, once available. Every other
+function here (`render_*`/`dispatch`/`tick_line`) operates on whichever
+`TrainerSession` Kotlin created - real or synthetic doesn't matter past
+construction, `World`/`GpsNav`/`render_commands` are nav-data-agnostic.
 
 Returns a single formatted string per tick rather than a dict, deliberately
 - Chaquopy's string marshaling back to Kotlin is already proven (`selfTest()`
@@ -29,6 +33,23 @@ def new_session() -> TrainerSession:
     session = TrainerSession(db, start_lat=39.9, start_lon=-74.0, heading_deg=0.0)
     session.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
     return session
+
+
+def new_real_session(root: str) -> TrainerSession:
+    """The §3.5 real-nav-data equivalent of `new_session()` - `root` is the
+    same writable directory `androidbridge.nav_update.fetch_kind` was
+    called against (Android's `context.filesDir`-derived path, not
+    `datasrc.faa.default_data_root()`'s repo-relative default, which
+    resolves nowhere useful on Chaquopy's staged asset filesystem). No
+    `start_lat`/`start_lon` override, unlike `new_session()`'s hand-picked
+    demo position - `World`'s own `_initial_position` already derives a
+    sane start (the loaded flight plan, or a first-airport fallback) from
+    a real database, the same way desktop's `main.py` does with no
+    special-casing."""
+    import navdata
+
+    db = navdata.load(data_dir=root)
+    return TrainerSession(db)
 
 
 def dispatch(
@@ -116,6 +137,6 @@ def tick_line(session: TrainerSession, dt_s: float) -> str:
         f"AP eng={'Y' if s['ap_engaged'] else 'n'} "
         f"lat={s['ap_lateral']} vert={s['ap_vertical']} "
         f"hdgbug={s['ap_heading_bug']:.0f} altsel={s['ap_alt_preselect']:.0f}\n"
-        f"CDI to={s['nav']['to_ident']!r} xtk={s['nav'].get('xtk_nm', 0.0):+.2f}nm  "
+        f"CDI to={s['nav']['to_ident']!r} xtk={(s['nav'].get('xtk_nm') or 0.0):+.2f}nm  "
         f"baro={s['baro_inhg']:.2f}"
     )

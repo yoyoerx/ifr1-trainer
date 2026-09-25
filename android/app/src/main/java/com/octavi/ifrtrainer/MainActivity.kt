@@ -20,13 +20,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.octavi.ifrtrainer.bridge.BrainBridge
 import com.octavi.ifrtrainer.input.UsbHidTestScreen
+import com.octavi.ifrtrainer.nav.NavDataScreen
 import com.octavi.ifrtrainer.world.Phase1LoopScreen
 
-private enum class Screen { SELF_TEST, USB_TEST, PHASE1_LOOP }
+private enum class Screen { SELF_TEST, USB_TEST, PHASE1_LOOP, NAV_DATA }
 
 /**
- * Entry point. Hosts three verification screens, not the real trainer UI
- * yet (that's §3.6's draw-command-list rendering, still to come):
+ * Entry point. Hosts four verification screens, not the real trainer UI
+ * yet (that's §3.6's draw-command-list rendering, mostly done - see
+ * `android/README.md`):
  *  1. [Phase0SelfTestScreen] — Chaquopy starts and the brain modules
  *     (navmath/navdata/gpsnav/sim_model/androidbridge) import and tick
  *     on-device — [BrainBridge.selfTest].
@@ -35,6 +37,8 @@ private enum class Screen { SELF_TEST, USB_TEST, PHASE1_LOOP }
  *  3. [Phase1LoopScreen] — §6 Phase 1's core loop: real IFR-1 events
  *     routed through `main.route_event` into a real `World`, ticked in the
  *     background and surviving Android lifecycle events.
+ *  4. [NavDataScreen] — §3.5's on-device FAA nav data download, and the
+ *     switch from the synthetic demo database to a real one.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,6 +51,7 @@ class MainActivity : ComponentActivity() {
                         Screen.SELF_TEST -> Phase0SelfTestScreen(
                             onOpenUsbTest = { screen = Screen.USB_TEST },
                             onOpenPhase1Loop = { screen = Screen.PHASE1_LOOP },
+                            onOpenNavData = { screen = Screen.NAV_DATA },
                         )
                         Screen.USB_TEST -> Column(modifier = Modifier.fillMaxSize()) {
                             Button(onClick = { screen = Screen.SELF_TEST }, modifier = Modifier.padding(8.dp)) {
@@ -60,6 +65,12 @@ class MainActivity : ComponentActivity() {
                             }
                             Phase1LoopScreen()
                         }
+                        Screen.NAV_DATA -> Column(modifier = Modifier.fillMaxSize()) {
+                            Button(onClick = { screen = Screen.SELF_TEST }, modifier = Modifier.padding(8.dp)) {
+                                Text("Back to self-test")
+                            }
+                            NavDataScreen()
+                        }
                     }
                 }
             }
@@ -68,7 +79,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun Phase0SelfTestScreen(onOpenUsbTest: () -> Unit, onOpenPhase1Loop: () -> Unit) {
+private fun Phase0SelfTestScreen(
+    onOpenUsbTest: () -> Unit,
+    onOpenPhase1Loop: () -> Unit,
+    onOpenNavData: () -> Unit,
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var result by remember { mutableStateOf("running self-test...") }
 
@@ -91,6 +106,9 @@ private fun Phase0SelfTestScreen(onOpenUsbTest: () -> Unit, onOpenPhase1Loop: ()
         }
         Button(onClick = onOpenPhase1Loop, modifier = Modifier.padding(top = 8.dp)) {
             Text("Phase 1 core loop")
+        }
+        Button(onClick = onOpenNavData, modifier = Modifier.padding(top = 8.dp)) {
+            Text("Nav data (§3.5)")
         }
     }
 }

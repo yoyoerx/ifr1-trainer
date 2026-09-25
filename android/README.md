@@ -273,13 +273,37 @@ Two real on-device bugs found and fixed getting this far:
   come; this proves the loop underneath it first. Reachable from the
   self-test screen's "Phase 1 core loop" button.
 - `androidbridge/demo_session.py` (repo root, not under `android/`) —
-  Phase 1's Kotlin-facing entry points (`new_session`, `tick_line`,
-  `dispatch`), built on a small synthetic nav database (same one
-  `selftest.py` uses) since real on-device FAA data acquisition is §3.5,
-  not yet built. `tick_line` returns one formatted string per tick rather
-  than a dict, reusing `selfTest()`'s already-proven String-marshaling
-  pattern instead of introducing dict/PyObject marshaling as a second,
-  separately-risky path.
+  Phase 1's Kotlin-facing entry points (`tick_line`, `dispatch`,
+  `render_*`). `new_session()` builds a small synthetic nav database (same
+  one `selftest.py` uses); `new_real_session(root)` (§3.5, confirmed on
+  real hardware 2026-09-25) is the real-FAA-data equivalent - every other
+  function is nav-data-agnostic past construction, so both kinds of
+  session work through the exact same calls. `tick_line` returns one
+  formatted string per tick rather than a dict, reusing `selfTest()`'s
+  already-proven String-marshaling pattern instead of introducing
+  dict/PyObject marshaling as a second, separately-risky path.
+- `androidbridge/nav_update.py` (repo root) — §3.5's on-device FAA data
+  fetch, confirmed on real hardware (2026-09-25): `fetch_kind(root, kind)`
+  / `status(root)`, thin wrappers around `datasrc.faa.fetch()` /
+  `newest_cached_manifest()`. `datasrc/faa.py` turned out to already be
+  stdlib-only `urllib` networking (not `requests` - that wrong assumption
+  had kept `datasrc/` off `app/build.gradle.kts`'s staged module list;
+  it's staged now, alongside `navdata`/`androidbridge`). Default kinds are
+  `cifp`, `nasr`, `artcc` - **not** `airspace`, which `datasrc/faa.py`'s
+  own docstring says is a ~150MB one-time zipped download, "never fetched
+  by default"; a first draft included it by mistake (assuming, wrongly,
+  that it was as cheap as `artcc`'s ~170KB) and was caught and fixed
+  before any real-device testing. `nav/NavDataScreen.kt` (reachable from
+  the self-test screen) drives the download with real per-kind progress,
+  then switches `BrainBridge`'s active session from demo to real data.
+  `AndroidManifest.xml` gained the `INTERNET` permission for this - nothing
+  before it had needed network access. A real crash was found and fixed
+  via on-device testing after switching to real data: the debug panel's
+  `tick_line` format string didn't handle `NavState.xtk_nm` being `None`
+  (real sessions start with no flight plan loaded, unlike the demo one) -
+  see `docs/ANDROID_PORT_PLAN.md` §3.5 for the fix and full detail. Not
+  yet done: loading a real flight plan on the real-nav-data session, an
+  automatic first-run wizard, and an explicit "airspace" opt-in control.
 - `AndroidManifest.xml` — landscape-locked (§6 Phase 1 builds landscape
   first); now declares `android.hardware.usb.host` (`required="true"`, IFR-1
   is required for v1) and a `USB_DEVICE_ATTACHED` intent-filter (+
@@ -390,10 +414,24 @@ Two real on-device bugs found and fixed getting this far:
     and the three real bugs fixed along the way. Ergonomics are
     explicitly first-draft, called out by the person testing it as
     "good enough for now, fix later."
-15. **Do next**: touch control ergonomics (knob feel, hit-target sizing,
-    visual press feedback) need a real design pass. §3.5 (real FAA nav
-    data on-device) would unlock on-device confirmation of the
-    pages/dialogs the synthetic demo db can't exercise (PROC, WPT/NRST
-    with matches, NAV/COM, VNAV armed). (The six-pack gauge cluster is not
-    planned for Android at all - decision, 2026-09-24,
-    `ANDROID_PORT_PLAN.md` §7.)
+15. ~~§3.5 on-device nav data acquisition, first pass~~ **Done
+    (2026-09-25)**, confirmed on the real Pixel 9: real FAA CIFP+NASR+ARTCC
+    data downloads (`nav/NavDataScreen.kt`) and loads
+    (`demo_session.new_real_session`) in place of the synthetic demo
+    database. Two real problems caught and fixed along the way - a
+    footprint mistake (the "airspace" kind is a ~150MB one-time download,
+    not the ~170KB "cheap" size a first draft assumed, caught before any
+    real-device testing) and a real crash (the debug panel's `tick_line`
+    format string didn't handle a real session's flight-plan-less
+    `NavState.xtk_nm` being `None`, found via on-device testing) - see
+    `androidbridge/nav_update.py`'s entry above and
+    `ANDROID_PORT_PLAN.md` §3.5 for the full detail.
+16. **Do next**: touch control ergonomics (knob feel, hit-target sizing,
+    visual press feedback) need a real design pass. §3.5 follow-ups:
+    loading a real flight plan on the real-nav-data session (currently
+    starts with none) so the pages/dialogs that need real airports/
+    procedures can be confirmed on-device (PROC, WPT/NRST with matches,
+    NAV/COM, VNAV armed), an automatic first-run wizard instead of a
+    manual test-screen button, and an explicit "airspace" opt-in control.
+    (The six-pack gauge cluster is not planned for Android at all -
+    decision, 2026-09-24, `ANDROID_PORT_PLAN.md` §7.)

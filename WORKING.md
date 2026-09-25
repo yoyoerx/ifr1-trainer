@@ -311,13 +311,63 @@ landscape then portrait. First target device: Pixel 9.
       beside their 520dp-wide panel ran past the screen's right edge in
       this vertical-only-scrolling layout - moved below the panel
       instead). Full writeup: `ANDROID_PORT_PLAN.md` §3.2.
+- [x] **§3.5 on-device nav data acquisition, first pass, confirmed on real
+      hardware (2026-09-25)**: real FAA CIFP+NASR+ARTCC data now downloads
+      and loads on-device. `datasrc/faa.py`'s networking turned out to
+      already be stdlib-only `urllib` (not `requests`, the assumption that
+      had kept `datasrc/` off the Chaquopy-staged module list) - confirmed
+      by an actual fetch against the real FAA servers from desktop CPython
+      before touching Android at all, then added to `brainPackages` in
+      `app/build.gradle.kts` (its stale "needs requests" comment fixed).
+      New `androidbridge/nav_update.py` (`fetch_kind`/`status`, an explicit
+      writable `root` since `datasrc.faa.default_data_root()`'s
+      repo-relative default resolves nowhere useful on Android, and one
+      call per product "kind" so Kotlin can show per-step progress without
+      a cross-language progress callback) and
+      `demo_session.new_real_session(root)` (real `navdata.load()` instead
+      of the synthetic 3-waypoint demo db - every `render_*`/`dispatch`/
+      `tick_line` call is nav-data-agnostic past construction, so nothing
+      else needed to change). New `BrainBridge.navDataRoot`/
+      `fetchNavDataKind`/`navDataStatus`/`startRealWorld` and a new
+      `nav/NavDataScreen.kt` (download button with real per-kind progress,
+      then a switch-to-real-session button), reachable from the self-test
+      screen. `INTERNET` permission added to the manifest (was missing
+      entirely - nothing had needed network before this).
+      **A real footprint mistake caught before it shipped**: the first
+      draft's default kind list included "airspace," which the desktop
+      code's own docstring says is a ~150MB one-time zipped download (only
+      a parsed, simplified ~2MB JSON is kept afterward) - `datasrc.faa`
+      itself documents it as "never fetched by default." Would have made
+      Android's first-run download roughly 4x bigger than intended for
+      Nearest-Airspace-page/map-overlay data, not core navigation - fixed
+      before any real-device testing by dropping it back to `datasrc.faa
+      .fetch()`'s own default kinds (cifp, nasr) plus the genuinely cheap
+      artcc (~170KB).
+      **A real crash found and fixed via on-device testing**: switching to
+      a real session and entering the Phase 1 loop crashed
+      (`TypeError: unsupported format string passed to NoneType
+      .__format__` in `tick_line`) - `new_real_session` doesn't
+      auto-load a flight plan the way the demo session does, so
+      `NavState.xtk_nm` is `None` (no active leg) instead of a float, and
+      the debug panel's `s['nav'].get('xtk_nm', 0.0)` doesn't substitute
+      its default for an existing-but-`None` value, only a missing key.
+      Fixed (`s['nav'].get('xtk_nm') or 0.0`) and confirmed against real
+      cached data from desktop CPython before redeploying. Confirmed
+      working end-to-end on the real Pixel 9: download, status line,
+      switch to real data, and the Phase 1 loop running cleanly against it
+      with no flight plan loaded. Full writeup: `ANDROID_PORT_PLAN.md`
+      §3.5.
 - [ ] **Do next**: touch control ergonomics need real design/UX work
-      (acknowledged as "good enough for now, fix later" after this pass -
-      knob feel, hit-target sizing, visual affordance are all first-draft).
-      §3.5 (real FAA nav data on-device) would unlock on-device
-      confirmation of the pages/dialogs that need real airports/procedures
-      (PROC, WPT/NRST with matches, NAV/COM, VNAV armed) which the
-      synthetic demo db can't exercise.
+      (acknowledged as "good enough for now, fix later," 2026-09-25 - knob
+      feel, hit-target sizing, visual affordance are all first-draft).
+      §3.5 follow-ups: an explicit opt-in for the "airspace" kind (not
+      fetched by default, see above), a first-run wizard that runs
+      automatically rather than a manual test-screen button, deciding
+      whether to auto-refresh near AIRAC expiry, and loading/dispatching a
+      real flight plan on the real-nav-data session (currently starts with
+      none) so the pages/dialogs that need real airports/procedures (PROC,
+      WPT/NRST with matches, NAV/COM, VNAV armed) can be confirmed
+      on-device.
 
 ---
 
