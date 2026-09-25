@@ -131,9 +131,23 @@ landscape then portrait. First target device: Pixel 9.
       AP panel graphics, six-pack, moving map, and GNS softkey/page UI are
       still plain text / not yet ported — deliberately one instrument at a
       time. Full writeup: `ANDROID_PORT_PLAN.md` §3.6.
-- [ ] **Do next**: more of §3.6 (AP panel graphics next, then GNS
-      softkey/page UI, six-pack, moving map). Touch/rotary controls (§3.2)
-      also still pending.
+- [x] **§3.6 rendering, second slice — AP panel confirmed on real hardware
+      (2026-09-24)**: `render_commands.py` ports `draw_ap_panel` (S-TEC 55X:
+      RDY lamp, HDG/NAV/APR/REV/ALT/VS mode row, VS window, HDG BUG/ALT
+      SEL/IAS SET info box). Surfaced and fixed a systemic text-positioning
+      bug the HSI slice's loose spacing had hidden: Android's `Paint
+      .drawText` positions by baseline, `render.py`'s pygame text by
+      top-left - ad hoc per-call offsets didn't generalize to the AP
+      panel's tightly-packed info box (overlapped badly). Fixed at the
+      root in `InstrumentCanvas.kt` (`y - paint.ascent()`, once) rather
+      than patching every call site; `render_commands.py`'s `y` values are
+      now plain top-anchored numbers matching `render.py`'s own arguments
+      directly. Verified on the real Pixel 9: all six mode keys, RDY lamp,
+      VS readout, and info box render correctly with no overlap, matching
+      the plain-text debug panel's values exactly. Full writeup:
+      `ANDROID_PORT_PLAN.md` §3.6.
+- [ ] **Do next**: more of §3.6 (GNS softkey/page UI next, then six-pack,
+      moving map). Touch/rotary controls (§3.2) also still pending.
 
 ---
 

@@ -175,7 +175,7 @@ class TrainerSession:
         }
         return snapshot
 
-    # -- rendering (§3.6, first slice: HSI only) -------------------------
+    # -- rendering (§3.6) --------------------------------------------------
     def render_hsi(self, x: float, y: float, w: float, h: float) -> str:
         """Draw-command-list string for the HSI head, using the same
         `Frame.nav1`/`Frame.panel` `tick()` already computed this frame -
@@ -185,3 +185,11 @@ class TrainerSession:
         if frame is None:
             return ""
         return render_commands.hsi_commands(x, y, w, h, frame.nav1, frame.panel, self.world.t)
+
+    def render_ap_panel(self, x: float, y: float, w: float, h: float) -> str:
+        """Draw-command-list string for the S-TEC 55X AP programmer panel -
+        `self.world.ap` directly, no `tick()`-computed data needed (unlike
+        `render_hsi`), but still call after `tick()` for a consistent `t`."""
+        return render_commands.ap_panel_commands(
+            x, y, w, h, self.world.ap, self.world.t, ias_bug=self.world.ias_target,
+        )

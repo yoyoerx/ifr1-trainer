@@ -23,22 +23,32 @@ import androidx.compose.ui.graphics.nativeCanvas
  * fake-bold monospace as a stand-in; bundling the real DSEG7 font file is a
  * separate, later cosmetic task, not solved here.
  *
- * [sourceSize] is the coordinate-space size the Python side rendered the
- * commands in (e.g. `render_commands.hsi_commands`'s `w`/`h` args) - the
- * actual on-screen `Canvas` is measured in real pixels, which vary by
- * device density, so this scales the whole replay to fit whatever size
- * Compose actually gives the `Canvas` rather than drawing at a fixed pixel
- * offset that would only be correct on one specific device.
+ * [sourceWidth]/[sourceHeight] is the coordinate-space size the Python side
+ * rendered the commands in (e.g. `render_commands.hsi_commands`'s/
+ * `ap_panel_commands`'s `w`/`h` args) - the actual on-screen `Canvas` is
+ * measured in real pixels, which vary by device density, so this scales
+ * the whole replay to fit whatever size Compose actually gives the
+ * `Canvas` rather than drawing at a fixed pixel offset that would only be
+ * correct on one specific device. Per-axis (not a single uniform factor)
+ * so non-square instruments (the AP panel strip, unlike the square HSI)
+ * scale correctly too - the caller should size its `Modifier` box with the
+ * same aspect ratio as `sourceWidth`:`sourceHeight` to avoid stretching.
  */
 @Composable
-fun InstrumentCanvas(commands: List<DrawCommand>, modifier: Modifier = Modifier, sourceSize: Float = 1f) {
+fun InstrumentCanvas(
+    commands: List<DrawCommand>,
+    modifier: Modifier = Modifier,
+    sourceWidth: Float = 1f,
+    sourceHeight: Float = 1f,
+) {
     val monoPaint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE } }
     val sevenPaint = remember {
         Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE; isFakeBoldText = true }
     }
     Canvas(modifier = modifier) {
-        val factor = if (sourceSize > 0f) size.minDimension / sourceSize else 1f
-        scale(scaleX = factor, scaleY = factor, pivot = Offset.Zero) {
+        val factorX = if (sourceWidth > 0f) size.width / sourceWidth else 1f
+        val factorY = if (sourceHeight > 0f) size.height / sourceHeight else 1f
+        scale(scaleX = factorX, scaleY = factorY, pivot = Offset.Zero) {
         commands.forEach { cmd ->
             when (cmd) {
                 is DrawCommand.Line -> drawLine(
@@ -86,7 +96,16 @@ fun InstrumentCanvas(commands: List<DrawCommand>, modifier: Modifier = Modifier,
                         2 -> Paint.Align.RIGHT
                         else -> Paint.Align.LEFT
                     }
-                    drawContext.canvas.nativeCanvas.drawText(cmd.text, cmd.x, cmd.y, paint)
+                    // cmd.y is the text's TOP (matching render.py's pygame
+                    // convention, r._t/r.lcd blit with topleft=(x,y)) -
+                    // android.graphics.Paint.drawText positions by BASELINE,
+                    // so this converts once, here, rather than asking every
+                    // render_commands.py function to fudge offsets against
+                    // Android's convention (a real on-device bug, found
+                    // 2026-09-24: the AP panel's tightly-packed 17px-pitch
+                    // info box overlapped badly under ad hoc offsets that
+                    // happened to look fine on the more loosely-spaced HSI).
+                    drawContext.canvas.nativeCanvas.drawText(cmd.text, cmd.x, cmd.y - paint.ascent(), paint)
                 }
             }
         }

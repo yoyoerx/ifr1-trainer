@@ -367,6 +367,27 @@ course pointer on screen. AP panel graphics, six-pack, moving map, and GNS
 softkey/page UI are still plain text / not yet ported - this slice is
 deliberately just the one instrument.
 
+**Second slice confirmed on real hardware (2026-09-24): the AP panel.**
+`render_commands.py` ports `draw_ap_panel` (S-TEC 55X programmer: RDY lamp,
+HDG/NAV/APR/REV/ALT/VS mode row, VS window, and the HDG BUG/ALT SEL/IAS SET
+info box) the same way. This slice surfaced a systemic text-positioning bug
+the HSI slice's looser spacing had hidden: Android's `Paint.drawText`
+positions by **baseline**, while `render.py`'s pygame text positions by
+**top-left** - ad hoc per-call offsets tuned by eye against the HSI alone
+didn't generalize to the AP panel's tightly-packed 17px-pitch info box,
+which overlapped badly. Fixed at the root: `InstrumentCanvas.kt`'s `Text`
+case now converts once (`y - paint.ascent()`), so `render_commands.py`'s
+`y` arguments are plain top-anchored values matching `render.py`'s own
+argument values directly (a `_centered_y()` helper handles the handful of
+`center=True` call sites, which need both axes centered on a point, not
+just top-anchored). The info box's real DSEG7-metric-tight packing isn't
+reproducible without that font's real metrics (no pygame here), so it uses
+a plainer, more generously-spaced layout instead of guessing at pixel-exact
+overlap tolerances - same information, less visually compact. Verified on
+the real Pixel 9: all six mode keys, the RDY lamp, VS readout, and the info
+box render correctly with no overlap, matching the plain-text debug panel's
+values exactly.
+
 ### 3.7 Loop, threading, and Android lifecycle
 
 The desktop loop is single-threaded except optional UDP/weather-refresh

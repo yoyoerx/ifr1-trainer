@@ -2,10 +2,14 @@ package com.octavi.ifrtrainer.world
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,14 +31,21 @@ import com.octavi.ifrtrainer.render.InstrumentCanvas
 import com.octavi.ifrtrainer.render.parseDrawCommands
 
 private const val HSI_SIZE_DP = 260f
+// 400dp was too narrow: render_commands.ap_panel_commands's 6-button mode
+// row (HDG/NAV/APR/REV/ALT/VS) plus its info box needs ~520dp before the
+// last key stops overflowing into the info box - a real bug found
+// on-device (2026-09-24).
+private const val AP_PANEL_W_DP = 520f
+private const val AP_PANEL_H_DP = 90f
 
 /**
- * Phase 1 core-loop + first real-instrument screen (docs/ANDROID_PORT_PLAN.md
+ * Phase 1 core-loop + real-instrument screen (docs/ANDROID_PORT_PLAN.md
  * §6/§3.6): real IFR-1 events -> [BrainBridge.dispatchEvent] ->
  * `main.route_event` -> a real `World`, ticked ~30 Hz in the background by
- * [TrainerLoop] and surviving Android lifecycle events. The HSI head is now
- * real instrument graphics ([BrainBridge.renderHsi] + [InstrumentCanvas]);
- * everything else stays the plain-text readout until its own rendering pass.
+ * [TrainerLoop] and surviving Android lifecycle events. The HSI head and
+ * AP panel are real instrument graphics now ([BrainBridge.renderHsi]/
+ * [BrainBridge.renderApPanel] + [InstrumentCanvas]); everything else stays
+ * the plain-text readout until its own rendering pass.
  */
 @Composable
 fun Phase1LoopScreen() {
@@ -42,6 +53,7 @@ fun Phase1LoopScreen() {
     val lifecycleOwner = LocalLifecycleOwner.current
     var line by remember { mutableStateOf("starting...") }
     var hsiCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
+    var apCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var usbStatus by remember { mutableStateOf(UsbHidInput.Status.STOPPED) }
     val loop = remember { TrainerLoop(context) }
     val usbInput = remember { UsbHidInput(context) }
@@ -49,8 +61,10 @@ fun Phase1LoopScreen() {
     DisposableEffect(lifecycleOwner) {
         loop.listener = TrainerLoop.Listener { text ->
             line = text
-            val encoded = BrainBridge.renderHsi(0f, 0f, HSI_SIZE_DP, HSI_SIZE_DP)
-            hsiCommands = parseDrawCommands(encoded)
+            hsiCommands = parseDrawCommands(BrainBridge.renderHsi(0f, 0f, HSI_SIZE_DP, HSI_SIZE_DP))
+            apCommands = parseDrawCommands(
+                BrainBridge.renderApPanel(0f, 0f, AP_PANEL_W_DP, AP_PANEL_H_DP),
+            )
         }
         lifecycleOwner.lifecycle.addObserver(loop)
 
@@ -74,25 +88,49 @@ fun Phase1LoopScreen() {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Phase 1 core loop", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "IFR-1: $usbStatus",
-            style = MaterialTheme.typography.bodyMedium,
-            color = when (usbStatus) {
-                UsbHidInput.Status.CONNECTED -> Color(0xFF2E7D32)
-                UsbHidInput.Status.CLAIM_FAILED, UsbHidInput.Status.PERMISSION_DENIED -> Color(0xFFC62828)
-                else -> Color.Unspecified
-            },
-        )
-        Box(modifier = Modifier.fillMaxWidth().height(HSI_SIZE_DP.dp).padding(top = 8.dp)) {
-            InstrumentCanvas(commands = hsiCommands, modifier = Modifier.fillMaxSize(), sourceSize = HSI_SIZE_DP)
+    // Landscape phones are wide and short - a single vertical Column of
+    // HSI + AP panel + debug text overflowed the visible screen height with
+    // no way to scroll (real bug found on-device, 2026-09-24). This is a
+    // debug/verification layout, not §3.3's real screen composition, so the
+    // fix is just "fit it and let the leftover text scroll," not a real
+    // design pass: HSI fixed on the left, everything else in a scrollable
+    // column on the right.
+    Row(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+        Box(modifier = Modifier.width(HSI_SIZE_DP.dp).height(HSI_SIZE_DP.dp)) {
+            InstrumentCanvas(
+                commands = hsiCommands,
+                modifier = Modifier.fillMaxSize(),
+                sourceWidth = HSI_SIZE_DP,
+                sourceHeight = HSI_SIZE_DP,
+            )
         }
-        Text(
-            line,
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.padding(top = 12.dp),
-        )
+        Column(
+            modifier = Modifier.fillMaxHeight().padding(start = 12.dp).verticalScroll(rememberScrollState()),
+        ) {
+            Text("Phase 1 core loop", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "IFR-1: $usbStatus",
+                style = MaterialTheme.typography.bodyMedium,
+                color = when (usbStatus) {
+                    UsbHidInput.Status.CONNECTED -> Color(0xFF2E7D32)
+                    UsbHidInput.Status.CLAIM_FAILED, UsbHidInput.Status.PERMISSION_DENIED -> Color(0xFFC62828)
+                    else -> Color.Unspecified
+                },
+            )
+            Box(modifier = Modifier.width(AP_PANEL_W_DP.dp).height(AP_PANEL_H_DP.dp).padding(top = 8.dp)) {
+                InstrumentCanvas(
+                    commands = apCommands,
+                    modifier = Modifier.fillMaxSize(),
+                    sourceWidth = AP_PANEL_W_DP,
+                    sourceHeight = AP_PANEL_H_DP,
+                )
+            }
+            Text(
+                line,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        }
     }
 }

@@ -54,6 +54,14 @@ def render_hsi(session: TrainerSession, x: float, y: float, w: float, h: float) 
     return session.render_hsi(x, y, w, h)
 
 
+def render_ap_panel(session: TrainerSession, x: float, y: float, w: float, h: float) -> str:
+    """Call after tick_line() each frame - see TrainerSession
+    .render_ap_panel's docstring. AP-row buttons (any non-FMS mode) and the
+    AP-mode shifted inner knob (IAS set-point) already dispatch through the
+    same route_event path the HSI slice proved - see this panel react."""
+    return session.render_ap_panel(x, y, w, h)
+
+
 def tick_line(session: TrainerSession, dt_s: float) -> str:
     s = session.tick(dt_s)
     return (

@@ -115,16 +115,29 @@ Two real on-device bugs found and fixed getting this far:
   right now: a self-test screen, not a trainer UI.
 - `render/DrawCommand.kt` + `render/InstrumentCanvas.kt` — the §3.6
   draw-command-list contract and Kotlin-side replay mechanism. **The HSI
-  head is real now (2026-09-24)**, confirmed on real hardware: repo-root
-  `render_commands.py` (a new pure module, no pygame) ports `draw_hsi_head`
-  and its helpers from `render.py`, same trig/layout math, and
-  `InstrumentCanvas`'s `Text` case (formerly a TODO) is implemented via
-  `nativeCanvas.drawText` + `android.graphics.Paint`. The draw-command list
-  crosses to Kotlin as a newline/pipe-delimited **string**
-  (`parseDrawCommands` decodes it) rather than a list/`PyObject` - see the
-  `List`-marshaling bug noted below, which applies to this direction too.
-  Everything else (AP panel graphics, six-pack, moving map, GNS
-  softkey/page UI) is still not ported - one instrument at a time.
+  head and AP panel are real now (2026-09-24)**, confirmed on real
+  hardware: repo-root `render_commands.py` (a new pure module, no pygame)
+  ports `draw_hsi_head`/`draw_ap_panel` and their helpers from `render.py`,
+  same trig/layout math, and `InstrumentCanvas`'s `Text` case (formerly a
+  TODO) is implemented via `nativeCanvas.drawText` + `android.graphics
+  .Paint`. The draw-command list crosses to Kotlin as a newline/
+  pipe-delimited **string** (`parseDrawCommands` decodes it) rather than a
+  list/`PyObject` - see the `List`-marshaling bug noted below, which
+  applies to this direction too.
+
+  The AP panel slice found and fixed a systemic text-positioning bug the
+  HSI slice's looser spacing had hidden: `nativeCanvas.drawText` positions
+  by **baseline**, `render.py`'s pygame text by **top-left** - ad hoc
+  per-call offsets tuned against the HSI alone didn't generalize to the AP
+  panel's tightly-packed info box (overlapped badly). Fixed once, at the
+  root, in `InstrumentCanvas.kt` (`y - paint.ascent()`) rather than
+  patching every call site - `render_commands.py`'s `y` arguments are now
+  plain top-anchored values matching `render.py`'s own arguments directly
+  (a `_centered_y()` helper covers the few `center=True` call sites, which
+  need both axes centered on a point, not just top-anchored).
+
+  Everything else (six-pack, moving map, GNS softkey/page UI) is still not
+  ported - one instrument at a time.
 - `input/UsbHidInput.kt` — real implementation now, written against the
   §3.1 spike's confirmed hardware topology and `ifr1.py`'s own
   hardware-confirmed byte layout (see `ANDROID_PORT_PLAN.md` §3.1 "Spike
@@ -214,7 +227,11 @@ Two real on-device bugs found and fixed getting this far:
    render correctly, and NAV1's shift-latched knob live-rotates the course
    pointer on screen. `Phase1LoopScreen` shows it alongside the plain-text
    panel (which still covers everything not yet ported).
-7. **Do next**: more of §3.6 - AP panel graphics (`draw_ap_panel`) next,
-   then GNS softkey/page UI, six-pack, moving map - one instrument at a
-   time, same pattern as the HSI slice. Touch/rotary-gesture controls
-   (§3.2) are also still pending.
+7. ~~§3.6 draw-command-list instrument rendering, second slice~~ **Done
+   (2026-09-24)**: the AP panel (S-TEC 55X mode row, RDY lamp, VS window,
+   info box) is real instrument graphics now too, confirmed on the real
+   Pixel 9 - see "Status" above for the baseline-vs-top-left text-position
+   bug found and fixed getting there.
+8. **Do next**: more of §3.6 - GNS softkey/page UI next, then six-pack,
+   moving map - one instrument at a time, same pattern as the HSI/AP
+   slices. Touch/rotary-gesture controls (§3.2) are also still pending.

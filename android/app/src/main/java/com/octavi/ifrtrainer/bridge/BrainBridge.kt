@@ -93,6 +93,17 @@ object BrainBridge {
     }
 
     /**
+     * §3.6 second slice: the S-TEC 55X AP programmer panel's draw-command
+     * list, same encoding/decoder/call-after-tickWorld convention as
+     * [renderHsi].
+     */
+    fun renderApPanel(x: Float, y: Float, w: Float, h: Float): String {
+        val session = sessionObj ?: return ""
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        return module.callAttr("render_ap_panel", session, x, y, w, h).toString()
+    }
+
+    /**
      * Routes one real IFR-1 event through `main.route_event` - see
      * [androidbridge.session.TrainerSession.dispatch_event]. Fields map
      * directly from [com.octavi.ifrtrainer.input.Ifr1Event], already
