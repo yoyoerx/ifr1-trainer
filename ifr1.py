@@ -34,13 +34,27 @@ from enum import IntEnum
 
 try:
     import hid  # provided by the `hidapi` package (cython-hidapi)
-except ImportError as exc:  # pragma: no cover - import guard
-    raise SystemExit(
-        "Cannot import 'hid'. Install the cython-hidapi build:  pip install -r "
-        "requirements.txt\n"
-        "Note: the 'hidapi' package imports as `hid`. The similarly named pure-python "
-        "'hid' package needs a separate hidapi.dll/.so and is NOT what this expects."
-    ) from exc
+except ImportError:
+    # Deliberately NOT a hard SystemExit here (as it was until this was
+    # found, 2026-09-24): `Mode`/`Event`/`LAYOUT` are plain dataclasses that
+    # androidbridge (Android's Chaquopy bridge) needs to import with no
+    # hidapi installed at all - hidapi is dropped entirely on Android,
+    # replaced by UsbHidInput.kt (docs/ANDROID_PORT_PLAN.md §3.4). The
+    # `hid` name is only actually dereferenced inside IFR1.__init__/open()
+    # and find_devices() below, both desktop-hardware-only paths
+    # androidbridge never calls - _require_hid() raises there instead, with
+    # the same message this used to raise at import time.
+    hid = None  # type: ignore[assignment]
+
+
+def _require_hid() -> None:
+    if hid is None:
+        raise SystemExit(
+            "Cannot import 'hid'. Install the cython-hidapi build:  pip install -r "
+            "requirements.txt\n"
+            "Note: the 'hidapi' package imports as `hid`. The similarly named pure-python "
+            "'hid' package needs a separate hidapi.dll/.so and is NOT what this expects."
+        )
 
 IFR1_VID = 0x04D8
 IFR1_PID = 0xE6D6
@@ -190,6 +204,7 @@ class IFR1:
     """
 
     def __init__(self, *, path: bytes | None = None, layout: Layout = LAYOUT):
+        _require_hid()
         self._path = path
         self._layout = layout
         self._dev: hid.device | None = None
@@ -306,6 +321,7 @@ class IFR1:
 
 
 def find_devices() -> list[dict]:
+    _require_hid()
     return hid.enumerate(IFR1_VID, IFR1_PID)
 
 

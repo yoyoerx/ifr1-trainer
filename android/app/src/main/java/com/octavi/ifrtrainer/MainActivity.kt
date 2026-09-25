@@ -20,17 +20,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.octavi.ifrtrainer.bridge.BrainBridge
 import com.octavi.ifrtrainer.input.UsbHidTestScreen
+import com.octavi.ifrtrainer.world.Phase1LoopScreen
+
+private enum class Screen { SELF_TEST, USB_TEST, PHASE1_LOOP }
 
 /**
- * Phase 0 entry point. Proves two things end to end, nothing more yet:
- *  1. Chaquopy starts and the brain modules (navmath/navdata/gpsnav/
- *     sim_model/androidbridge) import and tick on-device — [BrainBridge].
- *  2. A Compose screen can host the [com.octavi.ifrtrainer.render
- *     .InstrumentCanvas] draw-command replay mechanism.
- *
- * Everything else (§3.1 USB input, §3.6 real layout-driven draw commands,
- * §3.3 landscape instrument composition) is later Phase 1 work per
- * docs/ANDROID_PORT_PLAN.md — this screen is a self-test, not the app.
+ * Entry point. Hosts three verification screens, not the real trainer UI
+ * yet (that's §3.6's draw-command-list rendering, still to come):
+ *  1. [Phase0SelfTestScreen] — Chaquopy starts and the brain modules
+ *     (navmath/navdata/gpsnav/sim_model/androidbridge) import and tick
+ *     on-device — [BrainBridge.selfTest].
+ *  2. [UsbHidTestScreen] — §3.1's raw-HID verification (buttons/knobs
+ *     against the real IFR-1, confirmed 2026-09-24).
+ *  3. [Phase1LoopScreen] — §6 Phase 1's core loop: real IFR-1 events
+ *     routed through `main.route_event` into a real `World`, ticked in the
+ *     background and surviving Android lifecycle events.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,16 +42,24 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    var showUsbTest by remember { mutableStateOf(false) }
-                    if (showUsbTest) {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            Button(onClick = { showUsbTest = false }, modifier = Modifier.padding(8.dp)) {
+                    var screen by remember { mutableStateOf(Screen.SELF_TEST) }
+                    when (screen) {
+                        Screen.SELF_TEST -> Phase0SelfTestScreen(
+                            onOpenUsbTest = { screen = Screen.USB_TEST },
+                            onOpenPhase1Loop = { screen = Screen.PHASE1_LOOP },
+                        )
+                        Screen.USB_TEST -> Column(modifier = Modifier.fillMaxSize()) {
+                            Button(onClick = { screen = Screen.SELF_TEST }, modifier = Modifier.padding(8.dp)) {
                                 Text("Back to self-test")
                             }
                             UsbHidTestScreen()
                         }
-                    } else {
-                        Phase0SelfTestScreen(onOpenUsbTest = { showUsbTest = true })
+                        Screen.PHASE1_LOOP -> Column(modifier = Modifier.fillMaxSize()) {
+                            Button(onClick = { screen = Screen.SELF_TEST }, modifier = Modifier.padding(8.dp)) {
+                                Text("Back to self-test")
+                            }
+                            Phase1LoopScreen()
+                        }
                     }
                 }
             }
@@ -56,7 +68,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun Phase0SelfTestScreen(onOpenUsbTest: () -> Unit) {
+private fun Phase0SelfTestScreen(onOpenUsbTest: () -> Unit, onOpenPhase1Loop: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var result by remember { mutableStateOf("running self-test...") }
 
@@ -76,6 +88,9 @@ private fun Phase0SelfTestScreen(onOpenUsbTest: () -> Unit) {
         Text(result, style = MaterialTheme.typography.bodyMedium)
         Button(onClick = onOpenUsbTest, modifier = Modifier.padding(top = 16.dp)) {
             Text("IFR-1 raw-HID test")
+        }
+        Button(onClick = onOpenPhase1Loop, modifier = Modifier.padding(top = 8.dp)) {
+            Text("Phase 1 core loop")
         }
     }
 }

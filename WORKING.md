@@ -89,8 +89,38 @@ landscape then portrait. First target device: Pixel 9.
       `ANDROID_PORT_PLAN.md` §3.1 "Runtime-confirmed". §3.1's hard project
       gate has passed — IFR-1 support on Android v1 is fully confirmed, no
       `InputDevice`/`KeyEvent` fallback needed.
-- [ ] Everything else in `ANDROID_PORT_PLAN.md` §6 (Phase 1 onward) is now
-      unblocked — landscape core loop with IFR-1 input is next.
+- [x] **Phase 1 core loop confirmed on real hardware (2026-09-24)**: real
+      IFR-1 events now route through `main.route_event` into a real `World`
+      (gns/sim/radios/ap/baro/shift-latch state), ticked ~30 Hz on a
+      background thread with lifecycle-aware suspend/resume
+      (`world/TrainerLoop.kt`). `androidbridge/session.py` was rewritten to
+      wrap `World`/`route_event` directly instead of reimplementing the
+      mode-routing table — see `androidbridge/__init__.py`'s corrected
+      docstring (the old "main.py can't be reused, it imports pygame"
+      rationale was wrong: `main.py`'s module-level imports are stdlib-only).
+      Verified end-to-end on the real Pixel 9 + real IFR-1: COM1/COM2 knob
+      tuning, NAV1/NAV2 OBS shift-latch, AP-row buttons, XPDR all confirmed
+      correct via a live debug-text screen (`world/Phase1LoopScreen.kt`).
+      FMS mode's own dispatch path (DCT/MNU/CLR/ENT) reuses the exact same
+      `route_event` call, but isn't independently visually confirmed yet —
+      the debug panel doesn't surface flight-plan/cursor state, that's
+      deferred rendering-pass work.
+      Two real on-device bugs found and fixed along the way: (1) `ifr1.py`
+      had a top-level `import hid` that raised `SystemExit` on any `import
+      ifr1` without hidapi installed (true under Chaquopy by design) -
+      crashed even the Phase 0 self-test; made lazy, guarded in
+      `IFR1.__init__`/`find_devices()` instead. (2) Chaquopy's Java
+      `List`/`ArrayList` → Python marshaling for a `callAttr` argument
+      produced an object `tuple()`/`list()` couldn't consume
+      ("TypeError: 'ArrayList' object is not iterable" - real crash on every
+      knob turn); worked around by passing `pressed`/`released`/`long_press`
+      as comma-joined strings across the Chaquopy boundary instead of lists.
+      Full writeup: `ANDROID_PORT_PLAN.md` §6 Phase 1 / §3.1.
+- [ ] **Do next**: §3.6 draw-command-list instrument rendering (port
+      `render.py`'s GNS-530/CDI/HSI/AP-panel positioning math, fill in
+      `InstrumentCanvas.kt`'s `Text` case) — the core loop above is what it
+      now gets to render against, instead of guessed shapes. Touch/rotary
+      controls (§3.2) also still pending.
 
 ---
 

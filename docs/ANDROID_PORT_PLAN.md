@@ -455,6 +455,31 @@ favorably, before any other Android work is worth starting.
    though not required for v1 release — needed for development/testing
    without the hardware attached at every step, and lands naturally as the
    same UI work portrait will need in Phase 2.
+
+   **Core loop (input → World → tick) confirmed on real hardware
+   (2026-09-24).** `androidbridge/session.py` now wraps `main.World`/
+   `main.route_event` directly (staged into Chaquopy: `main.py`, `ifr1.py`,
+   `config.py`, `gns530.py`, `gns430.py` — all confirmed import-clean, since
+   `main.py`'s module-level imports are stdlib-only, correcting
+   `androidbridge/__init__.py`'s earlier "can't reuse main.py, it imports
+   pygame" assumption). `world/TrainerLoop.kt` ticks it ~30 Hz on a
+   background thread, lifecycle-aware (suspends on `onStop`). Real IFR-1
+   events now route through the exact same `route_event` mode-table desktop
+   uses, verified on-device: COM1/COM2 tuning, NAV1/NAV2 OBS shift-latch,
+   AP-row buttons, XPDR all confirmed correct via a live debug-text screen
+   (`world/Phase1LoopScreen.kt`) - not the real instrument graphics, §3.6
+   below is still what renders those. FMS mode's dispatch path is wired
+   identically but not independently visually confirmed yet (no
+   flight-plan/cursor readout in the debug panel).
+
+   Two real on-device bugs found and fixed getting here (see `WORKING.md`
+   for the full detail): `ifr1.py` had a top-level `import hid` that raised
+   `SystemExit` on any `import ifr1` without hidapi installed - true under
+   Chaquopy by design, so it broke even the Phase 0 self-test until made
+   lazy; and Chaquopy's Java `List`/`ArrayList` → Python argument marshaling
+   produced a non-iterable object on the Python side (crashed on every knob
+   turn), worked around by passing button-name lists as comma-joined
+   strings across that boundary instead.
 3. **Phase 2 — portrait layout.** Separate composition pass per §3.3, not a
    rotation of Phase 1 — budgeted as its own phase, not a quick follow-on.
 4. **Phase 3 — nav data on-device**: fetch/cache/AIRAC-validity flow,

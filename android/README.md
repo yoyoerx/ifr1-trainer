@@ -1,4 +1,4 @@
-# android/ — Phase 0 scaffold
+# android/ — Phase 1 in progress (core loop confirmed)
 
 Companion to `docs/ANDROID_PORT_PLAN.md` (read that first). This is the
 Chaquopy hybrid app shell: Kotlin/Compose UI + the existing Python avionics
@@ -50,6 +50,39 @@ IFR-1, and buttons, outer knob, and inner knob all decode correctly through
 the one raw-HID code path — see §3.1's "Runtime-confirmed" writeup in
 `ANDROID_PORT_PLAN.md` for the exact observed frames. §3.1's hard project
 gate has passed.
+
+**Phase 1's core loop is also confirmed on real hardware (2026-09-24).**
+`androidbridge/session.py` now wraps `main.World`/`main.route_event`
+directly (Chaquopy now also stages `main.py`, `ifr1.py`, `config.py`,
+`gns530.py`, `gns430.py` — all confirmed import-clean; `main.py`'s
+module-level imports turned out to be stdlib-only all along, correcting
+`androidbridge/__init__.py`'s old "can't reuse main.py, it imports pygame"
+assumption). `world/TrainerLoop.kt` ticks it ~30 Hz on a background thread,
+suspending cleanly on `onStop`/resuming on `onStart`. Real IFR-1 events
+route through the exact mode-routing table desktop uses — on-device,
+turning COM1/COM2 correctly tuned standby frequencies, NAV1/NAV2's
+shift-latched knob correctly turned the OBS/CRS card, AP-row buttons
+correctly changed AP annunciators, all visible live in
+`world/Phase1LoopScreen.kt`'s plain-text debug panel (not the real
+instrument graphics yet — §3.6 below).
+
+Two real on-device bugs found and fixed getting this far:
+1. `ifr1.py` had a **top-level** `import hid` inside a `try/except` that
+   raised `SystemExit` on *any* `import ifr1` if hidapi wasn't installed -
+   true by design under Chaquopy (§3.4 drops hidapi entirely). This broke
+   even the already-working Phase 0 self-test the moment `androidbridge`
+   started importing `ifr1` for its `Mode`/`Event` dataclasses. Fixed by
+   making the import lazy/guarded (`_require_hid()`, called only from
+   `IFR1.__init__`/`find_devices()` - both desktop-hardware-only paths
+   `androidbridge` never touches).
+2. Chaquopy's Java `List`/`ArrayList` → Python marshaling for a `callAttr`
+   argument produced a Python-side object that `tuple()`/`list()` couldn't
+   consume (`TypeError: 'ArrayList' object is not iterable` - and the same
+   failure for Kotlin's `emptyList()` singleton too, so not a
+   collection-type-specific bug). Crashed on every knob turn. Worked around
+   by passing `pressed`/`released`/`long_press` as comma-joined strings
+   across that boundary instead of lists - button names never contain
+   commas, so nothing is lost.
 
 ## Prerequisites to actually open/build this
 
@@ -113,6 +146,26 @@ gate has passed.
   self-test screen's "IFR-1 raw-HID test" button. Not shipped product UI —
   results belong in `ANDROID_PORT_PLAN.md` §3.1, not preserved as app code
   long-term; fine to delete once Phase 1's real input-handling UI exists.
+- `world/TrainerLoop.kt` — §3.7's background sim-loop thread: a
+  `DefaultLifecycleObserver` that ticks `BrainBridge.tickWorld(dt)` at
+  ~30 Hz on a dedicated daemon thread, suspending on `onStop` and resuming
+  on `onStart` rather than free-running while backgrounded or crashing on
+  resume. Confirmed on real hardware (2026-09-24).
+- `world/Phase1LoopScreen.kt` — Phase 1's core-loop verification screen:
+  wires a real `UsbHidInput` into `BrainBridge.dispatchEvent` and a
+  `TrainerLoop` into a plain live-updating text panel (mode/shift,
+  heading/altitude/IAS/VS, COM/NAV frequencies, XPDR, AP annunciators,
+  CDI). Deliberately not real instrument graphics - that's §3.6, still to
+  come; this proves the loop underneath it first. Reachable from the
+  self-test screen's "Phase 1 core loop" button.
+- `androidbridge/demo_session.py` (repo root, not under `android/`) —
+  Phase 1's Kotlin-facing entry points (`new_session`, `tick_line`,
+  `dispatch`), built on a small synthetic nav database (same one
+  `selftest.py` uses) since real on-device FAA data acquisition is §3.5,
+  not yet built. `tick_line` returns one formatted string per tick rather
+  than a dict, reusing `selfTest()`'s already-proven String-marshaling
+  pattern instead of introducing dict/PyObject marshaling as a second,
+  separately-risky path.
 - `AndroidManifest.xml` — landscape-locked (§6 Phase 1 builds landscape
   first); now declares `android.hardware.usb.host` (`required="true"`, IFR-1
   is required for v1) and a `USB_DEVICE_ATTACHED` intent-filter (+
@@ -145,6 +198,16 @@ gate has passed.
    matches `ifr1.py`'s `LAYOUT` byte-for-byte (inner knob CW/CCW, `KNOB`
    button, mode byte all observed decoding correctly). §3.1's hard project
    gate has passed — see `ANDROID_PORT_PLAN.md` §3.1 "Runtime-confirmed" for
-   the full evidence. **Do next**: Phase 1 (landscape core loop with real
-   IFR-1 input wired into the actual trainer UI, per §6) — the disposable
-   test screen has served its purpose.
+   the full evidence.
+5. ~~Phase 1 core loop: real IFR-1 input → `World` → live state, with
+   background-thread ticking + Android lifecycle handling~~ **Done
+   (2026-09-24)** — see "Status" above for the two real bugs found/fixed
+   getting there. Verified on real hardware: COM/NAV tuning, NAV OBS
+   shift-latch, AP-row buttons, XPDR all confirmed correct.
+6. **Do next**: §3.6 draw-command-list instrument rendering - port
+   `render.py`'s actual GNS-530/CDI/HSI/AP-panel positioning math into a
+   `render_commands.py`, fill in `InstrumentCanvas.kt`'s `Text` case
+   (Compose `Canvas` `Paint`/`drawText`), and replace `Phase1LoopScreen`'s
+   plain-text panel with the real instrument graphics it now has live data
+   to render against. Touch/rotary-gesture controls (§3.2) are also still
+   pending.

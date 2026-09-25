@@ -73,6 +73,10 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
+    // TrainerLoop.kt's DefaultLifecycleObserver (§3.7 background-thread sim
+    // loop suspending cleanly on onStop) - explicit rather than relying on
+    // whatever version activity-compose happens to pull in transitively.
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
 }
 
 // -- Stage the existing pure-Python avionics brain into this build --------
@@ -92,6 +96,14 @@ val repoRoot = rootDir.parentFile!!
 val brainModules = listOf(
     "navmath.py", "gpsnav.py", "instruments.py", "autopilot.py",
     "radios.py", "windsaloft.py", "wmm.py", "scoring.py", "sim_model.py",
+    // Phase 1 (docs/ANDROID_PORT_PLAN.md §6): androidbridge now reuses
+    // main.py's World/route_event/Config directly rather than
+    // reimplementing them - all confirmed import-clean under Chaquopy
+    // (stdlib-only at module scope; pygame/render/hid are only imported
+    // lazily inside function bodies main.py's CLI path calls, never
+    // triggered by androidbridge). gns530.py/gns430.py are what World
+    // actually instantiates as the GNS unit.
+    "main.py", "ifr1.py", "config.py", "gns530.py", "gns430.py",
 )
 val brainPackages = listOf("navdata", "androidbridge")
 

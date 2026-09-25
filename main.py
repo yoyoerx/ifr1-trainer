@@ -298,8 +298,13 @@ class Frame:
 
 
 class World:
-    def __init__(self, cfg: Config):
-        self.db = navdata.load()
+    def __init__(self, cfg: Config, db: "navdata.model.NavDatabase | None" = None):
+        # `db` lets a caller inject an already-loaded (or synthetic, for
+        # tests) NavDatabase instead of always hitting navdata.load()'s
+        # real FAA CIFP+NASR cache - androidbridge.TrainerSession uses this
+        # so its own test fixtures can keep using a small synthetic db
+        # (see docs/ANDROID_PORT_PLAN.md §6 Phase 1).
+        self.db = db if db is not None else navdata.load()
         from datetime import date
         unit = getattr(cfg, "unit", "530")
         unit_cls = (gns430_mod.Gns430 if unit == "430"

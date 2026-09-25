@@ -1,18 +1,21 @@
-"""TrainerSession — one flight, one GpsNav + one SimModel, ticked together.
+"""TrainerSession — owns a real `main.World` and steps/routes it exactly like
+desktop's loop does.
 
-Kotlin creates one `TrainerSession` per training session (via Chaquopy) and
-calls `tick(dt)` once per frame, reading back a **plain dict** — floats,
-strings, bools, lists — deliberately, since that's what's cheap to marshal
-across the Chaquopy JNI boundary. Dataclass instances (`NavState`, `Ownship`,
-`Point`) stay on the Python side; nothing here hands one across the bridge.
+Kotlin creates one `TrainerSession` per training session (via Chaquopy),
+calls `tick(dt)` once per frame and `dispatch_event(...)` for every real
+IFR-1 event, reading back **plain dicts** - floats, strings, bools, lists -
+deliberately, since that's what's cheap to marshal across the Chaquopy JNI
+boundary. Dataclass instances (`NavState`, `Ownship`, `Point`) and the
+`World`/radio/autopilot objects themselves stay on the Python side; nothing
+here hands one across the bridge.
 
-This is the Phase 0 proof that the existing avionics brain (`gpsnav.GpsNav`,
-`sim_model.SimModel`, `navdata.NavDatabase`) imports and runs together
-unmodified — see `docs/ANDROID_PORT_PLAN.md` §3.4/§9.1. It does not yet do
-everything `main.py`'s loop does (input dispatch, message-queue draining
-policy, the draw-command-list render contract from §3.6) — those are
-follow-up work, not silently dropped; see the package docstring
-(`androidbridge/__init__.py`) for what's intentionally out of scope here.
+Phase 1 (docs/ANDROID_PORT_PLAN.md §6): this wraps `main.World` and
+`main.route_event` directly rather than reimplementing the mode-routing
+table (COM/NAV tuning, shift-latch semantics, AP-row buttons, XPDR) that
+`route_event` already owns - see `androidbridge/__init__.py` for why that's
+safe to reuse here (module-level imports are stdlib-only; pygame/render/hid
+are only ever imported lazily, inside functions `androidbridge` never
+calls).
 """
 
 from __future__ import annotations
@@ -20,44 +23,53 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from gpsnav import GpsNav
+import config as config_mod
+from ifr1 import Event as Ifr1Event
+from ifr1 import Mode as Ifr1Mode
+from main import Config, World, route_event
 from navdata.model import NavDatabase
-from navmath import Point
-from sim_model import SimModel
+from navmath import Point, norm360
 
 
 class TrainerSession:
-    """Owns one `GpsNav` + one `SimModel` and steps them together each tick."""
+    """Owns one `World` (gns/sim/radios/ap/baro/shift-latch state) and steps
+    + routes IFR-1 events through it, mirroring desktop's loop exactly."""
 
     def __init__(
         self,
         db: NavDatabase,
         *,
-        start_lat: float,
-        start_lon: float,
-        heading_deg: float,
-        altitude_ft: float = 3000.0,
-        tas_kt: float = 120.0,
-        wind_from_deg: float = 0.0,
-        wind_kt: float = 0.0,
+        start_lat: float | None = None,
+        start_lon: float | None = None,
+        heading_deg: float | None = None,
+        altitude_ft: float | None = None,
+        tas_kt: float | None = None,
+        wind_from_deg: float | None = None,
+        wind_kt: float | None = None,
     ) -> None:
-        self.db = db
-        self.gpsnav = GpsNav(db)
-        self.sim = SimModel(
-            pos=Point(start_lat, start_lon),
-            heading_deg=heading_deg,
-            altitude_ft=altitude_ft,
-            tas_kt=tas_kt,
-            wind_from_deg=wind_from_deg,
-            wind_kt=wind_kt,
-        )
+        cfg_dict = dict(config_mod.DEFAULTS)
+        if altitude_ft is not None:
+            cfg_dict["altitude"] = altitude_ft
+        if tas_kt is not None:
+            cfg_dict["tas"] = tas_kt
+        if wind_from_deg is not None or wind_kt is not None:
+            cfg_dict["wind"] = f"{wind_from_deg or 0.0:.0f}/{wind_kt or 0.0:.0f}"
+        self.world = World(Config(cfg_dict), db=db)
 
-    # -- flight plan / commands (thin pass-throughs, not a full bezel
-    #    dispatch table — see the module docstring) -------------------
+        # World derives its own start position from the loaded flight plan
+        # (or a KBOS/first-airport fallback) via `_initial_position` - only
+        # override it when the caller explicitly asked for a specific start,
+        # e.g. the selftest's small synthetic db with no airports in it.
+        if start_lat is not None and start_lon is not None:
+            self.world.sim.pos = Point(start_lat, start_lon)
+        if heading_deg is not None:
+            self.world.sim.heading = norm360(heading_deg)
+
+    # -- flight plan / commands (thin pass-throughs) --------------------
     def load_flight_plan(self, idents: list[str]) -> list[str]:
         """Returns the list of idents that failed to resolve, same as
-        `GpsNav.load_flight_plan` — empty means every waypoint was found."""
-        return self.gpsnav.load_flight_plan(idents)
+        `GpsNav.load_flight_plan` - empty means every waypoint was found."""
+        return self.world.gns.load_flight_plan(idents)
 
     def command(
         self,
@@ -67,19 +79,62 @@ class TrainerSession:
         tas_kt: float | None = None,
         ias_kt: float | None = None,
     ) -> None:
-        self.sim.command(heading=heading_deg, altitude=altitude_ft, tas=tas_kt, ias=ias_kt)
+        self.world.sim.command(heading=heading_deg, altitude=altitude_ft, tas=tas_kt, ias=ias_kt)
+
+    # -- real IFR-1 input, one event at a time ---------------------------
+    def dispatch_event(
+        self,
+        mode: str,
+        pressed: str,
+        released: str,
+        outer: int,
+        inner: int,
+        mode_changed: bool,
+        long_press: str,
+    ) -> None:
+        """Builds an `ifr1.Event` from Kotlin's `Ifr1Event` fields (already
+        confirmed field-for-field identical, see §3.1) and routes it through
+        `main.route_event` - the exact function desktop's loop calls.
+
+        `pressed`/`released`/`long_press` are comma-joined strings, not
+        lists - a real crash on-device (2026-09-24) found that Chaquopy's
+        Java List -> Python marshaling for a `callAttr` argument produces an
+        object `tuple()`/`list()` can't consume ("TypeError: 'ArrayList'
+        object is not iterable", same failure for `EmptyList` too - not a
+        Kotlin-collection-type-specific issue). A comma-joined string
+        sidesteps that class of bug entirely; button names never contain
+        commas so this loses nothing.
+        """
+        ev = Ifr1Event(
+            mode=Ifr1Mode[mode],
+            mode_changed=mode_changed,
+            pressed=tuple(pressed.split(",")) if pressed else (),
+            released=tuple(released.split(",")) if released else (),
+            outer=outer,
+            inner=inner,
+            long_press=tuple(long_press.split(",")) if long_press else (),
+        )
+        route_event(ev, self.world)
 
     # -- the tick ------------------------------------------------------
     def tick(self, dt_s: float) -> dict[str, Any]:
-        ownship = self.sim.step(dt_s)
-        nav = self.gpsnav.update(ownship.pos, ownship.track_deg, ownship.gs_kt, dt_s)
+        frame = self.world.tick(dt_s)
+        ownship = frame.own
 
         # drain gpsnav's message queue rather than let it grow unbounded -
         # this session is the only consumer, so it owns "read = cleared"
         # (main.py's desktop loop has its own, separate policy for this;
         # not shared with the Android side)
-        messages = list(self.gpsnav.messages)
-        self.gpsnav.messages.clear()
+        messages = list(self.world.gns.messages)
+        self.world.gns.messages.clear()
+
+        nav_dict = asdict(frame.nav)
+        nav_dict["annunciators"] = list(nav_dict["annunciators"])
+
+        ap = self.world.ap
+        com1, com2 = self.world.radios.com1, self.world.radios.com2
+        nav1, nav2 = self.world.radios.nav1, self.world.radios.nav2
+        xpdr = self.world.radios.xpdr
 
         snapshot: dict[str, Any] = {
             "pos_lat": ownship.pos.lat,
@@ -92,8 +147,26 @@ class TrainerSession:
             "altitude_ft": ownship.altitude_ft,
             "vs_fpm": ownship.vs_fpm,
             "messages": messages,
+            "nav": nav_dict,
+            "baro_inhg": self.world.baro_inhg,
+            "shift_latched": self.world.shift_latched,
+            "mode": self.world._last_mode.name if self.world._last_mode is not None else "",
+            "com1_active_mhz": com1.active_mhz,
+            "com1_standby_mhz": com1.standby_mhz,
+            "com2_active_mhz": com2.active_mhz,
+            "com2_standby_mhz": com2.standby_mhz,
+            "nav1_active_mhz": nav1.active_mhz,
+            "nav1_standby_mhz": nav1.standby_mhz,
+            "nav1_obs_deg": nav1.obs_deg,
+            "nav2_active_mhz": nav2.active_mhz,
+            "nav2_standby_mhz": nav2.standby_mhz,
+            "nav2_obs_deg": nav2.obs_deg,
+            "xpdr_squawk": xpdr.code,
+            "xpdr_mode": xpdr.mode,
+            "ap_engaged": ap.engaged,
+            "ap_lateral": ap.lateral.name if hasattr(ap.lateral, "name") else str(ap.lateral),
+            "ap_vertical": ap.vertical.name if hasattr(ap.vertical, "name") else str(ap.vertical),
+            "ap_heading_bug": ap.heading_bug,
+            "ap_alt_preselect": ap.alt_preselect,
         }
-        nav_dict = asdict(nav)
-        nav_dict["annunciators"] = list(nav_dict["annunciators"])
-        snapshot["nav"] = nav_dict
         return snapshot
