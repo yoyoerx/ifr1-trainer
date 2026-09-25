@@ -395,15 +395,15 @@ always-drawn chrome (header group/page name + CRSR indicator, no-bezel
 flat screen frame) plus `_draw_nav_default` (active-leg symbol/from/to,
 OBS annunciation, DTK/TRK/DIS/GS/ETE/XTK rows), `_turn_advisory` (NEXT
 DTK/TURN TO), `_cdi_strip` (the linear GPS/VLOC CDI + TO/FROM strip), and
-`_bezel_labels` (the flat style's static key row). **Only the default NAV
-page renders** - `_gns_unit` is a ~15-page router (Map, Flight Plan, VNAV,
-NAV/COM, WPT, NRST, AUX with 5 sub-tabs, plus 8 modal dialogs); porting all
-of it in one pass wasn't realistic, same reasoning as HSI-then-AP-panel
-over attempting the whole panel at once. `route_event` already dispatches
-real FMS bezel-key input into `GpsNav.handle_event` correctly (proven by
-the core-loop milestone) - so turning the FMS knob does move
-`gns.cursor.page_name` server-side, but the Android screen keeps showing
-the default-NAV layout regardless until those other pages get their own
+`_bezel_labels` (the flat style's static key row). At the time, only the
+default NAV page rendered - `_gns_unit` is a ~15-page router (Map, Flight
+Plan, VNAV, NAV/COM, WPT, NRST, AUX with 5 sub-tabs, plus 8 modal
+dialogs); porting all of it in one pass wasn't realistic, same reasoning
+as HSI-then-AP-panel over attempting the whole panel at once. `route_event`
+already dispatches real FMS bezel-key input into `GpsNav.handle_event`
+correctly (proven by the core-loop milestone) - so turning the FMS knob
+does move `gns.cursor.page_name` server-side, but the Android screen kept
+showing the default-NAV layout regardless until other pages got their own
 pass. Applied the top-anchored-`y`/`_centered_y()` convention correctly
 from the start this time (no ad hoc offsets to fix later, unlike the AP
 panel slice). Verified on the real Pixel 9 with the demo flight plan
@@ -411,6 +411,28 @@ panel slice). Verified on the real Pixel 9 with the demo flight plan
 magenta), DTK/TRK/DIS/GS/ETE/XTK rows, and CDI strip (GPS source, centered
 needle, TO indicator) all render correctly and match the plain-text debug
 panel's own values exactly.
+
+**Fourth slice confirmed on real hardware (2026-09-25): the Flight Plan
+page.** `render_commands.py`'s `gns_commands` was refactored to dispatch
+its body by `cursor.page_name` (`_nav_default_body`/`_fpl_body`, mirroring
+`_gns_unit`'s own `if page == ...` structure) rather than always drawing
+the default page, and gains `_fpl_body` - a port of `_draw_fpl`/`_fpl_tag`/
+`visible_fpl_rows` (waypoint list with the active-leg `->` marker, per-leg
+DTK/DIS, procedure-title headers, IAF/FAF/MAP/HOLD tags, the DTO status
+line, scroll-window-follows-cursor logic, "no flight plan" fallback).
+**Read-only**: the in-place ident-edit buffer (`gns._fpl_edit`'s live
+typing cursor, shown while adding/editing a waypoint) is not rendered -
+real bezel input still edits the plan server-side, this just doesn't show
+that transient edit state yet, same accepted-gap framing as the
+still-unported pages. A real bug was found and fixed while writing this
+slice's test: the test fixture's synthetic nav database was missing the
+third waypoint (`CHAR`) the test flight plan referenced, silently dropping
+it from the loaded plan and producing a false rendering-bug signal - fixed
+in the fixture, not the rendering code (`gns_commands` was correct against
+the real, complete flight plan the whole time). Verified on the real
+Pixel 9: header ("NAV Flight Plan"), the waypoint list with ALFA (past,
+plain), `-> BRAVO` (magenta, active leg), CHAR (upcoming), correct per-leg
+DTK/DIS columns, and the CDI strip all render correctly.
 
 ### 3.7 Loop, threading, and Android lifecycle
 

@@ -196,10 +196,10 @@ class TrainerSession:
 
     def render_gns(self, x: float, y: float, w: float, h: float) -> str:
         """Draw-command-list string for the GNS unit screen - **default NAV
-        page only**, see render_commands.gns_commands's docstring for what's
-        deliberately not ported yet. Uses the same `Frame.nav`/`.own`/
-        `.panel` `tick()` already computed this frame, plus `self.world.gns`
-        and `self.world.magvar` directly."""
+        and Flight Plan pages only**, see render_commands.gns_commands's
+        docstring for what's deliberately not ported yet. Uses the same
+        `Frame.nav`/`.own`/`.panel` `tick()` already computed this frame,
+        plus `self.world.gns` and `self.world.magvar` directly."""
         frame = self._last_frame
         if frame is None:
             return ""

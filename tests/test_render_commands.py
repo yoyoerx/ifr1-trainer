@@ -6,7 +6,7 @@ module in this repo.
 
 from autopilot import Autopilot
 from gns530 import Gns530
-from gpsnav import NavState
+from gpsnav import PAGE_GROUPS, NavState
 from instruments import CDI, DME, BearingPointer, Markers, NavHead, Ownship, Panel
 from navdata.model import NavDatabase, VhfNavaid, Waypoint
 from navmath import Point
@@ -76,6 +76,7 @@ def _db():
     d = NavDatabase(source="test")
     d.add_waypoint(Waypoint("ALFA", Point(40.0, -74.0)))
     d.add_waypoint(Waypoint("BRAVO", Point(40.5, -74.0)))
+    d.add_waypoint(Waypoint("CHAR", Point(41.0, -74.0)))
     d.add_vhf(VhfNavaid("OOO", Point(40.25, -74.0), 113.0))
     return d
 
@@ -142,3 +143,46 @@ def test_gns_commands_obs_annunciation_when_active():
     nav = NavState(valid=True, mode="OBS")
     s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
     assert "OBS 045" in s
+
+
+def _to_flight_plan_page(gns) -> None:
+    gns.cursor.page = PAGE_GROUPS["NAV"].index("Flight Plan")
+
+
+def test_gns_commands_flight_plan_page_lists_waypoints_within_bounds():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    _to_flight_plan_page(gns)
+    nav = NavState(valid=True, mode="LEG", from_ident="ALFA", to_ident="BRAVO")
+    x, y, w, h = 10.0, 10.0, 480.0, 280.0
+    s = gns_commands(x, y, w, h, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "Flight Plan" in s
+    assert "ALFA" in s and "BRAVO" in s and "CHAR" in s
+    min_fields = {"T": 7, "L": 6, "R": 6, "C": 5, "P": 3}
+    max_y = 0.0
+    for line in s.splitlines():
+        op, *fields = line.split("|")
+        assert op in min_fields
+        assert len(fields) >= min_fields[op]
+        if op == "T":
+            max_y = max(max_y, float(fields[1]))
+        elif op == "R":
+            max_y = max(max_y, float(fields[1]) + float(fields[3]))
+    assert max_y <= y + h, "a draw command escaped the passed h bound"
+
+
+def test_gns_commands_flight_plan_active_leg_marker():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    _to_flight_plan_page(gns)
+    nav = NavState(valid=True, mode="LEG", from_ident="ALFA", to_ident="BRAVO")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "-> BRAVO" in s
+
+
+def test_gns_commands_flight_plan_empty_shows_message():
+    gns = Gns530(_db())
+    _to_flight_plan_page(gns)
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "no flight plan" in s

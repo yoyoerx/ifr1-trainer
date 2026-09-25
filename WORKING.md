@@ -172,9 +172,23 @@ landscape then portrait. First target device: Pixel 9.
       GS/ETE/XTK rows, and CDI strip all render correctly, matching the
       plain-text debug panel's values exactly. Full writeup:
       `ANDROID_PORT_PLAN.md` §3.6.
-- [ ] **Do next**: more of §3.6 (other GNS pages — Flight Plan is the
-      natural next one — then moving map). Touch/rotary controls (§3.2)
-      also still pending.
+- [x] **§3.6 rendering, fourth slice — Flight Plan page confirmed on real
+      hardware (2026-09-25)**: `gns_commands` now dispatches its body by
+      `cursor.page_name` (`_nav_default_body`/`_fpl_body`) instead of
+      always showing the default page; `_fpl_body` ports `_draw_fpl`/
+      `_fpl_tag`/`visible_fpl_rows` (waypoint list, active-leg marker,
+      per-leg DTK/DIS, procedure headers, tags, DTO status line, scroll
+      window). Read-only — the in-place ident-edit buffer isn't rendered
+      yet. Found and fixed a real test-fixture bug while writing this
+      slice's coverage: the synthetic nav db was missing a waypoint
+      (`CHAR`) the test flight plan referenced, silently truncating the
+      loaded plan and producing a false rendering-bug signal — the fix was
+      in the fixture, not `gns_commands`. Verified on the real Pixel 9:
+      header, waypoint list (ALFA past, `-> BRAVO` active leg in magenta,
+      CHAR upcoming), per-leg DTK/DIS, and CDI strip all render correctly.
+      Full writeup: `ANDROID_PORT_PLAN.md` §3.6.
+- [ ] **Do next**: more of §3.6 (other GNS pages — VNAV or NAV/COM next —
+      then moving map). Touch/rotary controls (§3.2) also still pending.
 
 ---
 

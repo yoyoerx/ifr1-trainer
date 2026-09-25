@@ -81,15 +81,25 @@ dependencies {
 
 // -- Stage the existing pure-Python avionics brain into this build --------
 //
-// Single source of truth: the desktop modules (navmath.py, gpsnav.py,
-// instruments.py, autopilot.py, radios.py, windsaloft.py, wmm.py,
-// scoring.py, sim_model.py, navdata/, androidbridge/) are never duplicated
-// by hand into this Android project. This Gradle task copies exactly that
-// curated set from the repo root into a build-generated (gitignored)
-// directory, which Chaquopy's source set above then points at. Anything
-// desktop-only (main.py, render.py, ifr1.py, config.py, gdl90_out.py,
-// foreflight_discovery.py, xplane_feed.py, wx_auto.py, datasrc/, tests/) is
-// deliberately left out — datasrc/ in particular needs `requests`-equivalent
+// Single source of truth: the desktop modules listed in `brainModules`/
+// `brainPackages` below are never duplicated by hand into this Android
+// project. This Gradle task copies exactly that curated set from the repo
+// root into a build-generated (gitignored) directory, which Chaquopy's
+// source set above then points at - any behavioral change to one of those
+// files (nav math, radio/autopilot logic, bezel-key routing, ...) reaches
+// the next Android build automatically, no manual porting step.
+//
+// As of Phase 1 (docs/ANDROID_PORT_PLAN.md §6) that list also includes
+// main.py/ifr1.py/config.py/gns530.py/gns430.py - all confirmed
+// import-clean under Chaquopy (stdlib-only at module scope; pygame/render/
+// hid are only ever imported lazily, inside function bodies androidbridge
+// never calls) - so `World`/`route_event`/`Config` are reused directly
+// rather than reimplemented. What's still genuinely desktop-only and
+// deliberately left out: render.py (imports pygame; its drawing logic is
+// hand-ported per-instrument into render_commands.py instead - see that
+// module's docstring for why that one file is NOT auto-synced), plus
+// gdl90_out.py, foreflight_discovery.py, xplane_feed.py, wx_auto.py,
+// datasrc/, tests/ - datasrc/ in particular needs `requests`-equivalent
 // networking Chaquopy would need its own pip entry for, and isn't needed by
 // Phase 0 (nav-data acquisition on-device is §3.5, not yet scoped here).
 val repoRoot = rootDir.parentFile!!

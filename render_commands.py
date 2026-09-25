@@ -360,44 +360,10 @@ def ap_panel_commands(x: float, y: float, w: float, h: float, ap, t: float,
     return encode(c)
 
 
-# -- the GNS unit screen (default NAV page only) - render.py's _gns_unit /
-# _draw_nav_default / _turn_advisory / _cdi_strip / _bezel_labels ----------
-def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
-                   magvar: float) -> str:
-    """`gns` is `World.gns` (a `Gns530`/`Gns430` Variant); `nav`/`own`/
-    `panel` are exactly `World.tick()`'s returned `Frame.nav`/`.own`/
-    `.panel` - no new data plumbing needed, same objects render.py's
-    `_gns_unit` already consumes on desktop.
-
-    **Only the default NAV page renders** - Map, Flight Plan, VNAV, NAV/
-    COM, WPT, NRST, AUX, and every modal dialog (PROC, DTO, confirms,
-    message page) are a deliberately separate, later pass (see
-    docs/ANDROID_PORT_PLAN.md §3.6 / §7). `route_event` already dispatches
-    real FMS bezel-key input into `GpsNav.handle_event` correctly (proven
-    by the Phase 1 core-loop milestone), so turning the FMS knob does move
-    `gns.cursor.page_name` server-side - this function just doesn't have a
-    body for any page but the default one yet, and always draws that one
-    regardless of what page is actually selected.
-    """
-    key_area = 58.0   # reserved below the screen box for the bezel key row + hint text
-    screen_h = h - key_area
-
-    c = _Cmds()
-    _panel_box(c, x, y, w, screen_h, "")
-
-    cursor = gns.cursor
-    group = getattr(cursor, "group_name", "NAV")
-    page = getattr(cursor, "page_name", "")
-    c.text(f"{group}  {page}", x + 8, y + 6, color=CYAN)
-    if getattr(cursor, "cursor_on", False):
-        c.text("CRSR", x + w - 8, y + 6, color=AMBER, align=2)
-
-    cdi_h = 40.0
-    b_x, b_y = x + 8, y + 28
-    b_w, b_h = w - 16, screen_h - 28 - cdi_h - 8
+# -- default NAV page body - render.py's _draw_nav_default ------------------
+def _nav_default_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
+                        gns, nav, own, magvar: float) -> None:
     b_right = b_x + b_w
-
-    # -- _draw_nav_default -------------------------------------------
     act = nav.valid
     to = nav.to_ident or "----"
     frm = nav.from_ident or "----"
@@ -434,6 +400,123 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
         yy = row_y + i * dy
         c.text(lab, b_x, yy, color=DIM)
         c.text(val, b_right, yy - 2, size=_FONT_MD, color=col, align=2)
+
+
+# -- Flight Plan page body - render.py's _draw_fpl / _fpl_tag /
+# visible_fpl_rows. Read-only: the in-place ident-edit buffer
+# (gns._fpl_edit's "buf"/underline cursor, shown while typing a new
+# waypoint) is not rendered - real bezel input still edits the plan
+# server-side, this just doesn't have a body for that transient edit state
+# yet (same "server state moves, screen doesn't show it" carve-out as
+# gns_commands's own docstring - see there for why that's an accepted gap,
+# not silently broken).
+def _fpl_tag(wp) -> str:
+    if getattr(wp, "is_map", False):
+        return "MAP"
+    if getattr(wp, "hold", False):
+        return "HOLD"
+    if getattr(wp, "is_faf", False):
+        return "FAF"
+    if getattr(wp, "is_iaf", False):
+        return "IAF"
+    if getattr(wp, "manual", False):
+        return "MAN"
+    if getattr(wp, "synthetic", False):
+        return "~"
+    return ""
+
+
+def _visible_fpl_rows(n_waypoints: int, screen_rows: int, *, space_rows: int | None = None) -> int:
+    cap = screen_rows if space_rows is None else min(screen_rows, max(1, space_rows))
+    return max(0, min(n_waypoints, cap))
+
+
+def _fpl_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
+               gns, own, magvar: float) -> None:
+    from navmath import great_circle_nm, initial_bearing
+
+    wps = gns.fpl.waypoints
+    active = gns.fpl.active
+    b_right = b_x + b_w
+    y = b_y
+    dto = gns.dto
+    if dto is not None:
+        brg = (initial_bearing(own.pos, dto.target.pos) - magvar) % 360.0
+        dis = great_circle_nm(own.pos, dto.target.pos)
+        c.text(f"D> {dto.target.ident:<6}", b_x, y, color=MAGENTA)
+        c.text(f"{brg:03.0f} {dis:6.1f}", b_right, y, color=MAGENTA, align=2)
+        y += 17
+
+    rows_avail = int(b_h // 17) or 12
+    cap = _visible_fpl_rows(len(wps), rows_avail, space_rows=rows_avail)
+    top = max(0, min(max(0, len(wps) - cap), active - cap // 2)) if active >= 0 else 0
+    prev_kind = ""
+    for i in range(top, min(top + cap, len(wps))):
+        wp = wps[i]
+        if wp.proc_kind and wp.proc_kind != prev_kind:
+            label = {"approach": "APR", "star": "STAR", "sid": "SID"}.get(
+                wp.proc_kind, wp.proc_kind.upper())
+            c.text(f"{label} {wp.proc_ident}", b_x, y, color=CYAN)
+            y += 15
+        prev_kind = wp.proc_kind
+        leg_to_here = i == active and dto is None
+        col = MAGENTA if leg_to_here else (DIM if dto is not None else TEXT)
+        marker = "->" if leg_to_here else "  "
+        c.text(f"{marker} {wp.ident:<7}", b_x, y, color=col)
+        tag = _fpl_tag(wp)
+        if tag:
+            c.text(tag, b_x + 78, y, color=AMBER if tag in ("MAP", "HOLD") else DIM)
+        if i >= 1:
+            p0 = wps[i - 1].pos
+            dtk = (initial_bearing(p0, wp.pos) - magvar) % 360.0
+            dis = great_circle_nm(p0, wp.pos)
+            c.text(f"{dtk:03.0f} {dis:6.1f}", b_right, y, color=DIM, align=2)
+        y += 17
+    if not wps:
+        c.text("no flight plan", b_x, y, color=DIM)
+
+
+# -- the GNS unit screen - render.py's _gns_unit / _turn_advisory /
+# _cdi_strip / _bezel_labels ----------
+def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
+                   magvar: float) -> str:
+    """`gns` is `World.gns` (a `Gns530`/`Gns430` Variant); `nav`/`own`/
+    `panel` are exactly `World.tick()`'s returned `Frame.nav`/`.own`/
+    `.panel` - no new data plumbing needed, same objects render.py's
+    `_gns_unit` already consumes on desktop.
+
+    **Only two pages render**: the default NAV page and Flight Plan (the
+    two a pilot actually flies with second-to-second). Map, Flight Plan
+    Catalog, VNAV, NAV/COM, WPT, NRST, AUX, and every modal dialog (PROC,
+    DTO, confirms, message page) are a deliberately separate, later pass
+    (see docs/ANDROID_PORT_PLAN.md §3.6 / §7). `route_event` already
+    dispatches real FMS bezel-key input into `GpsNav.handle_event`
+    correctly (proven by the Phase 1 core-loop milestone), so turning the
+    FMS knob does move `gns.cursor.page_name` server-side - any page
+    without a body here just falls back to the default NAV page's content
+    rather than showing nothing.
+    """
+    key_area = 58.0   # reserved below the screen box for the bezel key row + hint text
+    screen_h = h - key_area
+
+    c = _Cmds()
+    _panel_box(c, x, y, w, screen_h, "")
+
+    cursor = gns.cursor
+    group = getattr(cursor, "group_name", "NAV")
+    page = getattr(cursor, "page_name", "")
+    c.text(f"{group}  {page}", x + 8, y + 6, color=CYAN)
+    if getattr(cursor, "cursor_on", False):
+        c.text("CRSR", x + w - 8, y + 6, color=AMBER, align=2)
+
+    cdi_h = 40.0
+    b_x, b_y = x + 8, y + 28
+    b_w, b_h = w - 16, screen_h - 28 - cdi_h - 8
+
+    if page == "Flight Plan":
+        _fpl_body(c, b_x, b_y, b_w, b_h, gns, own, magvar)
+    else:
+        _nav_default_body(c, b_x, b_y, b_w, b_h, gns, nav, own, magvar)
 
     # -- _turn_advisory -------------------------------------------------
     nxt = nav.next_dtk
