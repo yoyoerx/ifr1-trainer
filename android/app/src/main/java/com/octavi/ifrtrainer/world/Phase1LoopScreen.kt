@@ -1,7 +1,10 @@
 package com.octavi.ifrtrainer.world
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,26 +22,36 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.octavi.ifrtrainer.bridge.BrainBridge
 import com.octavi.ifrtrainer.input.UsbHidInput
+import com.octavi.ifrtrainer.render.DrawCommand
+import com.octavi.ifrtrainer.render.InstrumentCanvas
+import com.octavi.ifrtrainer.render.parseDrawCommands
+
+private const val HSI_SIZE_DP = 260f
 
 /**
- * Phase 1 core-loop verification screen (docs/ANDROID_PORT_PLAN.md §6):
- * real IFR-1 events -> [BrainBridge.dispatchEvent] -> `main.route_event` ->
- * a real `World`, ticked ~30 Hz in the background by [TrainerLoop] and
- * surviving Android lifecycle events (backgrounding/resuming). Deliberately
- * a plain text readout, not real instrument graphics - that's §3.6,
- * deferred to the next pass; this proves the loop underneath it first.
+ * Phase 1 core-loop + first real-instrument screen (docs/ANDROID_PORT_PLAN.md
+ * §6/§3.6): real IFR-1 events -> [BrainBridge.dispatchEvent] ->
+ * `main.route_event` -> a real `World`, ticked ~30 Hz in the background by
+ * [TrainerLoop] and surviving Android lifecycle events. The HSI head is now
+ * real instrument graphics ([BrainBridge.renderHsi] + [InstrumentCanvas]);
+ * everything else stays the plain-text readout until its own rendering pass.
  */
 @Composable
 fun Phase1LoopScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var line by remember { mutableStateOf("starting...") }
+    var hsiCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var usbStatus by remember { mutableStateOf(UsbHidInput.Status.STOPPED) }
     val loop = remember { TrainerLoop(context) }
     val usbInput = remember { UsbHidInput(context) }
 
     DisposableEffect(lifecycleOwner) {
-        loop.listener = TrainerLoop.Listener { text -> line = text }
+        loop.listener = TrainerLoop.Listener { text ->
+            line = text
+            val encoded = BrainBridge.renderHsi(0f, 0f, HSI_SIZE_DP, HSI_SIZE_DP)
+            hsiCommands = parseDrawCommands(encoded)
+        }
         lifecycleOwner.lifecycle.addObserver(loop)
 
         usbInput.statusListener = UsbHidInput.StatusListener { s -> usbStatus = s }
@@ -72,6 +85,9 @@ fun Phase1LoopScreen() {
                 else -> Color.Unspecified
             },
         )
+        Box(modifier = Modifier.fillMaxWidth().height(HSI_SIZE_DP.dp).padding(top = 8.dp)) {
+            InstrumentCanvas(commands = hsiCommands, modifier = Modifier.fillMaxSize(), sourceSize = HSI_SIZE_DP)
+        }
         Text(
             line,
             style = MaterialTheme.typography.bodySmall,

@@ -348,6 +348,25 @@ swapping only the leaf-level `pygame.draw.*`/`pygame.font` calls for Canvas
 equivalents. A new `render_commands.py` (or a refactor inside `render.py`
 behind a `Surface`-like adapter) is the natural place to draw this line.
 
+**First slice confirmed on real hardware (2026-09-24): the HSI head.**
+`render_commands.py` ports `draw_hsi_head`/`_cdi_card`/`_card_geometry`/
+`_gs_scale`/`_ident_dot`/`_dial`/`_panel_box` - same trig/layout constants
+as `render.py`, rewritten to append encoded command strings instead of
+calling `pygame.draw.*`. The draw-command list crosses as a single
+**newline-delimited, pipe-field string**, not a Python list/Kotlin
+`PyObject` - the same List-marshaling bug found in §6 Phase 1 (Chaquopy's
+Java `List` → Python conversion producing a non-iterable object) would
+apply to the reverse direction too, so every cross-boundary value stays a
+primitive or a string, consistently. `InstrumentCanvas.kt`'s `Text` case
+(previously a TODO) is now implemented via `nativeCanvas.drawText` +
+`android.graphics.Paint` (Compose's `DrawScope` has no native text
+primitive). Verified on the real Pixel 9 + real IFR-1: the HSI dial,
+rotating compass card, heading digital readout, and course pointer all
+render correctly, and turning NAV1's shift-latched knob live-rotates the
+course pointer on screen. AP panel graphics, six-pack, moving map, and GNS
+softkey/page UI are still plain text / not yet ported - this slice is
+deliberately just the one instrument.
+
 ### 3.7 Loop, threading, and Android lifecycle
 
 The desktop loop is single-threaded except optional UDP/weather-refresh

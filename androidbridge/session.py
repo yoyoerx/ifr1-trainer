@@ -24,6 +24,7 @@ from dataclasses import asdict
 from typing import Any
 
 import config as config_mod
+import render_commands
 from ifr1 import Event as Ifr1Event
 from ifr1 import Mode as Ifr1Mode
 from main import Config, World, route_event
@@ -64,6 +65,8 @@ class TrainerSession:
             self.world.sim.pos = Point(start_lat, start_lon)
         if heading_deg is not None:
             self.world.sim.heading = norm360(heading_deg)
+
+        self._last_frame = None   # set by tick(); render_hsi() reads it
 
     # -- flight plan / commands (thin pass-throughs) --------------------
     def load_flight_plan(self, idents: list[str]) -> list[str]:
@@ -119,6 +122,7 @@ class TrainerSession:
     # -- the tick ------------------------------------------------------
     def tick(self, dt_s: float) -> dict[str, Any]:
         frame = self.world.tick(dt_s)
+        self._last_frame = frame
         ownship = frame.own
 
         # drain gpsnav's message queue rather than let it grow unbounded -
@@ -170,3 +174,14 @@ class TrainerSession:
             "ap_alt_preselect": ap.alt_preselect,
         }
         return snapshot
+
+    # -- rendering (§3.6, first slice: HSI only) -------------------------
+    def render_hsi(self, x: float, y: float, w: float, h: float) -> str:
+        """Draw-command-list string for the HSI head, using the same
+        `Frame.nav1`/`Frame.panel` `tick()` already computed this frame -
+        call after `tick()`, not instead of it. See render_commands.py's
+        module docstring for the encoding and why it's a string."""
+        frame = self._last_frame
+        if frame is None:
+            return ""
+        return render_commands.hsi_commands(x, y, w, h, frame.nav1, frame.panel, self.world.t)

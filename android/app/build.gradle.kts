@@ -104,6 +104,9 @@ val brainModules = listOf(
     // triggered by androidbridge). gns530.py/gns430.py are what World
     // actually instantiates as the GNS unit.
     "main.py", "ifr1.py", "config.py", "gns530.py", "gns430.py",
+    // §3.6 first slice: the HSI draw-command-list producer, pure stdlib +
+    // math, no pygame - see render_commands.py's module docstring.
+    "render_commands.py",
 )
 val brainPackages = listOf("navdata", "androidbridge")
 

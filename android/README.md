@@ -114,13 +114,17 @@ Two real on-device bugs found and fixed getting this far:
   .selfTest()` on launch and displays the result. This is the whole app
   right now: a self-test screen, not a trainer UI.
 - `render/DrawCommand.kt` + `render/InstrumentCanvas.kt` — the §3.6
-  draw-command-list *contract shape* and a Kotlin-side replay mechanism.
-  Nothing produces a real command list from actual GNS-530 layout math yet
-  (`InstrumentCanvas` currently has no caller passing it real data, and its
-  `Text` case is an explicit unimplemented TODO — Compose's `Canvas`
-  `DrawScope` needs a native `Paint`/`drawText` call for this that wasn't
-  worth guessing at without being able to check font-metrics behavior
-  against a running app).
+  draw-command-list contract and Kotlin-side replay mechanism. **The HSI
+  head is real now (2026-09-24)**, confirmed on real hardware: repo-root
+  `render_commands.py` (a new pure module, no pygame) ports `draw_hsi_head`
+  and its helpers from `render.py`, same trig/layout math, and
+  `InstrumentCanvas`'s `Text` case (formerly a TODO) is implemented via
+  `nativeCanvas.drawText` + `android.graphics.Paint`. The draw-command list
+  crosses to Kotlin as a newline/pipe-delimited **string**
+  (`parseDrawCommands` decodes it) rather than a list/`PyObject` - see the
+  `List`-marshaling bug noted below, which applies to this direction too.
+  Everything else (AP panel graphics, six-pack, moving map, GNS
+  softkey/page UI) is still not ported - one instrument at a time.
 - `input/UsbHidInput.kt` — real implementation now, written against the
   §3.1 spike's confirmed hardware topology and `ifr1.py`'s own
   hardware-confirmed byte layout (see `ANDROID_PORT_PLAN.md` §3.1 "Spike
@@ -204,10 +208,13 @@ Two real on-device bugs found and fixed getting this far:
    (2026-09-24)** — see "Status" above for the two real bugs found/fixed
    getting there. Verified on real hardware: COM/NAV tuning, NAV OBS
    shift-latch, AP-row buttons, XPDR all confirmed correct.
-6. **Do next**: §3.6 draw-command-list instrument rendering - port
-   `render.py`'s actual GNS-530/CDI/HSI/AP-panel positioning math into a
-   `render_commands.py`, fill in `InstrumentCanvas.kt`'s `Text` case
-   (Compose `Canvas` `Paint`/`drawText`), and replace `Phase1LoopScreen`'s
-   plain-text panel with the real instrument graphics it now has live data
-   to render against. Touch/rotary-gesture controls (§3.2) are also still
-   pending.
+6. ~~§3.6 draw-command-list instrument rendering, first slice~~ **Done
+   (2026-09-24)**: the HSI head is real instrument graphics now, confirmed
+   on the real Pixel 9 + real IFR-1 - the dial/compass card/heading readout
+   render correctly, and NAV1's shift-latched knob live-rotates the course
+   pointer on screen. `Phase1LoopScreen` shows it alongside the plain-text
+   panel (which still covers everything not yet ported).
+7. **Do next**: more of §3.6 - AP panel graphics (`draw_ap_panel`) next,
+   then GNS softkey/page UI, six-pack, moving map - one instrument at a
+   time, same pattern as the HSI slice. Touch/rotary-gesture controls
+   (§3.2) are also still pending.

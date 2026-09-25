@@ -79,6 +79,20 @@ object BrainBridge {
     }
 
     /**
+     * §3.6 first slice: the HSI head's draw-command list for the given
+     * on-screen rect, as a newline/pipe-delimited string - see
+     * `render_commands.py`'s module docstring for the encoding and
+     * [com.octavi.ifrtrainer.render.parseDrawCommands] for the decoder.
+     * Call after [tickWorld] each frame, not instead of it - Python reuses
+     * that tick's already-computed `Frame` rather than re-ticking.
+     */
+    fun renderHsi(x: Float, y: Float, w: Float, h: Float): String {
+        val session = sessionObj ?: return ""
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        return module.callAttr("render_hsi", session, x, y, w, h).toString()
+    }
+
+    /**
      * Routes one real IFR-1 event through `main.route_event` - see
      * [androidbridge.session.TrainerSession.dispatch_event]. Fields map
      * directly from [com.octavi.ifrtrainer.input.Ifr1Event], already

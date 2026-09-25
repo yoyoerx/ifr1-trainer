@@ -1,23 +1,44 @@
 package com.octavi.ifrtrainer.render
 
+import android.graphics.Paint
+import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.nativeCanvas
 
 /**
  * Replays a [DrawCommand] list against a Compose [Canvas] — the Kotlin-side
- * half of the §3.6 draw-command-list contract. Phase 0 placeholder: text
- * uses a plain top-left `drawText`-equivalent, not yet positioned/measured
- * to match `render.py`'s actual font metrics (B612 Mono / DSEG7) — that
- * needs the real layout math ported first, tracked in
- * docs/ANDROID_PORT_PLAN.md, not solved here.
+ * half of the §3.6 draw-command-list contract.
+ *
+ * Text (2026-09-24): Compose's `Canvas` `DrawScope` has no native text
+ * primitive, so this drops to `nativeCanvas.drawText` with a plain
+ * `android.graphics.Paint` - the documented way to draw text inside a
+ * DrawScope. `fontId == "seven"` (render.py's DSEG7 LCD readouts) uses
+ * fake-bold monospace as a stand-in; bundling the real DSEG7 font file is a
+ * separate, later cosmetic task, not solved here.
+ *
+ * [sourceSize] is the coordinate-space size the Python side rendered the
+ * commands in (e.g. `render_commands.hsi_commands`'s `w`/`h` args) - the
+ * actual on-screen `Canvas` is measured in real pixels, which vary by
+ * device density, so this scales the whole replay to fit whatever size
+ * Compose actually gives the `Canvas` rather than drawing at a fixed pixel
+ * offset that would only be correct on one specific device.
  */
 @Composable
-fun InstrumentCanvas(commands: List<DrawCommand>, modifier: Modifier = Modifier) {
+fun InstrumentCanvas(commands: List<DrawCommand>, modifier: Modifier = Modifier, sourceSize: Float = 1f) {
+    val monoPaint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE } }
+    val sevenPaint = remember {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE; isFakeBoldText = true }
+    }
     Canvas(modifier = modifier) {
+        val factor = if (sourceSize > 0f) size.minDimension / sourceSize else 1f
+        scale(scaleX = factor, scaleY = factor, pivot = Offset.Zero) {
         commands.forEach { cmd ->
             when (cmd) {
                 is DrawCommand.Line -> drawLine(
@@ -57,15 +78,18 @@ fun InstrumentCanvas(commands: List<DrawCommand>, modifier: Modifier = Modifier)
                     )
                 }
                 is DrawCommand.Text -> {
-                    // Placeholder only - text inside a Canvas DrawScope needs
-                    // a native android.graphics.Paint/drawText call (Compose's
-                    // BasicText is a separate composable, not usable inside
-                    // drawScope directly). Left as a TODO rather than guessed
-                    // at, since getting text metrics right is exactly the
-                    // part that needs to match render.py's existing,
-                    // FINDINGS.md-validated layout positions.
+                    val paint = if (cmd.fontId == "seven") sevenPaint else monoPaint
+                    paint.color = cmd.colorArgb.toInt()
+                    paint.textSize = cmd.sizeSp
+                    paint.textAlign = when (cmd.align) {
+                        1 -> Paint.Align.CENTER
+                        2 -> Paint.Align.RIGHT
+                        else -> Paint.Align.LEFT
+                    }
+                    drawContext.canvas.nativeCanvas.drawText(cmd.text, cmd.x, cmd.y, paint)
                 }
             }
+        }
         }
     }
 }

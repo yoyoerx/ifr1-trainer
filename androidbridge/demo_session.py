@@ -46,6 +46,14 @@ def dispatch(
     session.dispatch_event(mode, pressed, released, outer, inner, mode_changed, long_press)
 
 
+def render_hsi(session: TrainerSession, x: float, y: float, w: float, h: float) -> str:
+    """Call after tick_line() each frame, not instead of it - see
+    TrainerSession.render_hsi's docstring. The synthetic db's "OOO" VHF
+    navaid (113.0 MHz) is there to exercise this: tune NAV1 to it to see
+    the CDI/GS respond."""
+    return session.render_hsi(x, y, w, h)
+
+
 def tick_line(session: TrainerSession, dt_s: float) -> str:
     s = session.tick(dt_s)
     return (

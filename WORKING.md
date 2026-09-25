@@ -116,11 +116,24 @@ landscape then portrait. First target device: Pixel 9.
       knob turn); worked around by passing `pressed`/`released`/`long_press`
       as comma-joined strings across the Chaquopy boundary instead of lists.
       Full writeup: `ANDROID_PORT_PLAN.md` §6 Phase 1 / §3.1.
-- [ ] **Do next**: §3.6 draw-command-list instrument rendering (port
-      `render.py`'s GNS-530/CDI/HSI/AP-panel positioning math, fill in
-      `InstrumentCanvas.kt`'s `Text` case) — the core loop above is what it
-      now gets to render against, instead of guessed shapes. Touch/rotary
-      controls (§3.2) also still pending.
+- [x] **§3.6 rendering, first slice — HSI head confirmed on real hardware
+      (2026-09-24)**: new `render_commands.py` ports `draw_hsi_head` and its
+      helpers (`_cdi_card`/`_card_geometry`/`_gs_scale`/`_ident_dot`/`_dial`/
+      `_panel_box`), same trig/layout math as `render.py`, appending encoded
+      command strings instead of calling `pygame.draw.*`. Crosses to Kotlin
+      as a newline/pipe-delimited **string** (not a list/`PyObject` — the
+      same Chaquopy List-marshaling bug found in the core-loop milestone
+      above would apply to the reverse direction too). `InstrumentCanvas
+      .kt`'s `Text` case (a TODO since Phase 0) is now implemented via
+      `nativeCanvas.drawText`. Verified on the real Pixel 9 + real IFR-1:
+      HSI dial/compass card/heading readout render correctly, and NAV1's
+      shift-latched knob live-rotates the course pointer on screen.
+      AP panel graphics, six-pack, moving map, and GNS softkey/page UI are
+      still plain text / not yet ported — deliberately one instrument at a
+      time. Full writeup: `ANDROID_PORT_PLAN.md` §3.6.
+- [ ] **Do next**: more of §3.6 (AP panel graphics next, then GNS
+      softkey/page UI, six-pack, moving map). Touch/rotary controls (§3.2)
+      also still pending.
 
 ---
 
