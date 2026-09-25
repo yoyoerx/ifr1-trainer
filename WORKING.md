@@ -221,10 +221,34 @@ landscape then portrait. First target device: Pixel 9.
       UNIT/CDI SRC/BARO) all render correctly. Only Map and the modal
       dialogs (PROC/DTO/confirms/message page) remain unported.
       Full writeup: `ANDROID_PORT_PLAN.md` §3.6.
-- [ ] **Do next**: the moving map (a canvas, not a text page - its own
-      slice) and the modal dialogs (PROC, DTO, confirms, message page) are
-      what's left of §3.6. Touch/rotary controls (§3.2) also still
-      pending.
+- [x] **§3.6 rendering, seventh slice — all 8 modal dialogs confirmed on
+      real hardware (2026-09-25)**: `gns_commands` gained a `_gns_dialog`
+      overlay, drawn last (over whatever page body/turn-advisory/CDI
+      strip/bezel already rendered), dispatched in the exact priority order
+      `_gns_unit` checks - PROC, Activate Leg?, Remove/Restart confirm, DTO
+      menu, Direct-To, Message page, FPL menu, Airspace info - all sharing
+      a new `_dialog_box` chrome helper. `gns_commands` gained
+      `messages`/`show_messages` params (`World.gns` message queue /
+      `World.show_msg`, the MSG key toggle - already routed correctly by
+      `route_event` since it lives on the same `World`). One real design
+      snag found while wiring this: `TrainerSession.tick()` already drains
+      `gns.messages` for the debug-panel snapshot (its own "read=cleared"
+      policy), but desktop's Message page calls `gns.peek_messages()`
+      (non-destructive) - by the time `render_gns()` runs after `tick()`,
+      the queue would already read empty. Fixed by stashing the drained
+      batch as `self._last_messages` in `tick()` for `render_gns()`'s
+      dialog to reuse, rather than re-reading an already-emptied queue.
+      Verified on the real Pixel 9: the Message dialog (MSG key) shows the
+      amber box chrome, "MESSAGES" title, and "no messages" correctly over
+      the default NAV page - confirms the whole overlay pipeline (z-order,
+      `World.show_msg` wiring, shared box chrome) the other 7 dialogs
+      reuse; those 7 are unit-tested but not individually confirmed
+      on-device (PROC/DTO need an approach or a loaded plan the synthetic
+      demo db doesn't support well). Full writeup: `ANDROID_PORT_PLAN.md`
+      §3.6.
+- [ ] **Do next**: only the moving map is left of §3.6 (a canvas, not a
+      text page - its own slice, real coordinate-transform work). Touch/
+      rotary controls (§3.2) also still pending.
 
 ---
 

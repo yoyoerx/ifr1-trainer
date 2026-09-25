@@ -486,9 +486,58 @@ flight timer and current GS/TAS/ALT; AUX Setup shows UNIT "GNS 530", CDI
 SRC "GPS", and BARO "29.92 in". The WPT-with-a-match and NRST-with-hits
 branches (an airport actually found/nearby) are covered by
 `tests/test_render_commands.py` but not yet confirmed on-device, same gap
-as VNAV/NAV/COM's armed-profile branch. **What's left of §3.6**: the
-moving map (a canvas, not a text page - its own slice) and the 8 modal
+as VNAV/NAV/COM's armed-profile branch. **What was left after this slice**:
+the moving map (a canvas, not a text page - its own slice) and the 8 modal
 dialogs (PROC, DTO, confirms, message page).
+
+**Seventh slice confirmed on real hardware (2026-09-25): all 8 modal
+dialogs.** `gns_commands` gained a `_gns_dialog` overlay function, drawn
+last - after the page body, turn advisory, CDI strip, and bezel labels,
+matching `_gns_unit`'s own end-of-function dialog check - dispatched in
+the exact same priority order render.py checks them in (only one is ever
+open at a time): `_proc_dialog` (PROC key selector - menu/procedure/
+transition/load-activate wizard), `_activate_leg_dialog` ("Activate Leg?"
+- DCT twice on a flight-plan row), `_remove_confirm_dialog` ("REMOVE
+WAYPOINT"/approach/arrival/departure), `_restart_confirm_dialog` ("Restart
+Approach?"), `_dto_menu_dialog` and `_fpl_menu_dialog` (both thin MNU
+pop-ups sharing the same option-list layout), `_direct_to_dialog` (Select
+Direct-To Waypoint page - char-cell entry + live resolution preview,
+same pattern as the WPT search pages), `_message_dialog` (MSG key), and
+`_airspace_info_dialog` (Nearest Airspace ENT drill-down, with its own
+Frequencies sub-page). All 9 functions share a new `_dialog_box` helper
+for the boxed-overlay chrome (fill + colored border) every one of
+render.py's dialogs opens with.
+
+`gns_commands` gained `messages: list[str] | None` and `show_messages:
+bool` parameters for the Message dialog. Wiring these up surfaced a real
+design conflict: `TrainerSession.tick()` already drains `World.gns
+.messages` (clearing it) to include in the per-frame debug-panel
+snapshot - its own "this session owns read=cleared" policy, documented in
+that method's own docstring. But desktop's Message page reads
+`gns.peek_messages()`, which is *non-destructive* - nothing else drains
+that queue on desktop before the Message page gets to look at it. On
+Android, `render_gns()` runs after `tick()` every frame, so by the time
+the Message dialog would call `peek_messages()`, `tick()` had already
+cleared the queue - the dialog would always show "no messages" even with
+real pending messages. Fixed by having `tick()` stash the batch it just
+drained as `self._last_messages`, and having `render_gns()` pass that
+stashed batch (rather than a live `peek_messages()` read) into
+`gns_commands`. Not the same non-destructive semantics as desktop's
+`peek_messages()`, but correct for Android's actual call order: the
+dialog shows exactly what the most recent `tick()` frame reported, same
+information source, just already claimed by the first consumer.
+
+Verified on the real Pixel 9: the Message dialog (MSG key) shows the amber
+box chrome, "MESSAGES" title, and "no messages" correctly, overlaid on top
+of the default NAV page underneath - confirming the whole overlay pipeline
+(z-order over the already-rendered page, `World.show_msg` round-trip
+through `route_event`, the shared `_dialog_box` chrome) that the other 7
+dialogs all reuse. Those 7 are covered by `tests/test_render_commands.py`
+but not individually confirmed on-device yet - PROC and the confirm
+dialogs need an approach loaded or a flight-plan row selected, which the
+synthetic demo db (no airports, so no procedures) doesn't support well;
+worth revisiting once §3.5's real FAA nav data lands on-device. **What's
+left of §3.6 now**: only the moving map.
 
 ### 3.7 Loop, threading, and Android lifecycle
 

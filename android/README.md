@@ -115,40 +115,55 @@ Two real on-device bugs found and fixed getting this far:
   right now: a self-test screen, not a trainer UI.
 - `render/DrawCommand.kt` + `render/InstrumentCanvas.kt` — the §3.6
   draw-command-list contract and Kotlin-side replay mechanism. **The HSI
-  head, AP panel, and ten GNS pages are real now (2026-09-24/25)**,
-  confirmed on real hardware: repo-root `render_commands.py` (a new pure
-  module, no pygame) ports `draw_hsi_head`/`draw_ap_panel`/`_gns_unit`'s
-  chrome/`_draw_nav_default`/`_draw_fpl`/`_draw_vnav_page`/
-  `_draw_navcom_page`/`_draw_fpl_catalog`/`_draw_wpt_page`/
-  `_draw_nrst_page`/`_draw_nrst_airports`/`_draw_nrst_facility`/
-  `_draw_nrst_airspace`/`_draw_aux_navdata`/`_draw_aux_trip`/
-  `_draw_aux_utility`/`_draw_aux_setup`/`_draw_freq_rows`/
-  `_turn_advisory`/`_cdi_strip`/`_bezel_labels` and their helpers from
-  `render.py`, same trig/layout math, and `InstrumentCanvas`'s `Text` case
-  (formerly a TODO) is implemented via `nativeCanvas.drawText` +
-  `android.graphics.Paint`. The draw-command list crosses to Kotlin as a
-  newline/pipe-delimited **string** (`parseDrawCommands` decodes it) rather
-  than a list/`PyObject` - see the `List`-marshaling bug noted below, which
-  applies to this direction too.
+  head, AP panel, all ten GNS text pages, and all 8 modal dialogs are real
+  now (2026-09-24/25)**, confirmed on real hardware: repo-root
+  `render_commands.py` (a new pure module, no pygame) ports
+  `draw_hsi_head`/`draw_ap_panel`/`_gns_unit`'s chrome/`_draw_nav_default`/
+  `_draw_fpl`/`_draw_vnav_page`/`_draw_navcom_page`/`_draw_fpl_catalog`/
+  `_draw_wpt_page`/`_draw_nrst_page`/`_draw_nrst_airports`/
+  `_draw_nrst_facility`/`_draw_nrst_airspace`/`_draw_aux_navdata`/
+  `_draw_aux_trip`/`_draw_aux_utility`/`_draw_aux_setup`/`_draw_freq_rows`/
+  `_turn_advisory`/`_cdi_strip`/`_bezel_labels`/`_proc_page`/
+  `_activate_leg_page`/`_remove_confirm_page`/`_restart_confirm_page`/
+  `_dto_menu_page`/`_direct_to_page`/`_message_page`/`_fpl_menu_page`/
+  `_airspace_info_page` and their helpers from `render.py`, same
+  trig/layout math, and `InstrumentCanvas`'s `Text` case (formerly a TODO)
+  is implemented via `nativeCanvas.drawText` + `android.graphics.Paint`.
+  The draw-command list crosses to Kotlin as a newline/pipe-delimited
+  **string** (`parseDrawCommands` decodes it) rather than a list/`PyObject`
+  - see the `List`-marshaling bug noted below, which applies to this
+  direction too.
 
-  **The GNS screen renders ten pages**: default NAV, Flight Plan, VNAV,
-  NAV/COM, Flight Plan Catalog, all six WPT search pages (Airport/Airport
-  Runway/Airport Freq/Intersection/NDB/VOR), all eight NRST pages
-  (APT/INT/NDB/VOR/User/ARTCC/FSS/Airspace), and AUX's Nav Data/Trip
-  Planning/Utility/Setup tabs. `gns_commands` dispatches by
-  `cursor.page_name`/`group_name`, falling back to the default NAV page
-  for anything else. **Still not ported**: the Map page (a moving-map
-  canvas, not a text page - its own later slice), AUX Weather/Charts (need
-  a live `datasrc.wx` cache read / PDF rendering - out of scope, same
-  carve-out as the six-pack decision), and the 8 modal dialogs (PROC, DTO,
-  confirms, message page). `route_event` already dispatches real FMS
-  bezel-key input correctly (proven by the core-loop milestone), so
+  **The GNS screen renders ten pages plus all 8 modal dialogs**: default
+  NAV, Flight Plan, VNAV, NAV/COM, Flight Plan Catalog, all six WPT search
+  pages (Airport/Airport Runway/Airport Freq/Intersection/NDB/VOR), all
+  eight NRST pages (APT/INT/NDB/VOR/User/ARTCC/FSS/Airspace), AUX's Nav
+  Data/Trip Planning/Utility/Setup tabs, and every modal dialog (PROC,
+  Activate Leg?, Remove/Restart confirm, DTO menu, Direct-To, Message
+  page, FPL menu, Airspace info - drawn last, over whatever page body
+  already rendered, in the same priority order `_gns_unit` checks them
+  in). `gns_commands` dispatches by `cursor.page_name`/`group_name`,
+  falling back to the default NAV page for anything else. **Still not
+  ported**: the Map page (a moving-map canvas, not a text page - its own
+  later slice) and AUX Weather/Charts (need a live `datasrc.wx` cache read
+  / PDF rendering - out of scope, same carve-out as the six-pack
+  decision). `route_event` already dispatches real FMS bezel-key input
+  correctly (proven by the core-loop milestone), so
   `gns.cursor.page_name`/`group_name` do change server-side when the FMS
   knob turns - pages without a body here just fall back to the default-NAV
   layout. Not a bug; documented scope. The Flight Plan page is also
   **read-only** - the in-place ident-edit buffer (live typing while
   adding/editing a waypoint) doesn't render yet, though real bezel input
   still edits the plan server-side.
+
+  Wiring the Message dialog surfaced a real design conflict:
+  `TrainerSession.tick()` already drains `World.gns.messages` for the
+  debug-panel snapshot (its own "read=cleared" policy), but desktop's
+  Message page reads the non-destructive `gns.peek_messages()` - by the
+  time `render_gns()` runs after `tick()` on Android, that queue would
+  already be empty. Fixed by having `tick()` stash the batch it just
+  drained as `self._last_messages`, which `render_gns()` passes into
+  `gns_commands` instead of re-reading an already-emptied queue.
 
   The AP panel slice found and fixed a systemic text-positioning bug the
   HSI slice's looser spacing had hidden: `nativeCanvas.drawText` positions
@@ -286,8 +301,20 @@ Two real on-device bugs found and fixed getting this far:
     correct field values all render correctly. AUX Weather/Charts stay
     unported (need live `datasrc.wx`/PDF data, out of scope like the
     six-pack decision).
-12. **Do next**: only the moving map (a canvas, not a text page) and the 8
-    modal dialogs (PROC, DTO, confirms, message page) are left of §3.6.
-    Touch/rotary-gesture controls (§3.2) are also still pending. (The
-    six-pack gauge cluster is not planned for Android at all - decision,
+12. ~~§3.6 draw-command-list instrument rendering, seventh slice~~ **Done
+    (2026-09-25)**: all 8 modal dialogs (PROC, Activate Leg?, Remove/
+    Restart confirm, DTO menu, Direct-To, Message page, FPL menu,
+    Airspace info) are real instrument graphics now too, drawn as an
+    overlay over whatever page body already rendered. Confirmed on the
+    real Pixel 9: the MSG-key Message dialog shows the amber box chrome,
+    "MESSAGES" title, and "no messages" correctly, validating the shared
+    overlay pipeline the other 7 dialogs reuse (they're unit-tested but
+    not individually confirmed on-device yet - most need an approach or
+    flight-plan row the synthetic demo db doesn't support well). Found and
+    fixed a real `TrainerSession.tick()`/Message-page ordering conflict
+    getting there - see `ANDROID_PORT_PLAN.md` §3.6 for the detail.
+13. **Do next**: only the moving map is left of §3.6 (a canvas, not a text
+    page - its own slice, real coordinate-transform work). Touch/
+    rotary-gesture controls (§3.2) are also still pending. (The six-pack
+    gauge cluster is not planned for Android at all - decision,
     2026-09-24, `ANDROID_PORT_PLAN.md` §7.)

@@ -67,6 +67,7 @@ class TrainerSession:
             self.world.sim.heading = norm360(heading_deg)
 
         self._last_frame = None   # set by tick(); render_hsi() reads it
+        self._last_messages: list[str] = []   # set by tick(); render_gns()'s Message dialog reads it
 
     # -- flight plan / commands (thin pass-throughs) --------------------
     def load_flight_plan(self, idents: list[str]) -> list[str]:
@@ -128,9 +129,15 @@ class TrainerSession:
         # drain gpsnav's message queue rather than let it grow unbounded -
         # this session is the only consumer, so it owns "read = cleared"
         # (main.py's desktop loop has its own, separate policy for this;
-        # not shared with the Android side)
+        # not shared with the Android side). render.py's Message page reads
+        # gns.peek_messages() (non-destructive) instead, since on desktop
+        # nothing else drains the queue first - here `tick()` already
+        # claimed it by the time render_gns() runs, so render_gns's dialog
+        # reuses this same drained batch via `_last_messages` rather than
+        # re-reading an already-emptied queue.
         messages = list(self.world.gns.messages)
         self.world.gns.messages.clear()
+        self._last_messages = messages
 
         nav_dict = asdict(frame.nav)
         nav_dict["annunciators"] = list(nav_dict["annunciators"])
@@ -206,4 +213,5 @@ class TrainerSession:
         return render_commands.gns_commands(
             x, y, w, h, self.world.gns, frame.nav, frame.own, frame.panel, self.world.magvar,
             t=self.world.t, baro_inhg=self.world.baro_inhg,
+            messages=self._last_messages, show_messages=self.world.show_msg,
         )

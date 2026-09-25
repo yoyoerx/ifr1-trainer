@@ -898,31 +898,265 @@ def _aux_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
         c.text(f"{sub} not available on Android yet", b_x, b_y, color=DIM)
 
 
+# -- modal dialog overlays - render.py's _proc_page / _activate_leg_page /
+# _remove_confirm_page / _restart_confirm_page / _dto_menu_page /
+# _direct_to_page / _message_page / _fpl_menu_page / _airspace_info_page.
+# Each draws OVER whatever page body already rendered, same z-order as
+# desktop's `_gns_unit` (page body -> turn advisory -> CDI strip -> bezel
+# labels -> at most one dialog, checked in this exact priority order -
+# only one of these is ever active at a time). `_dialog_box` is the shared
+# boxed-overlay chrome (`pygame.draw.rect` fill + colored 1px border) every
+# one of them opens with. -------------------------------------------------
+def _dialog_box(c: _Cmds, x: float, y: float, w: float, h: float, *, color: int) -> None:
+    c.rect(x, y, w, h, color=0xFF0A0E12, filled=True)   # (10, 14, 18) - render.py's dialog fill
+    c.rect(x, y, w, h, color=color, filled=False)
+
+
+def _activate_leg_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float, gns) -> None:
+    wps = gns.fpl.waypoints
+    row = gns._leg_confirm["row"]
+    bx, by, bw, bh = scr_x + 8, scr_y + 24, scr_w - 16, min(110.0, scr_h - 34)
+    _dialog_box(c, bx, by, bw, bh, color=MAGENTA)
+    c.text("ACTIVATE LEG", bx + 8, by + 6, color=MAGENTA)
+    if 1 <= row < len(wps):
+        c.text(f"{wps[row - 1].ident} -> {wps[row].ident}", bx + 14, by + 30, size=_FONT_MD, color=WHITE)
+    c.text("Activate?", bx + bw - 10, by + bh - 34, color=AMBER, align=2)
+    c.text("ENT=activate  CLR=cancel", bx + 14, by + bh - 18, color=DIM)
+
+
+def _remove_confirm_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float, gns) -> None:
+    rc = gns._remove_confirm
+    bx, by, bw, bh = scr_x + 8, scr_y + 24, scr_w - 16, min(110.0, scr_h - 34)
+    _dialog_box(c, bx, by, bw, bh, color=AMBER)
+    wps = gns.fpl.waypoints
+    if rc["kind"] == "waypoint":
+        row = rc["row"]
+        wp = wps[row] if 0 <= row < len(wps) else None
+        if wp is not None and wp.proc_kind:
+            label = {"approach": "APPROACH", "star": "ARRIVAL", "sid": "DEPARTURE"}.get(
+                wp.proc_kind, wp.proc_kind.upper())
+            c.text(f"REMOVE {label}", bx + 8, by + 6, color=AMBER)
+            c.text(wp.proc_ident, bx + 14, by + 30, size=_FONT_MD, color=WHITE)
+        else:
+            c.text("REMOVE WAYPOINT", bx + 8, by + 6, color=AMBER)
+            if wp is not None:
+                c.text(wp.ident, bx + 14, by + 30, size=_FONT_MD, color=WHITE)
+    else:
+        label = {"approach": "APPROACH", "star": "ARRIVAL", "sid": "DEPARTURE"}.get(
+            rc["kind"], rc["kind"].upper())
+        ident = next((w.proc_ident for w in wps if w.proc_kind == rc["kind"]), "")
+        c.text(f"REMOVE {label}", bx + 8, by + 6, color=AMBER)
+        c.text(ident, bx + 14, by + 30, size=_FONT_MD, color=WHITE)
+    c.text("Yes?", bx + bw - 10, by + bh - 34, color=AMBER, align=2)
+    c.text("ENT=remove  CLR=cancel", bx + 14, by + bh - 18, color=DIM)
+
+
+def _restart_confirm_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float, gns) -> None:
+    bx, by, bw, bh = scr_x + 8, scr_y + 24, scr_w - 16, min(90.0, scr_h - 34)
+    _dialog_box(c, bx, by, bw, bh, color=AMBER)
+    ident = next((w.proc_ident for w in gns.fpl.waypoints if w.proc_kind == "approach"), "")
+    c.text("RESTART APPROACH", bx + 8, by + 6, color=AMBER)
+    c.text(ident, bx + 14, by + 28, size=_FONT_MD, color=WHITE)
+    c.text("Yes?", bx + bw - 10, by + bh - 34, color=AMBER, align=2)
+    c.text("ENT=restart  CLR=cancel", bx + 14, by + bh - 18, color=DIM)
+
+
+def _direct_to_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float, gns, own, magvar: float) -> None:
+    from navmath import great_circle_nm, initial_bearing
+
+    dlg = gns._dto_dialog
+    bx, by, bw, bh = scr_x + 8, scr_y + 24, scr_w - 16, min(150.0, scr_h - 34)
+    _dialog_box(c, bx, by, bw, bh, color=MAGENTA)
+    c.text("DIRECT TO  ->", bx + 8, by + 6, color=MAGENTA)
+    cw = 16.0
+    x0 = bx + 14
+    cy = by + 30
+    for i, ch in enumerate(dlg.chars):
+        cx = x0 + i * cw
+        col = DIM if dlg.confirming else WHITE
+        c.text(ch if ch.strip() else "_", cx + cw / 2, _centered_y(cy, _FONT_MD),
+               size=_FONT_MD, color=col, align=1)
+        if i == dlg.cursor and not dlg.confirming:
+            c.line(cx + 2, cy + 20, cx + cw - 2, cy + 20, width=2, color=AMBER)
+    ent = None
+    try:
+        ent = gns.lookup(dlg.ident())
+    except Exception:                      # noqa: BLE001 - preview only, same as render.py
+        ent = None
+    if ent is not None:
+        kind = type(ent).__name__.replace("Navaid", "").replace("Vhf", "VOR")
+        c.text(f"{ent.ident}  {kind}", bx + 14, cy + 34, color=GPS_GREEN)
+        brg = (initial_bearing(own.pos, ent.pos) - magvar) % 360.0
+        dis = great_circle_nm(own.pos, ent.pos)
+        c.text(f"{brg:03.0f}deg  {dis:5.1f}nm", bx + 14, cy + 50, color=TEXT)
+    elif dlg.ident():
+        c.text("no match", bx + 14, cy + 34, color=DIM)
+    if dlg.confirming:
+        c.text("Activate?", bx + bw - 10, by + bh - 34, color=AMBER, align=2)
+        c.text("ENT=activate  CLR=back", bx + 14, by + bh - 18, color=DIM)
+    else:
+        c.text("knob=char/cursor  ENT=confirm  CLR=x", bx + 14, by + bh - 18, color=DIM)
+
+
+def _proc_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float, gns) -> None:
+    dlg = gns._proc_dialog
+    bx, by, bw, bh = scr_x + 8, scr_y + 24, scr_w - 16, min(168.0, scr_h - 34)
+    _dialog_box(c, bx, by, bw, bh, color=CYAN)
+    c.text(dlg.title, bx + 8, by + 6, color=CYAN)
+    opts = list(dlg.options)
+    if not opts:
+        c.text("none available", bx + 12, by + 28, color=DIM)
+    rows = max(1, int((bh - 44) // 15))
+    top = max(0, min(dlg.sel - rows // 2, max(0, len(opts) - rows)))
+    y = by + 26
+    for i in range(top, min(len(opts), top + rows)):
+        cur = i == dlg.sel
+        c.text(("> " if cur else "  ") + opts[i], bx + 10, y, color=WHITE if cur else TEXT)
+        y += 15
+    c.text("knob=sel  ENT=ok  CLR=back", bx + 10, by + bh - 16, color=DIM)
+
+
+def _message_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float, messages: list[str]) -> None:
+    bx, by, bw, bh = scr_x + 12, scr_y + 20, scr_w - 24, scr_h - 40
+    _dialog_box(c, bx, by, bw, bh, color=AMBER)
+    c.text("MESSAGES", bx + 8, by + 6, color=AMBER)
+    if not messages:
+        c.text("no messages", bx + 10, by + 26, color=DIM)
+    y = by + 26
+    room = max(1, int((bh - 34) // 16))
+    for m in messages[:room]:
+        c.text(m, bx + 10, y, color=TEXT)
+        y += 16
+
+
+def _fpl_menu_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, gns) -> None:
+    menu = gns._fpl_menu
+    bx, by, bw = scr_x + 24, scr_y + 30, scr_w - 48
+    bh = 20 + 16 * len(menu.options)
+    _dialog_box(c, bx, by, bw, bh, color=AMBER)
+    y = by + 8
+    for i, opt in enumerate(menu.options):
+        col = AMBER if i == menu.sel else TEXT
+        mk = ">" if i == menu.sel else " "
+        c.text(f"{mk} {opt}", bx + 8, y, color=col)
+        y += 16
+
+
+def _dto_menu_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, gns) -> None:
+    menu = gns._dto_menu
+    bx, by, bw = scr_x + 24, scr_y + 30, scr_w - 48
+    bh = 20 + 16 * len(menu.options)
+    _dialog_box(c, bx, by, bw, bh, color=AMBER)
+    y = by + 8
+    for i, opt in enumerate(menu.options):
+        col = AMBER if i == menu.sel else TEXT
+        mk = ">" if i == menu.sel else " "
+        c.text(f"{mk} {opt}", bx + 8, y, color=col)
+        y += 16
+
+
+_AIRSPACE_INFO_STATUS_LABEL = {
+    "inside": "Inside of airspace",
+    "near_ahead": "Ahead < 2nm",
+    "near": "Within 2nm of airspace",
+    "ahead": "Ahead",
+}
+
+
+def _airspace_info_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float, gns, own) -> None:
+    info = gns._airspace_info
+    aw = info.airspace
+    bx, by, bw, bh = scr_x + 8, scr_y + 24, scr_w - 16, scr_h - 34
+    _dialog_box(c, bx, by, bw, bh, color=AMBER)
+    if info.freqs_open:
+        c.text("FREQUENCIES", bx + 8, by + 6, color=AMBER)
+        agency = gns.airspace_controlling(aw)
+        name, freqs = agency if agency is not None else ("", ())
+        c.text(name, bx + 8, by + 24, color=GPS_GREEN)
+        y = by + 44
+        for i, mhz in enumerate(freqs):
+            hot = i == info.freq_sel
+            c.text(f"{'>' if hot else ' '} {mhz:7.3f}", bx + 8, y, color=AMBER if hot else TEXT)
+            y += 16
+        done_on = info.freq_sel == len(freqs)
+        c.text("Done?", bx + 8, y, color=AMBER if done_on else TEXT)
+        c.text("ENT=standby  CLR=back", bx + bw - 10, by + bh - 14, color=DIM, align=2)
+        return
+    c.text("AIRSPACE INFORMATION", bx + 8, by + 6, color=AMBER)
+    c.text(f"{aw.ident}  CLASS {aw.cls}", bx + 8, by + 26, size=_FONT_MD, color=GPS_GREEN)
+    track = getattr(own, "track_deg", 0.0)
+    gs = getattr(own, "gs_kt", 0.0) or 0.0
+    cat = aw.alert_category(own.pos, track, gs)
+    status = _AIRSPACE_INFO_STATUS_LABEL.get(cat) or f"{aw.distance_nm(own.pos):4.1f}nm"
+    c.text(status, bx + 8, by + 44, color=TEXT)
+    floor = "SFC" if (aw.floor_ft or 0) == 0 else f"{aw.floor_ft}ft"
+    ceil = f"{aw.ceiling_ft}ft" if aw.ceiling_ft is not None else "---"
+    c.text(f"{floor} - {ceil}", bx + 8, by + 60, color=TEXT)
+    y = by + 82
+    for i, label in enumerate(("View Frequencies?", "Done?")):
+        hot = i == info.sel
+        c.text(f"{'>' if hot else ' '} {label}", bx + 8, y, color=AMBER if hot else TEXT)
+        y += 16
+    c.text("ENT=select  CLR=back", bx + bw - 10, by + bh - 14, color=DIM, align=2)
+
+
+def _gns_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float,
+                  gns, own, magvar: float, messages: list[str], show_messages: bool) -> None:
+    """Dispatches to whichever modal dialog is currently open, in the exact
+    priority order render.py's `_gns_unit` checks them in (only one is ever
+    active). `messages`/`show_messages` are `World.gns.peek_messages()`/
+    `World.show_msg` - the desktop MSG key toggle, already routed correctly
+    by `route_event` since it lives on the same `World`."""
+    if getattr(gns, "_proc_dialog", None) is not None:
+        _proc_dialog(c, scr_x, scr_y, scr_w, scr_h, gns)
+    elif getattr(gns, "_leg_confirm", None) is not None:
+        _activate_leg_dialog(c, scr_x, scr_y, scr_w, scr_h, gns)
+    elif getattr(gns, "_remove_confirm", None) is not None:
+        _remove_confirm_dialog(c, scr_x, scr_y, scr_w, scr_h, gns)
+    elif getattr(gns, "_restart_confirm", None) is not None:
+        _restart_confirm_dialog(c, scr_x, scr_y, scr_w, scr_h, gns)
+    elif getattr(gns, "_dto_menu", None) is not None:
+        _dto_menu_dialog(c, scr_x, scr_y, scr_w, gns)
+    elif getattr(gns, "_dto_dialog", None) is not None:
+        _direct_to_dialog(c, scr_x, scr_y, scr_w, scr_h, gns, own, magvar)
+    elif show_messages:
+        _message_dialog(c, scr_x, scr_y, scr_w, scr_h, messages)
+    elif getattr(gns, "_fpl_menu", None) is not None:
+        _fpl_menu_dialog(c, scr_x, scr_y, scr_w, gns)
+    elif getattr(gns, "_airspace_info", None) is not None:
+        _airspace_info_dialog(c, scr_x, scr_y, scr_w, scr_h, gns, own)
+
+
 # -- the GNS unit screen - render.py's _gns_unit / _turn_advisory /
 # _cdi_strip / _bezel_labels ----------
 def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
-                   magvar: float, *, t: float = 0.0, baro_inhg: float = 29.92) -> str:
+                   magvar: float, *, t: float = 0.0, baro_inhg: float = 29.92,
+                   messages: list[str] | None = None, show_messages: bool = False) -> str:
     """`gns` is `World.gns` (a `Gns530`/`Gns430` Variant); `nav`/`own`/
     `panel` are exactly `World.tick()`'s returned `Frame.nav`/`.own`/
     `.panel` - no new data plumbing needed, same objects render.py's
     `_gns_unit` already consumes on desktop. `t`/`baro_inhg` are
     `World.t`/`World.baro_inhg` - only the AUX Utility/Setup pages need
-    them, everything else ignores the extra data.
+    them. `messages`/`show_messages` are `World.gns.peek_messages()`/
+    `World.show_msg` - only the Message dialog needs them (the MSG key
+    toggle is desktop-identical: `route_event` already flips `show_msg` on
+    the same `World` this session wraps).
 
     **Ported pages**: default NAV, Flight Plan, VNAV, NAV/COM, Flight Plan
     Catalog, the WPT search pages (Airport/Airport Runway/Airport Freq/
     Intersection/NDB/VOR), every NRST page (APT/INT/NDB/VOR/User/ARTCC/
-    FSS/Airspace), and AUX's Nav Data/Trip Planning/Utility/Setup tabs.
+    FSS/Airspace), AUX's Nav Data/Trip Planning/Utility/Setup tabs, and
+    every modal dialog (PROC, Activate Leg?, Remove/Restart confirm, DTO
+    menu, Direct-To, Message page, FPL menu, Airspace info).
     **Not ported**: Map (a moving-map canvas, not a text page - its own,
-    later slice), AUX Weather/Charts (need a live `datasrc.wx` cache read /
-    PDF rendering - out of scope, same carve-out as the six-pack decision),
-    and every modal dialog (PROC, DTO, confirms, message page) - see
-    docs/ANDROID_PORT_PLAN.md §3.6 / §7. `route_event` already dispatches
-    real FMS bezel-key input into `GpsNav.handle_event` correctly (proven
-    by the Phase 1 core-loop milestone), so turning the FMS knob does move
-    `gns.cursor.page_name`/`group_name` server-side - a page without a body
-    here just falls back to the default NAV page's content rather than
-    showing nothing.
+    later slice) and AUX Weather/Charts (need a live `datasrc.wx` cache
+    read / PDF rendering - out of scope, same carve-out as the six-pack
+    decision) - see docs/ANDROID_PORT_PLAN.md §3.6 / §7. `route_event`
+    already dispatches real FMS bezel-key input into `GpsNav.handle_event`
+    correctly (proven by the Phase 1 core-loop milestone), so turning the
+    FMS knob does move `gns.cursor.page_name`/`group_name` server-side - a
+    page without a body here just falls back to the default NAV page's
+    content rather than showing nothing.
     """
     key_area = 58.0   # reserved below the screen box for the bezel key row + hint text
     screen_h = h - key_area
@@ -1010,4 +1244,8 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
     if getattr(gns, "obs_active", False):
         obs_txt = f"OBS {getattr(gns, 'obs_course', 0.0):03.0f}"
         c.text(obs_txt, x + w - 6, key_y + 26, color=AMBER, align=2)
+
+    # -- modal dialog overlay, if one is open - drawn last, same z-order as
+    # render.py's `_gns_unit` (over the page body/turn-advisory/CDI/bezel) --
+    _gns_dialog(c, x, y, w, screen_h, gns, own, magvar, messages or [], show_messages)
     return encode(c)

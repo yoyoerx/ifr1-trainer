@@ -6,9 +6,9 @@ module in this repo.
 
 from autopilot import Autopilot
 from gns530 import Gns530
-from gpsnav import PAGE_GROUPS, NavState, VnavProfile
+from gpsnav import PAGE_GROUPS, DirectToEntry, FplMenu, NavState, ProcSelect, VnavProfile
 from instruments import CDI, DME, BearingPointer, Markers, NavHead, Ownship, Panel
-from navdata.model import Airport, NavDatabase, VhfNavaid, Waypoint
+from navdata.model import Airport, Airspace, NavDatabase, VhfNavaid, Waypoint
 from navmath import Point
 from render_commands import ap_panel_commands, gns_commands, hsi_commands
 
@@ -346,3 +346,97 @@ def test_gns_commands_aux_setup_page_shows_unit_and_baro():
     s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0, baro_inhg=29.87)
     assert "GNS 530" in s
     assert "29.87 in" in s
+
+
+def test_gns_commands_proc_dialog_shows_title_and_options():
+    gns = Gns530(_db())
+    gns._proc_dialog = ProcSelect(airport="KTST", step="MENU", options=["Select Approach", "Select Arrival"])
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "PROCEDURES  KTST" in s
+    assert "Select Approach" in s
+
+
+def test_gns_commands_activate_leg_dialog_shows_leg():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    gns._leg_confirm = {"row": 2}
+    nav = NavState(valid=True, mode="LEG", from_ident="ALFA", to_ident="BRAVO")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "ACTIVATE LEG" in s
+    assert "BRAVO -> CHAR" in s
+
+
+def test_gns_commands_remove_confirm_dialog_shows_waypoint():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    gns._remove_confirm = {"kind": "waypoint", "row": 1}
+    nav = NavState(valid=True, mode="LEG", from_ident="ALFA", to_ident="BRAVO")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "REMOVE WAYPOINT" in s
+    assert "Yes?" in s
+
+
+def test_gns_commands_restart_confirm_dialog_shows_prompt():
+    gns = Gns530(_db())
+    gns._restart_confirm = {"vtf": False}
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "RESTART APPROACH" in s
+    assert "ENT=restart  CLR=cancel" in s
+
+
+def test_gns_commands_dto_menu_dialog_shows_options():
+    gns = Gns530(_db())
+    gns._dto_menu = FplMenu(options=["CANCEL DIRECT-TO NAV?"])
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "CANCEL DIRECT-TO NAV?" in s
+
+
+def test_gns_commands_direct_to_dialog_shows_resolved_match():
+    gns = Gns530(_db())
+    gns._dto_dialog = DirectToEntry.seeded("BRAVO")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "DIRECT TO  ->" in s
+    assert "BRAVO  Waypoint" in s
+    assert "knob=char/cursor  ENT=confirm  CLR=x" in s
+
+
+def test_gns_commands_message_dialog_shows_pending_messages():
+    gns = Gns530(_db())
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0,
+                       messages=["ARRIVING AT WAYPOINT"], show_messages=True)
+    assert "MESSAGES" in s
+    assert "ARRIVING AT WAYPOINT" in s
+
+
+def test_gns_commands_message_dialog_no_messages_shows_placeholder():
+    gns = Gns530(_db())
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0, show_messages=True)
+    assert "no messages" in s
+
+
+def test_gns_commands_fpl_menu_dialog_shows_options():
+    gns = Gns530(_db())
+    gns._fpl_menu = FplMenu()
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "INVERT FLT PLAN" in s
+
+
+def test_gns_commands_airspace_info_dialog_shows_class_and_altitudes():
+    gns = Gns530(_db())
+    ring = (Point(39.9, -74.1), Point(39.9, -73.9), Point(40.1, -73.9), Point(40.1, -74.1))
+    aw = Airspace(ident="KTST", name="Test Airspace", cls="D", floor_ft=0, ceiling_ft=2500, rings=(ring,))
+    from gpsnav import AirspaceInfo
+
+    gns._airspace_info = AirspaceInfo(airspace=aw)
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "AIRSPACE INFORMATION" in s
+    assert "CLASS D" in s
+    assert "SFC - 2500ft" in s
