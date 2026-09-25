@@ -115,22 +115,23 @@ Two real on-device bugs found and fixed getting this far:
   right now: a self-test screen, not a trainer UI.
 - `render/DrawCommand.kt` + `render/InstrumentCanvas.kt` — the §3.6
   draw-command-list contract and Kotlin-side replay mechanism. **The HSI
-  head, AP panel, and two GNS pages (default NAV, Flight Plan) are real
-  now (2026-09-24/25)**, confirmed on real hardware: repo-root
-  `render_commands.py` (a new pure module, no pygame) ports
+  head, AP panel, and four GNS pages (default NAV, Flight Plan, VNAV,
+  NAV/COM) are real now (2026-09-24/25)**, confirmed on real hardware:
+  repo-root `render_commands.py` (a new pure module, no pygame) ports
   `draw_hsi_head`/`draw_ap_panel`/`_gns_unit`'s chrome/`_draw_nav_default`/
-  `_draw_fpl`/`_turn_advisory`/`_cdi_strip`/`_bezel_labels` and their
-  helpers from `render.py`, same trig/layout math, and `InstrumentCanvas`'s
-  `Text` case (formerly a TODO) is implemented via `nativeCanvas.drawText`
-  + `android.graphics.Paint`. The draw-command list crosses to Kotlin as a
+  `_draw_fpl`/`_draw_vnav_page`/`_draw_navcom_page`/`_draw_freq_rows`/
+  `_turn_advisory`/`_cdi_strip`/`_bezel_labels` and their helpers from
+  `render.py`, same trig/layout math, and `InstrumentCanvas`'s `Text` case
+  (formerly a TODO) is implemented via `nativeCanvas.drawText` +
+  `android.graphics.Paint`. The draw-command list crosses to Kotlin as a
   newline/pipe-delimited **string** (`parseDrawCommands` decodes it) rather
   than a list/`PyObject` - see the `List`-marshaling bug noted below, which
   applies to this direction too.
 
-  **The GNS screen renders two pages: default NAV and Flight Plan.**
-  `gns_commands` dispatches its body by `cursor.page_name`, falling back to
-  the default page for anything else. `_gns_unit` is a ~15-page router
-  (Map, Flight Plan Catalog, VNAV, NAV/COM, WPT, NRST, AUX + 5 sub-tabs,
+  **The GNS screen renders four pages: default NAV, Flight Plan, VNAV, and
+  NAV/COM.** `gns_commands` dispatches its body by `cursor.page_name`,
+  falling back to the default page for anything else. `_gns_unit` is a
+  ~15-page router (Map, Flight Plan Catalog, WPT, NRST, AUX + 5 sub-tabs,
   plus 8 modal dialogs) - porting all of it at once wasn't realistic, same
   reasoning as doing HSI then AP panel separately. `route_event` already
   dispatches real FMS bezel-key input correctly (proven by the core-loop
@@ -261,8 +262,16 @@ Two real on-device bugs found and fixed getting this far:
    too, confirmed on the real Pixel 9 - waypoint list, active-leg marker,
    per-leg DTK/DIS, and CDI strip all render correctly. Read-only (no
    in-place ident-edit buffer yet).
-10. **Do next**: more of §3.6 - other GNS pages (VNAV or NAV/COM next),
-    then moving map - one instrument/page at a time, same pattern as the
-    prior slices. Touch/rotary-gesture controls (§3.2) are also still
-    pending. (The six-pack gauge cluster is not planned for Android at
-    all - decision, 2026-09-24, `ANDROID_PORT_PLAN.md` §7.)
+10. ~~§3.6 draw-command-list instrument rendering, fifth slice~~ **Done
+    (2026-09-25)**: the VNAV and NAV/COM pages are real instrument graphics
+    now too, confirmed on the real Pixel 9 - each correctly shows its
+    no-data fallback ("no active VNAV target" / "no airport in flight
+    plan") since the synthetic demo db has neither an armed VNAV profile
+    nor any airports; the fully-populated branches are unit-tested but not
+    yet confirmed on-device.
+11. **Do next**: more of §3.6 - Map or Flight Plan Catalog next, then
+    WPT/NRST/AUX and the modal dialogs, then the moving map - one
+    instrument/page at a time, same pattern as the prior slices. Touch/
+    rotary-gesture controls (§3.2) are also still pending. (The six-pack
+    gauge cluster is not planned for Android at all - decision, 2026-09-24,
+    `ANDROID_PORT_PLAN.md` §7.)

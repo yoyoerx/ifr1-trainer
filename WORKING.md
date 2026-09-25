@@ -187,8 +187,21 @@ landscape then portrait. First target device: Pixel 9.
       header, waypoint list (ALFA past, `-> BRAVO` active leg in magenta,
       CHAR upcoming), per-leg DTK/DIS, and CDI strip all render correctly.
       Full writeup: `ANDROID_PORT_PLAN.md` §3.6.
-- [ ] **Do next**: more of §3.6 (other GNS pages — VNAV or NAV/COM next —
-      then moving map). Touch/rotary controls (§3.2) also still pending.
+- [x] **§3.6 rendering, fifth slice — VNAV and NAV/COM pages confirmed on
+      real hardware (2026-09-25)**: `gns_commands` now also dispatches
+      `"VNAV"` to `_vnav_body` (ports `_draw_vnav_page`: TARGET/TGT ALT/VS
+      PROFILE fields, VNV ARMED/OFF, then DIS/TOD/REQ VS/DEV status rows
+      once armed) and `"NAV/COM"` to `_navcom_body` (ports
+      `_draw_navcom_page` + `_draw_freq_rows`: airport role + ident, then
+      its tunable frequency list). Verified on the real Pixel 9: VNAV shows
+      the unarmed "no active VNAV target" fallback correctly; NAV/COM shows
+      "no airport in flight plan" correctly, since the synthetic demo db
+      has no airports — both are real `_vnav_body`/`_navcom_body` code
+      paths, not stubs, just the no-data branch of each. Full writeup:
+      `ANDROID_PORT_PLAN.md` §3.6.
+- [ ] **Do next**: more of §3.6 (Map or Flight Plan Catalog next — those
+      plus WPT/NRST/AUX and the modal dialogs are all that's left). Touch/
+      rotary controls (§3.2) also still pending.
 
 ---
 

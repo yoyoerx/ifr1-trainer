@@ -64,10 +64,11 @@ def render_ap_panel(session: TrainerSession, x: float, y: float, w: float, h: fl
 
 def render_gns(session: TrainerSession, x: float, y: float, w: float, h: float) -> str:
     """Call after tick_line() each frame - see TrainerSession.render_gns's
-    docstring. Only the default NAV and Flight Plan pages render; FMS-mode
-    bezel input already moves gns.cursor.page_name correctly (proven by the
-    core-loop milestone), the screen just doesn't have a body for any other
-    page yet - it falls back to the default NAV page's content instead."""
+    docstring. Only the default NAV, Flight Plan, VNAV, and NAV/COM pages
+    render; FMS-mode bezel input already moves gns.cursor.page_name
+    correctly (proven by the core-loop milestone), the screen just doesn't
+    have a body for any other page yet - it falls back to the default NAV
+    page's content instead."""
     return session.render_gns(x, y, w, h)
 
 

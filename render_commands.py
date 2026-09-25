@@ -476,6 +476,91 @@ def _fpl_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
         c.text("no flight plan", b_x, y, color=DIM)
 
 
+# -- VNAV page body - render.py's _draw_vnav_page ---------------------------
+def _vnav_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
+                gns, own) -> None:
+    prof = gns.vnav
+    on = getattr(gns.cursor, "cursor_on", False)
+    field = getattr(gns, "vnav_field", 0)
+    alt = getattr(own, "altitude_ft", None)
+    gs = getattr(own, "gs_kt", None)
+    st = gns.vnav_status(alt, gs) if hasattr(gns, "vnav_status") else None
+    y = b_y
+    rows = [
+        ("TARGET", prof.target_ident or "----"),
+        ("TGT ALT", f"{prof.target_alt_ft:.0f} ft"),
+        ("VS PROFILE", f"{prof.vs_fpm:+.0f} fpm"),
+    ]
+    for i, (label, val) in enumerate(rows):
+        col = AMBER if (on and i == field) else TEXT
+        mk = ">" if (on and i == field) else " "
+        c.text(f"{mk} {label:<11}{val}", b_x, y, color=col)
+        y += 17
+    c.text(f"VNV {'ARMED' if prof.armed else 'OFF  '}", b_x, y,
+           color=GPS_GREEN if prof.armed else DIM)
+    y += 20
+    if st is None or not st.valid:
+        if not prof.armed:
+            msg = "no active VNAV target"
+        elif gs is not None and gs <= 35.0:
+            msg = "GS too low (need > 35 kt)"
+        else:
+            msg = "target not ahead"
+        c.text(msg, b_x, y, color=DIM)
+        return
+    c.text(f"DIS {st.distance_to_target_nm:5.1f} nm", b_x, y, color=TEXT)
+    y += 15
+    if st.distance_to_tod_nm is not None:
+        label = "TOD IN" if st.distance_to_tod_nm >= 0 else "PAST TOD"
+        col = AMBER if st.alert else TEXT
+        c.text(f"{label} {abs(st.distance_to_tod_nm):5.1f} nm", b_x, y, color=col)
+        y += 15
+        if st.time_to_tod_min is not None and st.distance_to_tod_nm >= 0:
+            c.text(f"TIME TO TOD {st.time_to_tod_min:4.1f} min", b_x, y, color=col)
+            y += 15
+    if st.required_vs_fpm is not None:
+        c.text(f"REQ VS {st.required_vs_fpm:+.0f} fpm", b_x, y, color=TEXT)
+        y += 15
+    if st.deviation_ft is not None:
+        sign = "+" if st.deviation_ft >= 0 else ""
+        c.text(f"DEV {sign}{st.deviation_ft:.0f} ft", b_x, y,
+               color=AMBER if abs(st.deviation_ft) > 100 else GPS_GREEN)
+
+
+# -- shared tunable-frequency list - render.py's _draw_freq_rows ------------
+def _freq_rows(c: _Cmds, rows, sel: int, x: float, y: float, bottom: float, right: float) -> None:
+    if not rows:
+        c.text("no frequencies", x, y, color=DIM)
+        return
+    room = max(1, int((bottom - y) // 15))
+    top = max(0, min(max(0, len(rows) - room), sel - room // 2)) if sel >= 0 else 0
+    for i, fr in enumerate(rows[top:top + room], start=top):
+        hot = i == sel
+        col = AMBER if hot else (CYAN if fr.radio == "VLOC" else TEXT)
+        note = f" {fr.note}" if fr.note else ""
+        c.text(f"{'>' if hot else ' '} {fr.label:<10} {fr.mhz:7.3f}{note}", x, y, color=col)
+        y += 15
+    if len(rows) > room:
+        more = ("^" if top > 0 else " ") + ("v" if top + room < len(rows) else " ")
+        c.text(more, right, bottom - 15, color=AMBER, align=2)
+
+
+# -- NAV/COM page body - render.py's _draw_navcom_page -----------------------
+def _navcom_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float, gns) -> None:
+    b_right = b_x + b_w
+    b_bottom = b_y + b_h
+    on = getattr(gns.cursor, "cursor_on", False)
+    apt = gns.navcom_airport()
+    if apt is None:
+        c.text("no airport in flight plan", b_x, b_y + 20, color=DIM)
+        return
+    f_on = on and gns.navcom_sel >= 0
+    c.text(f"{gns.navcom_role()}  {apt.ident}", b_x, b_y + 20, size=_FONT_MD,
+           color=AMBER if (on and not f_on) else GPS_GREEN)
+    _freq_rows(c, gns.navcom_frequencies(), gns.navcom_sel if on else -1,
+               b_x, b_y + 46, b_bottom, b_right)
+
+
 # -- the GNS unit screen - render.py's _gns_unit / _turn_advisory /
 # _cdi_strip / _bezel_labels ----------
 def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
@@ -485,16 +570,16 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
     `.panel` - no new data plumbing needed, same objects render.py's
     `_gns_unit` already consumes on desktop.
 
-    **Only two pages render**: the default NAV page and Flight Plan (the
-    two a pilot actually flies with second-to-second). Map, Flight Plan
-    Catalog, VNAV, NAV/COM, WPT, NRST, AUX, and every modal dialog (PROC,
-    DTO, confirms, message page) are a deliberately separate, later pass
-    (see docs/ANDROID_PORT_PLAN.md §3.6 / §7). `route_event` already
-    dispatches real FMS bezel-key input into `GpsNav.handle_event`
-    correctly (proven by the Phase 1 core-loop milestone), so turning the
-    FMS knob does move `gns.cursor.page_name` server-side - any page
-    without a body here just falls back to the default NAV page's content
-    rather than showing nothing.
+    **Four pages render**: the default NAV page, Flight Plan, VNAV, and
+    NAV/COM (the ones a pilot actually flies with second-to-second plus the
+    two simplest remaining pages). Map, Flight Plan Catalog, WPT, NRST,
+    AUX, and every modal dialog (PROC, DTO, confirms, message page) are a
+    deliberately separate, later pass (see docs/ANDROID_PORT_PLAN.md §3.6 /
+    §7). `route_event` already dispatches real FMS bezel-key input into
+    `GpsNav.handle_event` correctly (proven by the Phase 1 core-loop
+    milestone), so turning the FMS knob does move `gns.cursor.page_name`
+    server-side - any page without a body here just falls back to the
+    default NAV page's content rather than showing nothing.
     """
     key_area = 58.0   # reserved below the screen box for the bezel key row + hint text
     screen_h = h - key_area
@@ -515,6 +600,10 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
 
     if page == "Flight Plan":
         _fpl_body(c, b_x, b_y, b_w, b_h, gns, own, magvar)
+    elif page == "VNAV":
+        _vnav_body(c, b_x, b_y, b_w, b_h, gns, own)
+    elif page == "NAV/COM":
+        _navcom_body(c, b_x, b_y, b_w, b_h, gns)
     else:
         _nav_default_body(c, b_x, b_y, b_w, b_h, gns, nav, own, magvar)
 

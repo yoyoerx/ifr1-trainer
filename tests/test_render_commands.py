@@ -6,7 +6,7 @@ module in this repo.
 
 from autopilot import Autopilot
 from gns530 import Gns530
-from gpsnav import PAGE_GROUPS, NavState
+from gpsnav import PAGE_GROUPS, NavState, VnavProfile
 from instruments import CDI, DME, BearingPointer, Markers, NavHead, Ownship, Panel
 from navdata.model import NavDatabase, VhfNavaid, Waypoint
 from navmath import Point
@@ -186,3 +186,56 @@ def test_gns_commands_flight_plan_empty_shows_message():
     nav = NavState(valid=False, mode="NOWPT")
     s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
     assert "no flight plan" in s
+
+
+def _to_vnav_page(gns) -> None:
+    gns.cursor.page = PAGE_GROUPS["NAV"].index("VNAV")
+
+
+def _to_navcom_page(gns) -> None:
+    gns.cursor.page = PAGE_GROUPS["NAV"].index("NAV/COM")
+
+
+def test_gns_commands_vnav_page_shows_armed_target_and_status():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    own = _own()
+    gns.update(own.pos, own.track_deg, own.gs_kt)  # establishes gns._pos + the active leg VnavStatus needs
+    gns.vnav = VnavProfile(target_ident="BRAVO", target_alt_ft=1000.0, vs_fpm=-500.0, armed=True)
+    _to_vnav_page(gns)
+    nav = NavState(valid=True, mode="LEG", from_ident="ALFA", to_ident="BRAVO")
+    x, y, w, h = 10.0, 10.0, 480.0, 280.0
+    s = gns_commands(x, y, w, h, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "BRAVO" in s
+    assert "VNV ARMED" in s
+    assert "DIS " in s
+    min_fields = {"T": 7, "L": 6, "R": 6, "C": 5, "P": 3}
+    max_y = 0.0
+    for line in s.splitlines():
+        op, *fields = line.split("|")
+        assert op in min_fields
+        assert len(fields) >= min_fields[op]
+        if op == "T":
+            max_y = max(max_y, float(fields[1]))
+    assert max_y <= y + h, "a draw command escaped the passed h bound"
+
+
+def test_gns_commands_vnav_page_unarmed_shows_no_target_message():
+    gns = Gns530(_db())
+    _to_vnav_page(gns)
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "no active VNAV target" in s
+
+
+def test_gns_commands_navcom_page_no_airport_shows_message():
+    """The synthetic db (waypoints + one VOR, no airports) exercises the
+    "nothing to tune" branch - a real FAA-data flight plan with airports
+    is what `navcom_airport()` needs to return frequency rows, out of
+    scope for this pure-stdlib test."""
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO"])
+    _to_navcom_page(gns)
+    nav = NavState(valid=True, mode="LEG", from_ident="ALFA", to_ident="BRAVO")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "no airport in flight plan" in s

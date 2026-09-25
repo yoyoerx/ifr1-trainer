@@ -434,6 +434,27 @@ Pixel 9: header ("NAV Flight Plan"), the waypoint list with ALFA (past,
 plain), `-> BRAVO` (magenta, active leg), CHAR (upcoming), correct per-leg
 DTK/DIS columns, and the CDI strip all render correctly.
 
+**Fifth slice confirmed on real hardware (2026-09-25): the VNAV and
+NAV/COM pages.** `gns_commands` gains two more dispatch cases: `"VNAV"` to
+`_vnav_body` (a port of `_draw_vnav_page` - TARGET/TGT ALT/VS PROFILE
+fields with cursor-field highlighting, VNV ARMED/OFF, then once armed and
+resolved: DIS/TOD-or-PAST-TOD/TIME-TO-TOD/REQ VS/DEV status rows from
+`GpsNav.vnav_status`) and `"NAV/COM"` to `_navcom_body` (a port of
+`_draw_navcom_page` plus a new shared `_freq_rows` helper ported from
+`_draw_freq_rows` - the flight plan's tunable airport frequencies, role
+label + ident, scrollable list with the highlighted-row/VLOC-cyan coloring
+convention). Both are smaller, single-purpose pages compared to Flight
+Plan, so this pass ported both together rather than one per slice. Verified
+on the real Pixel 9: VNAV correctly shows the unarmed "no active VNAV
+target" fallback (this session's demo flight has no VNAV profile set);
+NAV/COM correctly shows "no airport in flight plan" (the synthetic demo db
+has waypoints and one VOR but no airports) - both are real code paths
+through `_vnav_body`/`_navcom_body`, not stubs, exercising each function's
+no-data branch rather than its fully-populated one. The fully-armed/
+fully-tuned branches are covered by `tests/test_render_commands.py` but
+not yet confirmed on-device pending a demo database with airports and an
+armed VNAV profile.
+
 ### 3.7 Loop, threading, and Android lifecycle
 
 The desktop loop is single-threaded except optional UDP/weather-refresh
