@@ -276,10 +276,45 @@ landscape then portrait. First target device: Pixel 9.
       inside the panel. **§3.6 is now complete** - every GNS page/dialog
       and the moving map are real instrument graphics. Full writeup:
       `ANDROID_PORT_PLAN.md` §3.6.
-- [ ] **Do next**: touch/rotary controls (§3.2) - the last major piece
-      before Android has a real, self-contained trainer UI (real IFR-1
-      input already works; touch input to replace/supplement it doesn't
-      yet). §3.5 (real FAA nav data on-device) would also unlock on-device
+- [x] **§3.2 touch/rotary controls, first pass, confirmed on real hardware
+      (2026-09-25)**: new `android/.../input/TouchControls.kt` (`RotaryKnob`/
+      `BezelButton` primitives, `GnsBezelOverlay`, `ApPanelOverlay`,
+      `FmsKnobs`/`ApKnobs`, `RadioControlPanel`) feeds the exact same
+      `BrainBridge.dispatchEvent` call real IFR-1 events use - a second,
+      independent input source, not a separate code path. Iterated twice
+      on real-device feedback: v1 put every control (including the GNS's
+      own softkeys, relabeled from the physical IFR-1's AP-row names) in
+      one generic panel below all instruments - functional but you
+      couldn't see the GNS while pressing its own buttons, and the AP-row
+      buttons looked like they belonged to the GNS when `main.py`'s
+      `_FMS_BEZEL` only *reuses* them for GNS softkeys in FMS mode. v2
+      anchors each control to the instrument it belongs to instead: the
+      GNS's real bezel buttons (`render_commands.gns_commands`'s two key
+      rows, now the *real* 530 set - CDI/OBS/MSG/FPL/VNAV/PROC +
+      RNG/D>/MENU/CLR/ENT, replacing a prior ad hoc mixed 8-key row that
+      included a fake "CRSR" key) sit directly on the GNS canvas with a
+      dedicated FMS knob beside it; the AP panel's 5 wired buttons
+      (HDG/NAV/APR/ALT/VS - REV has no IFR-1 mapping at all, matching real
+      hardware) sit on its own canvas with ALT SEL/VS/IAS knobs beside it;
+      only COM/NAV/XPDR (no dedicated radio-stack instrument exists yet)
+      keep a small generic fallback cluster. New `TrainerSession
+      .adjust_map_range`/`.adjust_vs`/`.adjust_ias_target` bypass
+      `route_event` entirely for controls that either aren't
+      `route_event`-routed buttons at all (RNG - desktop's own
+      `ui["map_range"]` UI-loop state) or are real-hardware shift-latch-
+      shared knobs that don't work as a touch gesture without a visible
+      toggle state (VS/IAS - now two independent knobs). Fixed three real
+      on-device bugs from feedback: knob sensitivity (doubled
+      degrees-per-detent), the RNG key redrawn+re-hit-tested as a real
+      two-sided rocker (was tap=out/long-press=in on one key - not
+      discoverable), and a genuine layout overflow (AP/GNS knobs placed
+      beside their 520dp-wide panel ran past the screen's right edge in
+      this vertical-only-scrolling layout - moved below the panel
+      instead). Full writeup: `ANDROID_PORT_PLAN.md` §3.2.
+- [ ] **Do next**: touch control ergonomics need real design/UX work
+      (acknowledged as "good enough for now, fix later" after this pass -
+      knob feel, hit-target sizing, visual affordance are all first-draft).
+      §3.5 (real FAA nav data on-device) would unlock on-device
       confirmation of the pages/dialogs that need real airports/procedures
       (PROC, WPT/NRST with matches, NAV/COM, VNAV armed) which the
       synthetic demo db can't exercise.

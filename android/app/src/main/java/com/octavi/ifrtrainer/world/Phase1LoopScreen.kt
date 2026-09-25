@@ -25,6 +25,12 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.octavi.ifrtrainer.bridge.BrainBridge
+import com.octavi.ifrtrainer.input.ApKnobs
+import com.octavi.ifrtrainer.input.ApPanelOverlay
+import com.octavi.ifrtrainer.input.FmsKnobs
+import com.octavi.ifrtrainer.input.GnsBezelOverlay
+import com.octavi.ifrtrainer.input.Ifr1Mode
+import com.octavi.ifrtrainer.input.RadioControlPanel
 import com.octavi.ifrtrainer.input.UsbHidInput
 import com.octavi.ifrtrainer.render.DrawCommand
 import com.octavi.ifrtrainer.render.InstrumentCanvas
@@ -38,8 +44,8 @@ private const val HSI_SIZE_DP = 260f
 private const val AP_PANEL_W_DP = 520f
 private const val AP_PANEL_H_DP = 90f
 // Wide/short like a real GNS unit screen - the DIS/GS/ETE/XTK rows and the
-// 8-key bezel-label row need real width, and render_commands.gns_commands
-// reserves its own bottom slice of h for that key row (see its docstring).
+// two bezel-key rows need real width, and render_commands.gns_commands
+// reserves its own bottom slice of h for those rows (see its docstring).
 private const val GNS_W_DP = 520f
 private const val GNS_H_DP = 300f
 // Square-ish, like the desktop layout's map pane - wide enough to show a
@@ -49,15 +55,25 @@ private const val MAP_H_DP = 360f
 
 /**
  * Phase 1 core-loop + real-instrument screen (docs/ANDROID_PORT_PLAN.md
- * §6/§3.6): real IFR-1 events -> [BrainBridge.dispatchEvent] ->
+ * §6/§3.6/§3.2): real IFR-1 events -> [BrainBridge.dispatchEvent] ->
  * `main.route_event` -> a real `World`, ticked ~30 Hz in the background by
  * [TrainerLoop] and surviving Android lifecycle events. The HSI head, AP
  * panel, GNS screen (all ten text pages + all 8 modal dialogs - see
  * `render_commands.gns_commands`'s docstring), and the moving map are real
  * instrument graphics now ([BrainBridge.renderHsi]/
  * [BrainBridge.renderApPanel]/[BrainBridge.renderGns]/
- * [BrainBridge.renderMap] + [InstrumentCanvas]); everything else stays the
- * plain-text readout until its own rendering pass.
+ * [BrainBridge.renderMap] + [InstrumentCanvas]).
+ *
+ * §3.2 touch controls (v2, 2026-09-25) sit directly on the instrument each
+ * one belongs to, not in one generic panel: [GnsBezelOverlay] + [FmsKnobs]
+ * for the GNS's own buttons/right knob, [ApPanelOverlay] + [ApKnobs] for
+ * the AP panel's own mode keys/ALT-VS knob, and [RadioControlPanel] as the
+ * only remaining generic surface - COM/NAV/XPDR have no dedicated
+ * instrument rendered on Android yet, so there's nothing to anchor their
+ * controls to. Every one of these feeds the exact same
+ * [BrainBridge.dispatchEvent] call real IFR-1 events use - a second,
+ * independent event source for development/testing without the hardware
+ * attached, not a separate code path through the brain.
  */
 @Composable
 fun Phase1LoopScreen() {
@@ -69,8 +85,20 @@ fun Phase1LoopScreen() {
     var gnsCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var mapCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var usbStatus by remember { mutableStateOf(UsbHidInput.Status.STOPPED) }
+    var radioMode by remember { mutableStateOf(Ifr1Mode.COM1) }
     val loop = remember { TrainerLoop(context) }
     val usbInput = remember { UsbHidInput(context) }
+
+    fun dispatch(
+        mode: Ifr1Mode,
+        pressed: List<String>,
+        outer: Int,
+        inner: Int,
+        modeChanged: Boolean,
+        longPress: List<String>,
+    ) {
+        BrainBridge.dispatchEvent(mode.name, pressed, emptyList(), outer, inner, modeChanged, longPress)
+    }
 
     DisposableEffect(lifecycleOwner) {
         loop.listener = TrainerLoop.Listener { text ->
@@ -133,20 +161,55 @@ fun Phase1LoopScreen() {
                     else -> Color.Unspecified
                 },
             )
-            Box(modifier = Modifier.width(AP_PANEL_W_DP.dp).height(AP_PANEL_H_DP.dp).padding(top = 8.dp)) {
-                InstrumentCanvas(
-                    commands = apCommands,
-                    modifier = Modifier.fillMaxSize(),
-                    sourceWidth = AP_PANEL_W_DP,
-                    sourceHeight = AP_PANEL_H_DP,
+            // Knobs sit BELOW their panel, not beside it - a real bug found
+            // on real-device feedback (2026-09-25): AP_PANEL_W_DP/GNS_W_DP
+            // (520dp) plus a knob pair beside it ran past the right edge of
+            // the phone screen (this Column only scrolls vertically), so
+            // the second knob was mostly or entirely off-screen and
+            // effectively untappable - not the knob-overlap bug it first
+            // looked like.
+            Column(modifier = Modifier.padding(top = 8.dp)) {
+                Box(modifier = Modifier.width(AP_PANEL_W_DP.dp).height(AP_PANEL_H_DP.dp)) {
+                    InstrumentCanvas(
+                        commands = apCommands,
+                        modifier = Modifier.fillMaxSize(),
+                        sourceWidth = AP_PANEL_W_DP,
+                        sourceHeight = AP_PANEL_H_DP,
+                    )
+                    ApPanelOverlay(
+                        widthDp = AP_PANEL_W_DP,
+                        heightDp = AP_PANEL_H_DP,
+                        onButton = { name -> dispatch(Ifr1Mode.AP, listOf(name), 0, 0, true, emptyList()) },
+                    )
+                }
+                ApKnobs(
+                    modifier = Modifier.padding(top = 8.dp),
+                    onAltSel = { d -> dispatch(Ifr1Mode.AP, emptyList(), d, 0, true, emptyList()) },
+                    onVs = { d -> BrainBridge.adjustVs(d) },
+                    onIas = { d -> BrainBridge.adjustIasTarget(d) },
                 )
             }
-            Box(modifier = Modifier.width(GNS_W_DP.dp).height(GNS_H_DP.dp).padding(top = 8.dp)) {
-                InstrumentCanvas(
-                    commands = gnsCommands,
-                    modifier = Modifier.fillMaxSize(),
-                    sourceWidth = GNS_W_DP,
-                    sourceHeight = GNS_H_DP,
+            Column(modifier = Modifier.padding(top = 8.dp)) {
+                Box(modifier = Modifier.width(GNS_W_DP.dp).height(GNS_H_DP.dp)) {
+                    InstrumentCanvas(
+                        commands = gnsCommands,
+                        modifier = Modifier.fillMaxSize(),
+                        sourceWidth = GNS_W_DP,
+                        sourceHeight = GNS_H_DP,
+                    )
+                    GnsBezelOverlay(
+                        widthDp = GNS_W_DP,
+                        heightDp = GNS_H_DP,
+                        onButton = { name -> dispatch(Ifr1Mode.FMS1, listOf(name), 0, 0, true, emptyList()) },
+                        onRangeIn = { BrainBridge.adjustMapRange(1f / 1.5f) },
+                        onRangeOut = { BrainBridge.adjustMapRange(1.5f) },
+                    )
+                }
+                FmsKnobs(
+                    modifier = Modifier.padding(top = 8.dp),
+                    onEvent = { pressed, outer, inner ->
+                        dispatch(Ifr1Mode.FMS1, pressed, outer, inner, true, emptyList())
+                    },
                 )
             }
             Box(modifier = Modifier.width(MAP_W_DP.dp).height(MAP_H_DP.dp).padding(top = 8.dp)) {
@@ -157,6 +220,14 @@ fun Phase1LoopScreen() {
                     sourceHeight = MAP_H_DP,
                 )
             }
+            RadioControlPanel(
+                mode = radioMode,
+                modifier = Modifier.padding(top = 12.dp),
+                onModeChange = { radioMode = it },
+                onEvent = { mode, pressed, outer, inner, modeChanged, longPress ->
+                    dispatch(mode, pressed, outer, inner, modeChanged, longPress)
+                },
+            )
             Text(
                 line,
                 style = MaterialTheme.typography.bodySmall,

@@ -133,6 +133,40 @@ object BrainBridge {
     }
 
     /**
+     * §3.2 touch controls: the moving map's RNG key - see
+     * [androidbridge.session.TrainerSession.adjust_map_range]'s docstring
+     * for why this is a dedicated call rather than [dispatchEvent] with an
+     * "RNG" button name (there is no such button in `route_event`/
+     * `GpsNav.handle_event` - RNG is desktop-UI-loop-only state on the
+     * Python side too). `factor` > 1 zooms out, < 1 zooms in.
+     */
+    fun adjustMapRange(factor: Float) {
+        val session = sessionObj ?: return
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        module.callAttr("adjust_map_range", session, factor)
+    }
+
+    /**
+     * §3.2 touch controls: the AP mode's VS knob, as its own independent
+     * touch control - see
+     * [androidbridge.session.TrainerSession.adjust_vs]'s docstring for why
+     * this bypasses [dispatchEvent]'s shift-latch gating rather than
+     * sharing one knob with [adjustIasTarget] the way real hardware does.
+     */
+    fun adjustVs(detents: Int) {
+        val session = sessionObj ?: return
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        module.callAttr("adjust_vs", session, detents)
+    }
+
+    /** §3.2 touch controls: the AP mode's IAS set-point knob - see [adjustVs]. */
+    fun adjustIasTarget(detents: Int) {
+        val session = sessionObj ?: return
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        module.callAttr("adjust_ias_target", session, detents)
+    }
+
+    /**
      * Routes one real IFR-1 event through `main.route_event` - see
      * [androidbridge.session.TrainerSession.dispatch_event]. Fields map
      * directly from [com.octavi.ifrtrainer.input.Ifr1Event], already

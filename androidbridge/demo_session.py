@@ -74,6 +74,24 @@ def render_gns(session: TrainerSession, x: float, y: float, w: float, h: float) 
     return session.render_gns(x, y, w, h)
 
 
+def adjust_map_range(session: TrainerSession, factor: float) -> None:
+    """Call from the RNG touch key (§3.2) - see TrainerSession
+    .adjust_map_range's docstring for why this isn't a dispatch_event call."""
+    session.adjust_map_range(factor)
+
+
+def adjust_vs(session: TrainerSession, detents: int) -> None:
+    """Call from the touch VS knob (§3.2) - see TrainerSession.adjust_vs's
+    docstring for why this isn't a dispatch_event call."""
+    session.adjust_vs(detents)
+
+
+def adjust_ias_target(session: TrainerSession, detents: int) -> None:
+    """Call from the touch IAS knob (§3.2) - see TrainerSession
+    .adjust_ias_target's docstring for why this isn't a dispatch_event call."""
+    session.adjust_ias_target(detents)
+
+
 def render_map(session: TrainerSession, x: float, y: float, w: float, h: float) -> str:
     """Call after tick_line() each frame - see TrainerSession.render_map's
     docstring. The demo flight plan (ALFA->BRAVO->CHAR) and the synthetic

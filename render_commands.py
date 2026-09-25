@@ -1158,7 +1158,7 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
     page without a body here just falls back to the default NAV page's
     content rather than showing nothing.
     """
-    key_area = 58.0   # reserved below the screen box for the bezel key row + hint text
+    key_area = 78.0   # reserved below the screen box for the two bezel key rows + hint text
     screen_h = h - key_area
 
     c = _Cmds()
@@ -1232,18 +1232,57 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
     else:
         c.text("--FLAG--", cx, _centered_y(cy), color=RED, align=1)
 
-    # -- _bezel_labels (flat/no-bezel style key row) ---------------------
-    key_y = y + screen_h + 4
-    keys = ["D>", "MENU", "CLR", "ENT", "CRSR", "OBS", "MSG", "FPL"]
-    kw = w / len(keys)
-    for i, k in enumerate(keys):
-        kx = x + i * kw
-        c.rect(kx + 4, key_y, kw - 8, 22, color=AP_KEY_BG, filled=True)
-        c.text(k, kx + kw / 2, _centered_y(key_y + 11), color=DIM, align=1)
-    c.text("outer: page group / field    inner: page / value", x + 6, key_y + 26, color=DIM)
+    # -- _bezel_labels (flat/no-bezel style key rows) - the real GNS 530's
+    # own two button groups (Pilot's Guide keypad diagram): a 6-key softkey
+    # row (CDI/OBS/MSG/FPL/VNAV/PROC) and a 5-key group (RNG/D>/MENU/CLR/
+    # ENT) that sits in a side column next to the real bezel's screen
+    # (`_bezel_key_labels`'s real-hardware-SVG version measures both groups
+    # off the actual faceplate art). The flat/no-bezel style has no side
+    # margin to put a real column in, so this stacks them as two full-width
+    # rows instead - same real key set/names/order, not a shorthand
+    # invented for this style (a prior version of this row mixed both
+    # groups into one 8-key row including a "CRSR" label that doesn't
+    # correspond to any real button - CRSR is the right (inner) knob's push,
+    # not a labeled key - a real bug found once §3.2 touch controls needed
+    # to dispatch the *actual* button each drawn key represents). RNG isn't
+    # a `route_event`-routed button at all (`main.py`'s `ui["map_range"]`
+    # is desktop-UI-loop-only state) - Android's touch layer calls
+    # `TrainerSession.adjust_map_range` for it instead of dispatching a
+    # button press, but it's still drawn here since it's a real physical
+    # key on the unit.
+    row1_y = y + screen_h + 4
+    row1 = ["CDI", "OBS", "MSG", "FPL", "VNAV", "PROC"]
+    kw1 = w / len(row1)
+    for i, k in enumerate(row1):
+        kx = x + i * kw1
+        c.rect(kx + 4, row1_y, kw1 - 8, 22, color=AP_KEY_BG, filled=True)
+        c.text(k, kx + kw1 / 2, _centered_y(row1_y + 11), color=DIM, align=1)
+    row2_y = row1_y + 26
+    row2 = ["RNG", "D>", "MENU", "CLR", "ENT"]
+    kw2 = w / len(row2)
+    for i, k in enumerate(row2):
+        kx = x + i * kw2
+        if k == "RNG":
+            # a real rocker (IN/OUT), not a single push key - drawn as two
+            # half-width "-"/"+" boxes so the touch overlay's own even
+            # split (android/.../input/TouchControls.kt's GnsBezelOverlay)
+            # has something to visually line up with (a real bug found on
+            # real-device feedback, 2026-09-25: a single RNG key with
+            # tap=zoom-out/long-press=zoom-in wasn't discoverable or
+            # reliable as a touch gesture).
+            half = (kw2 - 8) / 2
+            c.rect(kx + 4, row2_y, half - 2, 22, color=AP_KEY_BG, filled=True)
+            c.text("-", kx + 4 + half / 2, _centered_y(row2_y + 11), color=DIM, align=1)
+            c.rect(kx + 4 + half + 2, row2_y, half - 2, 22, color=AP_KEY_BG, filled=True)
+            c.text("+", kx + 4 + half + 2 + half / 2, _centered_y(row2_y + 11), color=DIM, align=1)
+            continue
+        c.rect(kx + 4, row2_y, kw2 - 8, 22, color=AP_KEY_BG, filled=True)
+        c.text(k, kx + kw2 / 2, _centered_y(row2_y + 11), color=DIM, align=1)
+    hint_y = row2_y + 26
+    c.text("right knob: turn = page/field  press = CRSR", x + 6, hint_y, color=DIM)
     if getattr(gns, "obs_active", False):
         obs_txt = f"OBS {getattr(gns, 'obs_course', 0.0):03.0f}"
-        c.text(obs_txt, x + w - 6, key_y + 26, color=AMBER, align=2)
+        c.text(obs_txt, x + w - 6, hint_y, color=AMBER, align=2)
 
     # -- modal dialog overlay, if one is open - drawn last, same z-order as
     # render.py's `_gns_unit` (over the page body/turn-advisory/CDI/bezel) --

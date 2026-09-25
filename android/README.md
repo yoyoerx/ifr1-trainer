@@ -204,11 +204,37 @@ Two real on-device bugs found and fixed getting this far:
   as a per-instrument invariant a future draw command could silently
   violate again.
 
-  §3.6 is done. What's left before Android has a self-contained trainer UI
-  is §3.2 (touch/rotary controls) and §3.5 (real FAA nav data on-device).
-  The six-pack gauge cluster is **not planned for Android at all**
-  (decision, 2026-09-24 — see `ANDROID_PORT_PLAN.md` §7): IFR training is
-  the point, not a round-gauge steam-panel trainer.
+  §3.6 is done. The six-pack gauge cluster is **not planned for Android at
+  all** (decision, 2026-09-24 — see `ANDROID_PORT_PLAN.md` §7): IFR
+  training is the point, not a round-gauge steam-panel trainer.
+- `input/TouchControls.kt` — §3.2 touch/rotary controls, confirmed on real
+  hardware (2026-09-25) after two design iterations from real-device
+  feedback. `RotaryKnob` (circular drag) and `BezelButton`
+  (tap/long-press) primitives feed the exact same `BrainBridge
+  .dispatchEvent` call real IFR-1 events use - a second, independent
+  input source. **Anchored to the instrument each control belongs to**,
+  not one generic panel: `GnsBezelOverlay` sits on the GNS canvas
+  (mirroring `render_commands.gns_commands`'s own bezel-row layout math,
+  now the *real* 530 button set - CDI/OBS/MSG/FPL/VNAV/PROC +
+  RNG/D>/MENU/CLR/ENT, replacing a prior invented 8-key mix that included
+  a fake "CRSR" key) with `FmsKnobs` beside it; `ApPanelOverlay` sits on
+  the AP panel canvas (its 5 wired buttons - REV has no IFR-1 mapping at
+  all, matching real hardware) with `ApKnobs` (ALT SEL + two **independent**
+  VS/IAS knobs, not one shared shift-latched knob like real hardware -
+  found unusable as a touch gesture) below it; `RadioControlPanel` is the
+  one remaining generic surface, for COM/NAV/XPDR, which have no dedicated
+  rendered instrument yet. `TrainerSession.adjust_map_range`/`.adjust_vs`/
+  `.adjust_ias_target` bypass `route_event` for controls that either
+  aren't `route_event`-routed buttons at all (RNG, now drawn+touch-split
+  as a real two-sided rocker) or need to skip its shift-latch gating
+  (VS/IAS). Three more real bugs fixed from device feedback: knob
+  sensitivity (doubled degrees-per-detent), and a genuine layout overflow
+  that looked like knob overlap (AP/GNS knobs placed beside their 520dp
+  panel ran past the phone's right edge in this vertical-only-scrolling
+  layout - moved below the panel instead). Ergonomics are explicitly
+  first-draft ("good enough for now, fix later," 2026-09-25) - knob feel,
+  hit-target sizing, and visual press feedback are all unfinished design
+  work, not a completed pass.
 - `input/UsbHidInput.kt` — real implementation now, written against the
   §3.1 spike's confirmed hardware topology and `ifr1.py`'s own
   hardware-confirmed byte layout (see `ANDROID_PORT_PLAN.md` §3.1 "Spike
@@ -354,11 +380,20 @@ Two real on-device bugs found and fixed getting this far:
     instrument. Confirmed on the real Pixel 9 after the fix: range rings
     correctly clipped, ownship triangle, ALFA waypoint, and the
     active-leg magenta line all render correctly. **§3.6 is complete.**
-14. **Do next**: touch/rotary controls (§3.2) - the last major piece
-    before Android has a self-contained trainer UI (real IFR-1 input
-    already works, but there's no on-screen alternative yet). §3.5 (real
-    FAA nav data on-device) would also unlock on-device confirmation of
-    the pages/dialogs the synthetic demo db can't exercise (PROC, WPT/NRST
+14. ~~§3.2 touch/rotary controls, first pass~~ **Done (2026-09-25)**,
+    confirmed on the real Pixel 9 after two design iterations from
+    real-device feedback: every control now sits on the instrument it
+    belongs to (GNS bezel buttons + FMS knob on the GNS canvas, AP panel
+    buttons + ALT SEL/VS/IAS knobs on the AP panel, a small generic
+    fallback only for COM/NAV/XPDR, which have no dedicated instrument
+    yet). See `input/TouchControls.kt`'s entry above for the full detail
+    and the three real bugs fixed along the way. Ergonomics are
+    explicitly first-draft, called out by the person testing it as
+    "good enough for now, fix later."
+15. **Do next**: touch control ergonomics (knob feel, hit-target sizing,
+    visual press feedback) need a real design pass. §3.5 (real FAA nav
+    data on-device) would unlock on-device confirmation of the
+    pages/dialogs the synthetic demo db can't exercise (PROC, WPT/NRST
     with matches, NAV/COM, VNAV armed). (The six-pack gauge cluster is not
     planned for Android at all - decision, 2026-09-24,
     `ANDROID_PORT_PLAN.md` §7.)

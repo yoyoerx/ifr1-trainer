@@ -27,7 +27,7 @@ import config as config_mod
 import render_commands
 from ifr1 import Event as Ifr1Event
 from ifr1 import Mode as Ifr1Mode
-from main import Config, World, route_event
+from main import _IAS_STEP_KT, Config, World, route_event
 from navdata.model import NavDatabase
 from navmath import Point, norm360
 
@@ -202,6 +202,38 @@ class TrainerSession:
         return render_commands.ap_panel_commands(
             x, y, w, h, self.world.ap, self.world.t, ias_bug=self.world.ias_target,
         )
+
+    def adjust_map_range(self, factor: float) -> None:
+        """The moving map's RNG key (§3.2 touch controls) - `main.py`'s
+        `ui["map_range"]` is desktop-UI-loop-only state, never routed
+        through `route_event`/`GpsNav.handle_event`, so there's no button
+        name to dispatch through `dispatch_event` for this - the touch
+        layer calls this directly instead. Same clamp/step as desktop's own
+        `[`/`]` keyboard bindings (`main.py`'s `_on_key`): x1.5 to zoom out,
+        /1.5 to zoom in, clamped to 2-160nm."""
+        self.map_range_nm = max(2.0, min(160.0, self.map_range_nm * factor))
+
+    def adjust_vs(self, detents: int) -> None:
+        """AP mode's VS knob, as a standalone touch control (§3.2). On real
+        hardware VS and IAS *share* one physical knob - `main.py route_event`'s
+        `Mode.AP` branch only turns the VS knob when `World.shift_latched`
+        is False (a KNOB press toggles it to IAS) - but real-device feedback
+        (2026-09-25) found that shared-knob-plus-toggle unusable as a touch
+        gesture (no way to see which mode the knob is currently in). Touch
+        gets two independent knobs instead - this calls `Autopilot
+        .turn_vs_knob` directly, bypassing `route_event`'s shift-latch
+        gating entirely, rather than needing to read and toggle that latch
+        first. `main.py`'s own keyboard path (arrow keys) already does the
+        same "call the AP method directly" thing for some inputs, so this
+        isn't a new pattern - just this method's own explicit version."""
+        self.world.ap.turn_vs_knob(detents)
+
+    def adjust_ias_target(self, detents: int) -> None:
+        """AP mode's IAS set-point knob, as a standalone touch control - see
+        `adjust_vs`'s docstring for why this bypasses the shift-latch
+        gating. Same step size as `route_event`'s shifted-AP-mode path
+        (`main._IAS_STEP_KT`) and `World.set_ias_target`'s own clamp."""
+        self.world.set_ias_target(self.world.ias_target + detents * _IAS_STEP_KT)
 
     def render_map(self, x: float, y: float, w: float, h: float) -> str:
         """Draw-command-list string for the track-up moving map - see

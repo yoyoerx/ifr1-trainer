@@ -260,6 +260,86 @@ shortcuns — evaluate against the real GNS 530 bezel layout so the touch
 version stays faithful to the same button *names and effects* documented in
 `FINDINGS.md`, even though the physical affordance (touch vs. twist) differs.
 
+**First pass confirmed on real hardware (2026-09-25), iterated twice on
+real-device feedback.** `android/.../input/TouchControls.kt`: a
+`RotaryKnob` primitive (circular drag, one detent per ~34deg of rotation,
+a tap under ~6deg of total rotation counts as a push instead of a turn)
+and `BezelButton` (tap/long-press). Every control dispatches through the
+exact same `BrainBridge.dispatchEvent` call real IFR-1 events use - touch
+is a second, independent event source, not a separate code path through
+`route_event`.
+
+**v1** put every control - including the GNS's own softkeys, relabeled
+from the physical IFR-1's AP-row button names - in one generic panel below
+all the instrument boxes. It worked, but two real problems surfaced
+immediately: you couldn't see the GNS screen while pressing its own
+buttons, and the AP-row buttons *looked* like they belonged to the GNS
+bezel when `main.py`'s `_FMS_BEZEL` only *reuses* those physical buttons
+as GNS softkeys while the mode dial reads FMS1/FMS2 - they're the AP
+panel's own physical keys the rest of the time.
+
+**v2** anchors each control to the instrument it actually belongs to:
+- `GnsBezelOverlay` sits directly on the GNS `InstrumentCanvas`, hit-testing
+  positions that mirror `render_commands.gns_commands`'s own bezel-row
+  layout math exactly (must be kept in sync by hand - same cross-language
+  duplication this render bridge already accepts for its color constants).
+  That Python-side layout itself changed too, to the *real* GNS 530 button
+  set: a 6-key softkey row (CDI/OBS/MSG/FPL/VNAV/PROC) and a 5-key group
+  (RNG/D>/MENU/CLR/ENT), stacked as two full-width rows since the
+  flat/no-bezel Android render style has no side margin for a real
+  right-column layout the way the bezel-SVG desktop style does. The prior
+  row was an ad hoc 8-key mix of both groups that included a "CRSR" label
+  matching nothing `route_event` actually dispatches (CRSR is the FMS
+  knob's own push, not a labeled key) - a real bug found specifically
+  because touch needed to dispatch the *actual* physical button each drawn
+  key represents, not just draw a plausible-looking label.
+- A dedicated `FmsKnobs` (PAGE/CRSR) sits beside the GNS canvas, always
+  addressing `Ifr1Mode.FMS1`.
+- `ApPanelOverlay` sits on the AP panel canvas, mirroring
+  `ap_panel_commands`'s own `key()` loop math for its 5 wired buttons
+  (HDG/NAV/APR/ALT/VS). REV is drawn but not wired - it has no
+  `route_event`/`_AP_BTN` mapping via the IFR-1 at all (`ifr1.py`'s
+  `Layout.buttons` has no REV entry either - only the desktop keyboard's
+  F4 can reach it), so this is hardware parity, not a v2 regression.
+- `ApKnobs` sits below the AP panel: ALT SEL (still a normal
+  `dispatchEvent` call, outer, not shift-gated), plus **VS and IAS as two
+  independent knobs** - a deliberate departure from real hardware, which
+  shares one physical knob between them via a `KNOB`-push shift latch
+  (`_SHIFT_FN["AP"]` = "IAS"). Real-device feedback found that shared-
+  knob-plus-invisible-toggle unusable as a touch gesture (no way to see
+  which mode the knob was currently in), so `TrainerSession.adjust_vs`/
+  `.adjust_ias_target` call `Autopilot.turn_vs_knob`/`World
+  .set_ias_target` directly, bypassing `route_event`'s shift-latch gating
+  entirely rather than needing to read and toggle that latch first - touch
+  isn't constrained to one physical knob the way real hardware is, so
+  there's no reason to force the same limitation onto it.
+- `RadioControlPanel` is the one remaining generic surface: COM1/COM2/
+  NAV1/NAV2/XPDR mode chips + one shared tune/fine knob pair + SWAP -
+  there's no dedicated radio-stack instrument rendered on Android yet
+  (desktop's `stack` layout has one; porting it is its own future
+  §3.6-style slice), so there's nothing to anchor these to.
+- `TrainerSession.adjust_map_range` is the same kind of bypass for the
+  GNS's RNG key: `main.py`'s `ui["map_range"]` is desktop-UI-loop-only
+  state, never routed through `route_event`/`GpsNav.handle_event` at all -
+  there's no button name to dispatch for it. Drawn (and touch-split) as a
+  real two-sided rocker (`-`/`+` halves), not a single push key - the
+  first version was tap=zoom-out/long-press=zoom-in on one key, which
+  real-device feedback found undiscoverable and unreliable as a gesture.
+
+Three more real bugs found and fixed from real-device feedback, beyond
+the ones above: the knob's per-detent rotation was doubled (18deg -> 34deg)
+after "too sensitive to dial in a number"; the ALT SEL/VS/IAS knobs
+appeared to overlap into a single oval shape (root cause: the AP-panel-plus-
+knobs row was wider than the phone screen and this layout only scrolls
+vertically, so the rightmost knob was mostly or entirely clipped past the
+right edge - not an overlap bug at all - fixed by moving every knob group
+below its panel instead of beside it, for both the AP panel and the GNS).
+
+Explicitly out of scope for this pass, called out by the person testing it
+as "good enough for now, fix later": overall touch ergonomics (knob feel,
+hit-target sizing, visual press feedback) are first-draft, not a finished
+design pass.
+
 ### 3.3 Screen shape and layout
 
 Pixel 9: ~6.3", 1080×2424, ~20:9. None of the four existing layouts (`gps`,
