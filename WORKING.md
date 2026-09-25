@@ -154,8 +154,27 @@ landscape then portrait. First target device: Pixel 9.
       Android v1's instrument set is HSI + AP panel + GNS pages + moving
       map. §3.6 rendering passes should not budget time toward it. Full
       writeup: `ANDROID_PORT_PLAN.md` §7.
-- [ ] **Do next**: more of §3.6 (GNS softkey/page UI next, then moving
-      map). Touch/rotary controls (§3.2) also still pending.
+- [x] **§3.6 rendering, third slice — GNS default NAV page confirmed on
+      real hardware (2026-09-24)**: `render_commands.py` gains
+      `gns_commands`, porting `_gns_unit`'s chrome (header, no-bezel flat
+      screen frame) + `_draw_nav_default` (active-leg symbol/from/to, OBS
+      annunciation, DTK/TRK/DIS/GS/ETE/XTK rows) + `_turn_advisory` +
+      `_cdi_strip` + `_bezel_labels`. **Only the default NAV page renders**
+      — `_gns_unit` is a ~15-page router (Map/FPL/VNAV/NAV-COM/WPT/NRST/AUX
+      + 8 modal dialogs), all deliberately deferred to later passes.
+      `route_event` already dispatches real FMS bezel-key input correctly
+      (proven by the core-loop milestone), so the page state does change
+      server-side when the FMS knob turns — the screen just always shows
+      the default-NAV layout regardless until those other pages land. Got
+      the top-anchored-`y`/`_centered_y()` text convention right from the
+      start this time. Verified on the real Pixel 9 with the demo flight
+      plan (ALFA→BRAVO→CHAR) active: header, active-leg line, DTK/TRK/DIS/
+      GS/ETE/XTK rows, and CDI strip all render correctly, matching the
+      plain-text debug panel's values exactly. Full writeup:
+      `ANDROID_PORT_PLAN.md` §3.6.
+- [ ] **Do next**: more of §3.6 (other GNS pages — Flight Plan is the
+      natural next one — then moving map). Touch/rotary controls (§3.2)
+      also still pending.
 
 ---
 

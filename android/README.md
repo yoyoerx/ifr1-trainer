@@ -115,15 +115,27 @@ Two real on-device bugs found and fixed getting this far:
   right now: a self-test screen, not a trainer UI.
 - `render/DrawCommand.kt` + `render/InstrumentCanvas.kt` — the §3.6
   draw-command-list contract and Kotlin-side replay mechanism. **The HSI
-  head and AP panel are real now (2026-09-24)**, confirmed on real
-  hardware: repo-root `render_commands.py` (a new pure module, no pygame)
-  ports `draw_hsi_head`/`draw_ap_panel` and their helpers from `render.py`,
-  same trig/layout math, and `InstrumentCanvas`'s `Text` case (formerly a
-  TODO) is implemented via `nativeCanvas.drawText` + `android.graphics
-  .Paint`. The draw-command list crosses to Kotlin as a newline/
-  pipe-delimited **string** (`parseDrawCommands` decodes it) rather than a
-  list/`PyObject` - see the `List`-marshaling bug noted below, which
-  applies to this direction too.
+  head, AP panel, and GNS default NAV page are real now (2026-09-24)**,
+  confirmed on real hardware: repo-root `render_commands.py` (a new pure
+  module, no pygame) ports `draw_hsi_head`/`draw_ap_panel`/`_gns_unit`
+  (default-page chrome only)/`_draw_nav_default`/`_turn_advisory`/
+  `_cdi_strip`/`_bezel_labels` and their helpers from `render.py`, same
+  trig/layout math, and `InstrumentCanvas`'s `Text` case (formerly a TODO)
+  is implemented via `nativeCanvas.drawText` + `android.graphics.Paint`.
+  The draw-command list crosses to Kotlin as a newline/pipe-delimited
+  **string** (`parseDrawCommands` decodes it) rather than a list/
+  `PyObject` - see the `List`-marshaling bug noted below, which applies to
+  this direction too.
+
+  **The GNS screen only renders the default NAV page.** `_gns_unit` is a
+  ~15-page router (Map, Flight Plan, VNAV, NAV/COM, WPT, NRST, AUX + 5
+  sub-tabs, plus 8 modal dialogs) - porting all of it at once wasn't
+  realistic, same reasoning as doing HSI then AP panel separately.
+  `route_event` already dispatches real FMS bezel-key input correctly
+  (proven by the core-loop milestone), so `gns.cursor.page_name` does
+  change server-side when the FMS knob turns - the screen just always
+  shows the default-NAV layout regardless until other pages get their own
+  pass. Not a bug; documented scope.
 
   The AP panel slice found and fixed a systemic text-positioning bug the
   HSI slice's looser spacing had hidden: `nativeCanvas.drawText` positions
@@ -234,8 +246,15 @@ Two real on-device bugs found and fixed getting this far:
    info box) is real instrument graphics now too, confirmed on the real
    Pixel 9 - see "Status" above for the baseline-vs-top-left text-position
    bug found and fixed getting there.
-8. **Do next**: more of §3.6 - GNS softkey/page UI next, then moving map -
-   one instrument at a time, same pattern as the HSI/AP slices.
-   Touch/rotary-gesture controls (§3.2) are also still pending. (The
-   six-pack gauge cluster is not planned for Android at all - decision,
-   2026-09-24, `ANDROID_PORT_PLAN.md` §7.)
+8. ~~§3.6 draw-command-list instrument rendering, third slice~~ **Done
+   (2026-09-24)**: the GNS default NAV page is real instrument graphics
+   now too, confirmed on the real Pixel 9 with the demo flight plan active
+   - header, active-leg line, DTK/TRK/DIS/GS/ETE/XTK rows, and CDI strip
+   all render correctly. **Default NAV page only** - see "What's actually
+   in this scaffold" above for what's deliberately not ported yet.
+9. **Do next**: more of §3.6 - other GNS pages (Flight Plan is the natural
+   next one), then moving map - one instrument/page at a time, same
+   pattern as the HSI/AP/GNS-default slices. Touch/rotary-gesture controls
+   (§3.2) are also still pending. (The six-pack gauge cluster is not
+   planned for Android at all - decision, 2026-09-24,
+   `ANDROID_PORT_PLAN.md` §7.)

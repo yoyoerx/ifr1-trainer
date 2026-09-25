@@ -48,8 +48,11 @@ BLACK = 0xFF000000
 AP_KEY_BG = 0xFF181B20     # (24, 27, 32)
 AP_KEY_OFF = 0xFF24282E    # (36, 40, 46)
 AP_RDY_OFF_BG = 0xFF282C30  # (40, 44, 48)
+MAGENTA = 0xFFE66ED2  # (230, 110, 210) - Garmin active-leg color
 
-_FONT_SM = 12.0   # sizeSp for render.py's r.f_sm-equivalent labels
+_FONT_SM = 12.0   # sizeSp for render.py's r.f_sm-equivalent labels (real: 13pt)
+_FONT_MD = 15.0   # sizeSp for render.py's r.f_md-equivalent (real: 15pt)
+_FONT_LG = 21.0   # sizeSp for render.py's r.f_lg-equivalent, bold (real: 21pt bold)
 _FONT_LCD = 20.0  # sizeSp for r.lcd-equivalent digital readouts
 
 # `_Cmds.text`'s `y` is the text's TOP (InstrumentCanvas.kt converts to
@@ -354,4 +357,134 @@ def ap_panel_commands(x: float, y: float, w: float, h: float, ap, t: float,
             c.text("IAS SET", info_x + 10, iy + pitch * 2, color=DIM)
             c.text(f"{ias_bug:.0f}", icol, iy + pitch * 2 - 2, size=info_lcd,
                    font="seven", color=CYAN, align=2)
+    return encode(c)
+
+
+# -- the GNS unit screen (default NAV page only) - render.py's _gns_unit /
+# _draw_nav_default / _turn_advisory / _cdi_strip / _bezel_labels ----------
+def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
+                   magvar: float) -> str:
+    """`gns` is `World.gns` (a `Gns530`/`Gns430` Variant); `nav`/`own`/
+    `panel` are exactly `World.tick()`'s returned `Frame.nav`/`.own`/
+    `.panel` - no new data plumbing needed, same objects render.py's
+    `_gns_unit` already consumes on desktop.
+
+    **Only the default NAV page renders** - Map, Flight Plan, VNAV, NAV/
+    COM, WPT, NRST, AUX, and every modal dialog (PROC, DTO, confirms,
+    message page) are a deliberately separate, later pass (see
+    docs/ANDROID_PORT_PLAN.md §3.6 / §7). `route_event` already dispatches
+    real FMS bezel-key input into `GpsNav.handle_event` correctly (proven
+    by the Phase 1 core-loop milestone), so turning the FMS knob does move
+    `gns.cursor.page_name` server-side - this function just doesn't have a
+    body for any page but the default one yet, and always draws that one
+    regardless of what page is actually selected.
+    """
+    key_area = 58.0   # reserved below the screen box for the bezel key row + hint text
+    screen_h = h - key_area
+
+    c = _Cmds()
+    _panel_box(c, x, y, w, screen_h, "")
+
+    cursor = gns.cursor
+    group = getattr(cursor, "group_name", "NAV")
+    page = getattr(cursor, "page_name", "")
+    c.text(f"{group}  {page}", x + 8, y + 6, color=CYAN)
+    if getattr(cursor, "cursor_on", False):
+        c.text("CRSR", x + w - 8, y + 6, color=AMBER, align=2)
+
+    cdi_h = 40.0
+    b_x, b_y = x + 8, y + 28
+    b_w, b_h = w - 16, screen_h - 28 - cdi_h - 8
+    b_right = b_x + b_w
+
+    # -- _draw_nav_default -------------------------------------------
+    act = nav.valid
+    to = nav.to_ident or "----"
+    frm = nav.from_ident or "----"
+    mode = nav.mode or ""
+    sym = {"DTO": "D>", "OBS": "OBS", "SUSP": "SUSP", "HOLD": "HOLD"}.get(mode, "->")
+    symcol = AMBER if mode in ("OBS", "SUSP", "HOLD") else (MAGENTA if act else DIM)
+    c.text(sym, b_x, b_y, color=symcol)
+    c.text(frm, b_x + 36, b_y, color=DIM)
+    c.text(to, b_x + 86, b_y - 4, size=_FONT_LG, font="mono",
+           color=MAGENTA if act else DIM)
+    if getattr(gns, "obs_active", False):
+        oc = (getattr(gns, "obs_course", 0.0) - magvar) % 360.0
+        c.text(f"OBS {oc:03.0f}", b_right, b_y, color=AMBER, align=2)
+
+    row_y = b_y + 34
+    dy = max(15.0, min(20.0, (b_h - 40) / 6))
+    room = max(2, int((b_h - 34) // dy))
+    dtk = nav.dtk
+    dis = nav.dist_nm
+    gs = own.gs_kt
+    ete = (dis / gs * 60.0) if (dis and gs > 20) else None
+    xtk = nav.xtk_nm
+    rows: list[tuple[str, str, int]] = [
+        ("DTK", f"{(dtk - magvar) % 360.0:03.0f}" if dtk is not None else "---", TEXT),
+        ("TRK", f"{(own.track_deg - magvar) % 360.0:03.0f}", TEXT),
+        ("DIS", f"{dis:5.1f}nm" if dis is not None else "--.-nm", TEXT),
+        ("GS", f"{gs:3.0f}kt", TEXT),
+        ("ETE", f"{int(ete):02d}:{int((ete * 60) % 60):02d}" if ete else "--:--", TEXT),
+    ]
+    if xtk is not None:
+        side = "R" if xtk > 0 else "L"
+        rows.append(("XTK", f"{abs(xtk):4.2f}nm {side}", AMBER if abs(xtk) > 1.0 else TEXT))
+    for i, (lab, val, col) in enumerate(rows[:room]):
+        yy = row_y + i * dy
+        c.text(lab, b_x, yy, color=DIM)
+        c.text(val, b_right, yy - 2, size=_FONT_MD, color=col, align=2)
+
+    # -- _turn_advisory -------------------------------------------------
+    nxt = nav.next_dtk
+    if nxt is not None and (nav.wpt_alert or nav.turn_now):
+        mag = (nxt - magvar) % 360.0
+        turning = nav.turn_now
+        text = f"{'TURN TO' if turning else 'NEXT DTK'} {mag:03.0f}"
+        c.text(text, x + w - 8, y + screen_h - cdi_h - 58, color=AMBER if turning else CYAN, align=2)
+
+    # -- _cdi_strip -------------------------------------------------------
+    cdi_y = y + screen_h - cdi_h
+    cdi = panel.cdi
+    cx, cy = x + w / 2, cdi_y + cdi_h / 2
+    c.line(x + 30, cy, x + w - 30, cy, color=EDGE)
+    for k in (-2, -1, 1, 2):
+        dxk = k * (w / 2 - 34) / 2
+        c.circle(cx + dxk, cy, 2, color=DIM, filled=True)
+    src = cdi.source
+    c.text(src, x + 2, cy - 14, color=GPS_GREEN if src == "GPS" else CYAN)
+    svc = cdi.service
+    if src == "GPS" and svc:
+        c.text(svc, x + 2 + len(src) * 7 + 8, cy - 14, color=GPS_GREEN)
+    fs = cdi.full_scale_nm
+    if src == "GPS" and fs:
+        lbl = f"{fs:.2f}" if fs < 1.0 else f"{fs:.1f}"
+        c.text(lbl, x + 26, y + screen_h - 20, color=DIM)
+        c.text(lbl, x + w - 26, y + screen_h - 20, color=DIM, align=2)
+    if cdi.valid:
+        dfl = _clamp(cdi.deflection, -1, 1)
+        nx = cx + dfl * (w / 2 - 34)
+        col = GPS_GREEN if src == "GPS" else CYAN
+        c.line(nx, cdi_y + 6, nx, cdi_y + cdi_h - 6, width=3, color=col)
+        tf = cdi.to_from
+        if tf in ("TO", "FROM"):
+            pts = ([(cx, cy - 9), (cx - 7, cy + 4), (cx + 7, cy + 4)] if tf == "TO"
+                   else [(cx, cy + 9), (cx - 7, cy - 4), (cx + 7, cy - 4)])
+            c.polygon(pts, color=col, filled=True)
+            c.text("TO" if tf == "TO" else "FR", x + w - 2, cy - 14, color=col, align=2)
+    else:
+        c.text("--FLAG--", cx, _centered_y(cy), color=RED, align=1)
+
+    # -- _bezel_labels (flat/no-bezel style key row) ---------------------
+    key_y = y + screen_h + 4
+    keys = ["D>", "MENU", "CLR", "ENT", "CRSR", "OBS", "MSG", "FPL"]
+    kw = w / len(keys)
+    for i, k in enumerate(keys):
+        kx = x + i * kw
+        c.rect(kx + 4, key_y, kw - 8, 22, color=AP_KEY_BG, filled=True)
+        c.text(k, kx + kw / 2, _centered_y(key_y + 11), color=DIM, align=1)
+    c.text("outer: page group / field    inner: page / value", x + 6, key_y + 26, color=DIM)
+    if getattr(gns, "obs_active", False):
+        obs_txt = f"OBS {getattr(gns, 'obs_course', 0.0):03.0f}"
+        c.text(obs_txt, x + w - 6, key_y + 26, color=AMBER, align=2)
     return encode(c)

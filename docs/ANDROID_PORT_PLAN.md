@@ -389,6 +389,29 @@ the real Pixel 9: all six mode keys, the RDY lamp, VS readout, and the info
 box render correctly with no overlap, matching the plain-text debug panel's
 values exactly.
 
+**Third slice confirmed on real hardware (2026-09-24): the GNS default NAV
+page.** `render_commands.py` gains `gns_commands`, porting `_gns_unit`'s
+always-drawn chrome (header group/page name + CRSR indicator, no-bezel
+flat screen frame) plus `_draw_nav_default` (active-leg symbol/from/to,
+OBS annunciation, DTK/TRK/DIS/GS/ETE/XTK rows), `_turn_advisory` (NEXT
+DTK/TURN TO), `_cdi_strip` (the linear GPS/VLOC CDI + TO/FROM strip), and
+`_bezel_labels` (the flat style's static key row). **Only the default NAV
+page renders** - `_gns_unit` is a ~15-page router (Map, Flight Plan, VNAV,
+NAV/COM, WPT, NRST, AUX with 5 sub-tabs, plus 8 modal dialogs); porting all
+of it in one pass wasn't realistic, same reasoning as HSI-then-AP-panel
+over attempting the whole panel at once. `route_event` already dispatches
+real FMS bezel-key input into `GpsNav.handle_event` correctly (proven by
+the core-loop milestone) - so turning the FMS knob does move
+`gns.cursor.page_name` server-side, but the Android screen keeps showing
+the default-NAV layout regardless until those other pages get their own
+pass. Applied the top-anchored-`y`/`_centered_y()` convention correctly
+from the start this time (no ad hoc offsets to fix later, unlike the AP
+panel slice). Verified on the real Pixel 9 with the demo flight plan
+(ALFA→BRAVO→CHAR) active: the header, active-leg line (`-> ALFA BRAVO`,
+magenta), DTK/TRK/DIS/GS/ETE/XTK rows, and CDI strip (GPS source, centered
+needle, TO indicator) all render correctly and match the plain-text debug
+panel's own values exactly.
+
 ### 3.7 Loop, threading, and Android lifecycle
 
 The desktop loop is single-threaded except optional UDP/weather-refresh

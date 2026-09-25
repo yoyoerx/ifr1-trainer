@@ -193,3 +193,16 @@ class TrainerSession:
         return render_commands.ap_panel_commands(
             x, y, w, h, self.world.ap, self.world.t, ias_bug=self.world.ias_target,
         )
+
+    def render_gns(self, x: float, y: float, w: float, h: float) -> str:
+        """Draw-command-list string for the GNS unit screen - **default NAV
+        page only**, see render_commands.gns_commands's docstring for what's
+        deliberately not ported yet. Uses the same `Frame.nav`/`.own`/
+        `.panel` `tick()` already computed this frame, plus `self.world.gns`
+        and `self.world.magvar` directly."""
+        frame = self._last_frame
+        if frame is None:
+            return ""
+        return render_commands.gns_commands(
+            x, y, w, h, self.world.gns, frame.nav, frame.own, frame.panel, self.world.magvar,
+        )

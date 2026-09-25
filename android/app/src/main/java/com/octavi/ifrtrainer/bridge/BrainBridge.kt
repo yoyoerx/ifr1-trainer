@@ -104,6 +104,19 @@ object BrainBridge {
     }
 
     /**
+     * §3.6 third slice: the GNS unit screen's draw-command list - **default
+     * NAV page only**, see `render_commands.gns_commands`'s docstring for
+     * what's deliberately not ported yet (Map/FPL/VNAV/NAV-COM/WPT/NRST/
+     * AUX pages, all modal dialogs). Same encoding/decoder/
+     * call-after-tickWorld convention as [renderHsi]/[renderApPanel].
+     */
+    fun renderGns(x: Float, y: Float, w: Float, h: Float): String {
+        val session = sessionObj ?: return ""
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        return module.callAttr("render_gns", session, x, y, w, h).toString()
+    }
+
+    /**
      * Routes one real IFR-1 event through `main.route_event` - see
      * [androidbridge.session.TrainerSession.dispatch_event]. Fields map
      * directly from [com.octavi.ifrtrainer.input.Ifr1Event], already

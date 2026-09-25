@@ -62,6 +62,14 @@ def render_ap_panel(session: TrainerSession, x: float, y: float, w: float, h: fl
     return session.render_ap_panel(x, y, w, h)
 
 
+def render_gns(session: TrainerSession, x: float, y: float, w: float, h: float) -> str:
+    """Call after tick_line() each frame - see TrainerSession.render_gns's
+    docstring. Only the default NAV page renders; FMS-mode bezel input
+    already moves gns.cursor.page_name correctly (proven by the core-loop
+    milestone), the screen just doesn't have a body for any other page yet."""
+    return session.render_gns(x, y, w, h)
+
+
 def tick_line(session: TrainerSession, dt_s: float) -> str:
     s = session.tick(dt_s)
     return (
