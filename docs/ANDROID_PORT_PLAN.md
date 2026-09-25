@@ -455,6 +455,41 @@ fully-tuned branches are covered by `tests/test_render_commands.py` but
 not yet confirmed on-device pending a demo database with airports and an
 armed VNAV profile.
 
+**Sixth slice confirmed on real hardware (2026-09-25): Flight Plan
+Catalog, WPT, NRST, and AUX (Nav Data/Trip Planning/Utility/Setup).**
+`gns_commands` now dispatches by `cursor.group_name` in addition to
+`page_name`, since WPT/NRST/AUX page names aren't unique the way the NAV
+group's are conceptually distinct pages. Four new bodies: `_fpl_catalog_body`
+(`_draw_fpl_catalog` - the FPL 01-19 slot list), `_wpt_body`
+(`_draw_wpt_page` - all six WPT sub-pages: Airport, Airport Runway,
+Airport Freq, Intersection, NDB, VOR, with the shared char-cell ident
+entry + underline cursor + per-kind info block), `_nrst_body`
+(`_draw_nrst_page` plus its three specialized sub-bodies -
+`_draw_nrst_airports`/`_draw_nrst_facility`/`_draw_nrst_airspace` - all
+eight NRST pages: APT/INT/NDB/VOR/User/ARTCC/FSS/Airspace), and
+`_aux_body` (dispatches Nav Data/Trip Planning/Utility/Setup to their own
+small functions; Weather and Charts are **not** ported - they need a live
+`datasrc.wx` cache read and PDF chart rendering respectively, out of scope
+for the same reason the six-pack gauge cluster is (§7): real device data
+Android doesn't have yet, not a rendering-complexity problem). `t` and
+`baro_inhg` were added as `gns_commands` parameters (`World.t`/
+`World.baro_inhg`) since AUX Utility's flight timer and AUX Setup's baro
+readout need them - every other page ignores them. Verified on the real
+Pixel 9: Flight Plan Catalog shows all 9 slots as "-- empty --" (no saved
+plans this session); WPT Airport shows the six-cell empty entry buffer and
+"knob: enter identifier"; NRST Nearest APT shows "none within range"
+(the demo db has no airports); AUX Nav Data shows the demo db's
+SOURCE/CYCLE/EFF/EXP fields and APT/VOR/NDB/WPT/AWY counts (0/1/0/3/0,
+matching the demo db exactly); AUX Trip Planning shows "ALFA -> CHAR" with
+correct TOTAL DIS/DIS REMAIN/GS/ETE; AUX Utility shows a live-updating
+flight timer and current GS/TAS/ALT; AUX Setup shows UNIT "GNS 530", CDI
+SRC "GPS", and BARO "29.92 in". The WPT-with-a-match and NRST-with-hits
+branches (an airport actually found/nearby) are covered by
+`tests/test_render_commands.py` but not yet confirmed on-device, same gap
+as VNAV/NAV/COM's armed-profile branch. **What's left of §3.6**: the
+moving map (a canvas, not a text page - its own slice) and the 8 modal
+dialogs (PROC, DTO, confirms, message page).
+
 ### 3.7 Loop, threading, and Android lifecycle
 
 The desktop loop is single-threaded except optional UDP/weather-refresh

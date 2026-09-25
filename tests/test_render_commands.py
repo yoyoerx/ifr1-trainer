@@ -8,7 +8,7 @@ from autopilot import Autopilot
 from gns530 import Gns530
 from gpsnav import PAGE_GROUPS, NavState, VnavProfile
 from instruments import CDI, DME, BearingPointer, Markers, NavHead, Ownship, Panel
-from navdata.model import NavDatabase, VhfNavaid, Waypoint
+from navdata.model import Airport, NavDatabase, VhfNavaid, Waypoint
 from navmath import Point
 from render_commands import ap_panel_commands, gns_commands, hsi_commands
 
@@ -78,6 +78,8 @@ def _db():
     d.add_waypoint(Waypoint("BRAVO", Point(40.5, -74.0)))
     d.add_waypoint(Waypoint("CHAR", Point(41.0, -74.0)))
     d.add_vhf(VhfNavaid("OOO", Point(40.25, -74.0), 113.0))
+    d.add_airport(Airport("KTST", Point(40.0, -74.0), longest_runway_ft=5000,
+                            comms={"TWR": [118.5]}))
     return d
 
 
@@ -229,13 +231,118 @@ def test_gns_commands_vnav_page_unarmed_shows_no_target_message():
 
 
 def test_gns_commands_navcom_page_no_airport_shows_message():
-    """The synthetic db (waypoints + one VOR, no airports) exercises the
-    "nothing to tune" branch - a real FAA-data flight plan with airports
-    is what `navcom_airport()` needs to return frequency rows, out of
-    scope for this pure-stdlib test."""
+    """The loaded flight plan (ALFA/BRAVO, both plain waypoints) has no
+    airport along it - `navcom_airport()` only considers airports actually
+    in the route, so this exercises the "nothing to tune" branch even
+    though `_db()`'s KTST airport exists elsewhere in the database."""
     gns = Gns530(_db())
     gns.load_flight_plan(["ALFA", "BRAVO"])
     _to_navcom_page(gns)
     nav = NavState(valid=True, mode="LEG", from_ident="ALFA", to_ident="BRAVO")
     s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
     assert "no airport in flight plan" in s
+
+
+def _to_wpt_page(gns, page: str) -> None:
+    group = list(PAGE_GROUPS).index("WPT")
+    gns.cursor.group = group
+    gns.cursor.page = PAGE_GROUPS["WPT"].index(page)
+
+
+def _to_nrst_page(gns, page: str) -> None:
+    group = list(PAGE_GROUPS).index("NRST")
+    gns.cursor.group = group
+    gns.cursor.page = PAGE_GROUPS["NRST"].index(page)
+
+
+def _to_aux_page(gns, page: str) -> None:
+    group = list(PAGE_GROUPS).index("AUX")
+    gns.cursor.group = group
+    gns.cursor.page = PAGE_GROUPS["AUX"].index(page)
+
+
+def test_gns_commands_fpl_catalog_page_lists_slots():
+    gns = Gns530(_db())
+    gns.cursor.page = PAGE_GROUPS["NAV"].index("Flight Plan Catalog")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "-- empty --" in s
+
+
+def test_gns_commands_wpt_airport_page_shows_looked_up_airport():
+    """The looked-up ident is drawn as one T command per character cell
+    (matching render.py's per-cell underline-cursor layout), not as one
+    contiguous "KTST" string - check the cells and the looked-up record's
+    own fields instead."""
+    gns = Gns530(_db())
+    gns.wpt_entry.chars = list("KTST")
+    _to_wpt_page(gns, "Airport")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    cells = [ln.split("|")[-1] for ln in s.splitlines() if ln.startswith("T|") and ln.split("|")[-1] in "KTST"]
+    assert cells[:4] == ["K", "T", "S", "T"]
+    assert "RWY  5000 ft" in s
+    assert "TWR  118.5" in s
+
+
+def test_gns_commands_wpt_airport_page_no_match_shows_hint():
+    gns = Gns530(_db())
+    _to_wpt_page(gns, "Airport")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "knob: enter identifier" in s
+
+
+def test_gns_commands_nrst_apt_page_shows_nearest_airport():
+    gns = Gns530(_db())
+    gns.update(Point(40.0, -74.0), 0.0, 100.0)  # establishes gns._pos for nearest_for_page
+    _to_nrst_page(gns, "Nearest APT")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "KTST" in s
+
+
+def test_gns_commands_nrst_apt_page_none_within_range_shows_message():
+    gns = Gns530(NavDatabase(source="test"))  # no airports at all
+    gns.update(Point(40.0, -74.0), 0.0, 100.0)
+    _to_nrst_page(gns, "Nearest APT")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "none within range" in s
+
+
+def test_gns_commands_aux_navdata_page_shows_db_counts():
+    gns = Gns530(_db())
+    _to_aux_page(gns, "Nav Data")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "SOURCE  test" in s
+    assert "APT  1" in s
+
+
+def test_gns_commands_aux_trip_page_shows_totals():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    _to_aux_page(gns, "Trip Planning")
+    nav = NavState(valid=True, mode="LEG", from_ident="ALFA", to_ident="BRAVO")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "ALFA -> CHAR" in s
+    assert "TOTAL DIS" in s
+
+
+def test_gns_commands_aux_utility_page_shows_flight_timer():
+    gns = Gns530(_db())
+    _to_aux_page(gns, "Utility")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0, t=3725.0)
+    assert "FLIGHT TIMER" in s
+    assert "01:02:05" in s
+
+
+def test_gns_commands_aux_setup_page_shows_unit_and_baro():
+    gns = Gns530(_db())
+    _to_aux_page(gns, "Setup")
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0, baro_inhg=29.87)
+    assert "GNS 530" in s
+    assert "29.87 in" in s

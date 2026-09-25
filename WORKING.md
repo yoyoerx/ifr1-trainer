@@ -199,9 +199,32 @@ landscape then portrait. First target device: Pixel 9.
       has no airports — both are real `_vnav_body`/`_navcom_body` code
       paths, not stubs, just the no-data branch of each. Full writeup:
       `ANDROID_PORT_PLAN.md` §3.6.
-- [ ] **Do next**: more of §3.6 (Map or Flight Plan Catalog next — those
-      plus WPT/NRST/AUX and the modal dialogs are all that's left). Touch/
-      rotary controls (§3.2) also still pending.
+- [x] **§3.6 rendering, sixth slice — Flight Plan Catalog, WPT, NRST, and
+      AUX (Nav Data/Trip Planning/Utility/Setup) confirmed on real hardware
+      (2026-09-25)**: `gns_commands` now dispatches by `cursor.group_name`
+      as well as `page_name` - `_fpl_catalog_body` (ports
+      `_draw_fpl_catalog`), `_wpt_body` (ports `_draw_wpt_page` - all six
+      Airport/Airport Runway/Airport Freq/Intersection/NDB/VOR sub-pages,
+      the char-cell ident entry with underline cursor), `_nrst_body` (ports
+      `_draw_nrst_page` + `_draw_nrst_airports`/`_draw_nrst_facility`/
+      `_draw_nrst_airspace` - all eight NRST sub-pages), and `_aux_body`
+      (ports `_draw_aux_navdata`/`_draw_aux_trip`/`_draw_aux_utility`/
+      `_draw_aux_setup` - Weather/Charts intentionally excluded, they need
+      a live `datasrc.wx` cache read / PDF rendering, out of scope same as
+      the six-pack decision). `gns_commands` gained `t`/`baro_inhg`
+      parameters for the Utility timer and Setup baro readout. Verified on
+      the real Pixel 9: Flight Plan Catalog (9 empty slots), WPT Airport
+      (empty char-cell entry + hint), NRST Nearest APT ("none within
+      range" - the demo db has no airports), and all four AUX tabs
+      (Nav Data's SOURCE/CYCLE/EFF/EXP + APT/VOR/NDB/WPT/AWY counts, Trip
+      Planning's ALFA->CHAR totals, Utility's live flight timer, Setup's
+      UNIT/CDI SRC/BARO) all render correctly. Only Map and the modal
+      dialogs (PROC/DTO/confirms/message page) remain unported.
+      Full writeup: `ANDROID_PORT_PLAN.md` §3.6.
+- [ ] **Do next**: the moving map (a canvas, not a text page - its own
+      slice) and the modal dialogs (PROC, DTO, confirms, message page) are
+      what's left of §3.6. Touch/rotary controls (§3.2) also still
+      pending.
 
 ---
 

@@ -561,25 +561,368 @@ def _navcom_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float, gns) 
                b_x, b_y + 46, b_bottom, b_right)
 
 
+# -- Flight Plan Catalog page - render.py's _draw_fpl_catalog ---------------
+def _fpl_catalog_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float, gns) -> None:
+    b_right = b_x + b_w
+    cat = getattr(gns, "fpl_catalog", [])
+    on = getattr(gns.cursor, "cursor_on", False)
+    sel = getattr(gns, "cat_sel", 0)
+    if on:
+        c.text("ENT=recall  CLR=delete", b_right, b_y, color=DIM, align=2)
+    y = b_y + 18
+    room = max(1, int((b_h - 18) // 15))
+    for i, plan in enumerate(cat[:room]):
+        mk = ">" if (on and i == sel) else " "
+        col = AMBER if (on and i == sel) else (TEXT if plan else DIM)
+        if plan and plan.waypoints:
+            comment = plan.comment or f"{plan.waypoints[0].ident}/{plan.waypoints[-1].ident}"
+            label = f"{comment:<12} {len(plan.waypoints)} wpts"
+        else:
+            label = "-- empty --"
+        c.text(f"{mk} {i + 1:02d}  {label}", b_x, y, color=col)
+        y += 15
+
+
+# -- WPT (Airport/Intersection/NDB/VOR) search page - render.py's
+# _draw_wpt_page --------------------------------------------------------
+def _wpt_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
+               gns, own, magvar: float, sub: str) -> None:
+    from navmath import great_circle_nm, initial_bearing
+
+    b_right = b_x + b_w
+    b_bottom = b_y + b_h
+    buf = getattr(gns, "wpt_entry", None)
+    chars = "".join(buf.chars) if buf is not None else ""
+    on = getattr(gns.cursor, "cursor_on", False)
+    c.text(sub.upper(), b_x, b_y, color=DIM)
+    cw = 16.0
+    cy = b_y + 22
+    for i, ch in enumerate(buf.chars if buf is not None else "______"):
+        cx = b_x + i * cw
+        c.text(ch if ch.strip() else "_", cx + cw / 2, _centered_y(cy, _FONT_MD),
+               size=_FONT_MD, color=AMBER if on else TEXT, align=1)
+        if on and buf is not None and i == buf.cursor:
+            c.line(cx + 2, cy + 20, cx + cw - 2, cy + 20, width=2, color=AMBER)
+    ent = gns.lookup(chars, sub) if buf is not None else None
+    y = cy + 30
+    if ent is None:
+        c.text("no match" if chars.strip() else "knob: enter identifier", b_x, y, color=DIM)
+        return
+    brg = (initial_bearing(own.pos, ent.pos) - magvar) % 360.0
+    dis = great_circle_nm(own.pos, ent.pos)
+    kind = type(ent).__name__
+    c.text(getattr(ent, "name", "") or kind, b_x, y, color=GPS_GREEN)
+    y += 16
+    if sub == "Airport Runway":
+        rows = gns.wpt_runways()
+        r_on = on and getattr(gns, "wpt_field", 0) == 1
+        if not rows:
+            c.text("no runway data", b_x, y, color=DIM)
+            return
+        rw = rows[getattr(gns, "wpt_sel", 0) % len(rows)]
+        surf, lgt = ent.runway_info(rw.ident)
+        c.text(f"{'>' if r_on else ' '}RWY {rw.number:<4} {getattr(gns, 'wpt_sel', 0) % len(rows) + 1}/{len(rows)}",
+               b_x, y, color=AMBER if r_on else TEXT)
+        y += 15
+        dims = f"{rw.length_ft or '---'} x {rw.width_ft or '---'} ft"
+        lines = [f"  {dims}", f"  HDG {rw.bearing_deg:03.0f} mag", f"  SFC {surf}", f"  LGT {lgt}"]
+        if rw.elev_ft is not None:
+            lines.append(f"  ELEV {rw.elev_ft} ft")
+        ils = next(iter(gns.db.vhf.get(rw.ils_ident, [])), None) if rw.ils_ident else None
+        if ils is not None:
+            lines.append(f"  {'ILS' if rw.ils_category else 'LOC'} {ils.freq_mhz:.2f}")
+        for ln in lines:
+            c.text(ln, b_x, y, color=TEXT)
+            y += 15
+        return
+    if sub == "Airport Freq":
+        rows = gns.wpt_frequencies(sub)
+        f_on = on and getattr(gns, "wpt_field", 0) == 1
+        _freq_rows(c, rows, getattr(gns, "wpt_sel", 0) if f_on else -1, b_x, y, b_bottom, b_right)
+        return
+    if kind == "Airport":
+        info = [f"ELEV {getattr(ent, 'elev_ft', 0) or 0} ft",
+                f"RWY  {getattr(ent, 'longest_runway_ft', 0) or 0} ft",
+                f"TWR  {ent.comm('TWR') or '---'}",
+                f"ATIS {ent.comm('ATIS', 'ASOS', 'AWOS') or '---'}"]
+    elif kind == "VhfNavaid":
+        f_on = on and getattr(gns, "wpt_field", 0) == 1
+        info = [f"{'>' if f_on else ' '}FREQ {ent.freq_mhz:07.3f}", f"VAR  {ent.magvar_deg:+.0f}"]
+    elif kind == "NdbNavaid":
+        info = [f"FREQ {ent.freq_khz:.0f} kHz"]
+    else:
+        info = [f"RGN  {getattr(ent, 'region', '') or '--'}"]
+    for line in info:
+        c.text(line, b_x, y, color=TEXT)
+        y += 15
+    c.text(f"BRG {brg:03.0f}   {dis:6.1f} nm", b_x, y + 2, color=CYAN)
+
+
+# -- NRST pages - render.py's _draw_nrst_page / _draw_nrst_airports /
+# _draw_nrst_facility / _draw_nrst_airspace ----------------------------
+_AIRSPACE_STATUS_LABEL = {
+    "inside": "Inside of airspace",
+    "near_ahead": "Ahead < 2nm",
+    "near": "Within 2nm of airspace",
+    "ahead": "Ahead",
+}
+
+
+def _nrst_airports_body(c: _Cmds, b_x: float, b_right: float, b_bottom: float,
+                          gns, own, magvar: float, hits, on: bool, sel: int, y: float) -> None:
+    from navmath import great_circle_nm, initial_bearing
+
+    room = max(1, int((b_bottom - y) // 30))
+    top = max(0, min(max(0, len(hits) - room), sel - room // 2))
+    for i, e in enumerate(hits[top:top + room], start=top):
+        brg = (initial_bearing(own.pos, e.pos) - magvar) % 360.0
+        dis = great_circle_nm(own.pos, e.pos)
+        row_on = on and i == sel
+        id_on = row_on and getattr(gns, "nrst_col", 0) == 0
+        c.text(f"{'>' if id_on else ' '} {e.ident:<5} {brg:03.0f} {dis:5.1f}nm {gns.best_approach(e.ident):>3}",
+               b_x, y, color=AMBER if id_on else TEXT)
+        fr = gns.nearest_frequency("Nearest APT", e)
+        fon = row_on and not id_on
+        rwy = f"{e.longest_runway_ft}ft" if e.longest_runway_ft else "---"
+        c.text(f"{'>' if fon else ' '}   {f'{fr.mhz:7.3f}' if fr else '  ---  '}", b_x, y + 15,
+               color=AMBER if fon else (TEXT if fr else DIM))
+        c.text(rwy, b_right - 18, y + 15, color=CYAN, align=2)
+        y += 30
+    if len(hits) > room:
+        more = ("^" if top > 0 else " ") + ("v" if top + room < len(hits) else " ")
+        c.text(more, b_right - 2, y, color=AMBER, align=2)
+
+
+def _nrst_facility_body(c: _Cmds, b_x: float, b_y: float, b_right: float, b_bottom: float,
+                          gns, own, magvar: float, hits, on: bool) -> None:
+    from navmath import great_circle_nm, initial_bearing
+
+    i = max(0, min(len(hits) - 1, getattr(gns, "nrst_facility", 0)))
+    fac = hits[i]
+    brg = (initial_bearing(own.pos, fac.pos) - magvar) % 360.0
+    dis = great_circle_nm(own.pos, fac.pos)
+    name = f"{fac.voice_call} RADIO" if hasattr(fac, "voice_call") else f"{fac.artcc} CENTER"
+    c.text(f"{name}  ({i + 1}/{len(hits)})", b_x, b_y + 20, size=_FONT_MD, color=GPS_GREEN)
+    c.text(f"{fac.ident}  {brg:03.0f}  {dis:5.1f}nm", b_x, b_y + 40, color=TEXT)
+    rows = gns.facility_frequencies(fac)
+    _freq_rows(c, rows, getattr(gns, "nrst_freq_sel", 0) if on else -1, b_x, b_y + 60, b_bottom, b_right)
+
+
+def _nrst_airspace_body(c: _Cmds, b_x: float, b_right: float, b_bottom: float,
+                          gns, own, hits, on: bool, sel: int, y: float) -> None:
+    track = getattr(own, "track_deg", 0.0)
+    gs = getattr(own, "gs_kt", 0.0) or 0.0
+    row_h = 45.0
+    room = max(1, int((b_bottom - y) // row_h))
+    top = max(0, min(max(0, len(hits) - room), sel - room // 2))
+    for i, aw in enumerate(hits[top:top + room], start=top):
+        d = aw.distance_nm(own.pos)
+        cat = aw.alert_category(own.pos, track, gs)
+        status = _AIRSPACE_STATUS_LABEL.get(cat) or f"{d:4.1f}nm"
+        row_on = on and i == sel
+        mk = ">" if row_on else " "
+        c.text(f"{mk} {aw.ident:<5} CLASS {aw.cls}  {status}", b_x, y,
+               color=AMBER if row_on else TEXT)
+        floor = "SFC" if (aw.floor_ft or 0) == 0 else f"{aw.floor_ft}ft"
+        ceil = f"{aw.ceiling_ft}ft" if aw.ceiling_ft is not None else "---"
+        c.text(f"   {floor} - {ceil}", b_x, y + 15, color=DIM)
+        agency = gns.airspace_controlling(aw)
+        if agency is not None and agency[1]:
+            name, freqs = agency
+            more = f" +{len(freqs) - 1}" if len(freqs) > 1 else ""
+            c.text(f"   {name[:14]:<14} {freqs[0]:7.3f}{more}", b_x, y + 30,
+                   color=AMBER if row_on else CYAN)
+        y += row_h
+    if len(hits) > room:
+        more = ("^" if top > 0 else " ") + ("v" if top + room < len(hits) else " ")
+        c.text(more, b_right - 2, b_bottom - room * row_h + 16, color=AMBER, align=2)
+
+
+def _nrst_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
+                gns, own, magvar: float, sub: str) -> None:
+    from navmath import great_circle_nm, initial_bearing
+
+    b_right = b_x + b_w
+    b_bottom = b_y + b_h
+    hits = gns.nearest_for_page(sub)
+    on = getattr(gns.cursor, "cursor_on", False)
+    sel = getattr(gns, "nrst_sel", 0)
+    c.text(sub.upper(), b_x, b_y, color=DIM)
+    if on:
+        if sub in ("Nearest ARTCC", "Nearest FSS"):
+            hint = "sm=site lg=freq"
+        elif sub == "Nearest Airspace":
+            hint = "ENT = standby"
+        else:
+            hint = "ENT = standby" if getattr(gns, "nrst_col", 0) == 1 else "ENT = info  D-> = DCT"
+        if hint:
+            c.text(hint, b_right - 16, b_y, color=DIM, align=2)
+    y = b_y + 20
+    room = max(1, int((b_h - 20) // 15))
+    if not hits:
+        msg = "no user waypoints stored" if sub == "Nearest User" else "none within range"
+        c.text(msg, b_x, y, color=DIM)
+        return
+    if sub == "Nearest APT":
+        _nrst_airports_body(c, b_x, b_right, b_bottom, gns, own, magvar, hits, on, sel, y)
+        return
+    if sub in ("Nearest ARTCC", "Nearest FSS"):
+        _nrst_facility_body(c, b_x, b_y, b_right, b_bottom, gns, own, magvar, hits, on)
+        return
+    if sub == "Nearest Airspace":
+        _nrst_airspace_body(c, b_x, b_right, b_bottom, gns, own, hits, on, sel, y)
+        return
+    top = max(0, min(max(0, len(hits) - room), sel - room // 2))
+    for i, e in enumerate(hits[top:top + room], start=top):
+        brg = (initial_bearing(own.pos, e.pos) - magvar) % 360.0
+        dis = great_circle_nm(own.pos, e.pos)
+        row_on = on and i == sel
+        id_on = row_on and getattr(gns, "nrst_col", 0) == 0
+        mk = ">" if id_on else " "
+        c.text(f"{mk} {e.ident:<6} {brg:03.0f} {dis:6.1f}nm", b_x, y,
+               color=AMBER if id_on else TEXT)
+        fr = gns.nearest_frequency(sub, e)
+        if fr is not None:
+            fx = b_right - 64
+            fon = row_on and not id_on
+            c.text(f"{'>' if fon else ' '}{fr.mhz:7.3f}", fx, y,
+                   color=AMBER if fon else (CYAN if fr.radio == "VLOC" else TEXT))
+        elif sub == "Nearest NDB" and getattr(e, "freq_khz", None):
+            c.text(f" {e.freq_khz:.0f}", b_right - 64, y, color=TEXT)
+        y += 15
+    if len(hits) > room:
+        more = ("^" if top > 0 else " ") + ("v" if top + room < len(hits) else " ")
+        c.text(more, b_right - 2, b_y, color=AMBER, align=2)
+
+
+# -- AUX group (Nav Data / Trip Planning / Utility / Setup only - Weather
+# and Charts need live datasrc.wx cache reads / PDF rendering, out of
+# scope for this pass, same "deliberately not ported yet" carve-out as
+# Map/WPT catalogue-of-modal-dialogs) - render.py's _draw_aux_navdata /
+# _draw_aux_trip / _draw_aux_utility / _draw_aux_setup ------------------
+def _aux_navdata_body(c: _Cmds, b_x: float, b_y: float, gns) -> None:
+    db = gns.db
+    y = b_y
+    if db is None:
+        c.text("no nav database", b_x, y, color=DIM)
+        return
+    c.text(f"SOURCE  {db.source or '---'}", b_x, y, color=TEXT); y += 17
+    c.text(f"CYCLE   {db.cycle or '---'}", b_x, y, color=TEXT); y += 17
+    eff = db.effective.isoformat() if db.effective else "---"
+    c.text(f"EFF     {eff}", b_x, y, color=TEXT); y += 17
+    expired = False
+    if db.expires is not None:
+        from datetime import date
+        expired = date.today() > db.expires
+    exp = db.expires.isoformat() if db.expires else "---"
+    c.text(f"EXP     {exp}", b_x, y, color=AMBER if expired else TEXT)
+    y += 20
+    for label, n in (("APT", len(db.airports)), ("VOR", len(db.vhf)),
+                      ("NDB", len(db.ndb)), ("WPT", len(db.waypoints)),
+                      ("AWY", len(db.airways))):
+        c.text(f"{label}  {n}", b_x, y, color=DIM)
+        y += 15
+
+
+def _aux_trip_body(c: _Cmds, b_x: float, b_y: float, gns, nav, own) -> None:
+    from navmath import great_circle_nm
+
+    wps = getattr(gns.fpl, "waypoints", [])
+    if len(wps) < 2:
+        c.text("no flight plan", b_x, b_y, color=DIM)
+        return
+    leg_nm = [great_circle_nm(wps[i].pos, wps[i + 1].pos) for i in range(len(wps) - 1)]
+    total = sum(leg_nm)
+    active = getattr(gns.fpl, "active", 1)
+    dtg = getattr(nav, "dtg_nm", None)
+    if dtg is not None and getattr(gns.fpl, "has_active_leg", False):
+        remaining = dtg + sum(leg_nm[active:])
+    else:
+        remaining = total
+    gs = getattr(own, "gs_kt", 0.0)
+    ete = remaining / gs * 60.0 if gs > 20 else None
+    y = b_y
+    c.text(f"{wps[0].ident} -> {wps[-1].ident}", b_x, y, color=GPS_GREEN)
+    y += 18
+    c.text(f"TOTAL DIS   {total:6.1f} nm", b_x, y, color=TEXT); y += 17
+    c.text(f"DIS REMAIN  {remaining:6.1f} nm", b_x, y, color=TEXT); y += 17
+    c.text(f"GS          {gs:6.0f} kt", b_x, y, color=TEXT); y += 17
+    ete_txt = f"{int(ete):02d}:{int((ete * 60) % 60):02d}" if ete else "--:--"
+    c.text(f"ETE         {ete_txt}", b_x, y, color=TEXT)
+
+
+def _aux_utility_body(c: _Cmds, b_x: float, b_y: float, own, t: float) -> None:
+    hh, rem = divmod(int(t), 3600)
+    mm, ss = divmod(rem, 60)
+    y = b_y
+    c.text("FLIGHT TIMER", b_x, y, color=DIM)
+    y += 17
+    c.text(f"{hh:02d}:{mm:02d}:{ss:02d}", b_x, y, size=_FONT_LCD, font="seven", color=GPS_GREEN)
+    y += 24
+    c.text(f"GS   {getattr(own, 'gs_kt', 0.0):5.0f} kt", b_x, y, color=TEXT)
+    y += 15
+    c.text(f"TAS  {getattr(own, 'tas_kt', 0.0):5.0f} kt", b_x, y, color=TEXT)
+    y += 15
+    c.text(f"ALT  {getattr(own, 'altitude_ft', 0.0):6.0f} ft", b_x, y, color=TEXT)
+
+
+def _aux_setup_body(c: _Cmds, b_x: float, b_y: float, gns, baro_inhg: float) -> None:
+    variant = getattr(gns, "variant", None)
+    on = getattr(gns.cursor, "cursor_on", False)
+    y = b_y
+    c.text(f"UNIT     {getattr(variant, 'name', '---')}", b_x, y, color=TEXT)
+    y += 17
+    c.text(f"CDI SRC  {getattr(gns, 'cdi_source', 'GPS')}", b_x, y, color=TEXT)
+    y += 17
+    c.text(f"BARO     {baro_inhg:.2f} in", b_x, y, color=TEXT)
+    y += 20
+    alarm = getattr(gns, "cdi_alarm_max_nm", None)
+    val = "AUTO" if alarm is None else (f"{alarm:.2f}" if alarm < 1.0 else f"{alarm:.1f}")
+    mk = ">" if on else " "
+    c.text(f"{mk} CDI/ALARMS  {val}", b_x, y, color=AMBER if on else TEXT)
+    y += 20
+    c.text("NAV UNITS  nm / kt / ft", b_x, y, color=DIM)
+
+
+def _aux_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
+               gns, nav, own, t: float, baro_inhg: float, sub: str) -> None:
+    if sub == "Nav Data":
+        _aux_navdata_body(c, b_x, b_y, gns)
+    elif sub == "Trip Planning":
+        _aux_trip_body(c, b_x, b_y, gns, nav, own)
+    elif sub == "Utility":
+        _aux_utility_body(c, b_x, b_y, own, t)
+    elif sub == "Setup":
+        _aux_setup_body(c, b_x, b_y, gns, baro_inhg)
+    else:
+        c.text(f"{sub} not available on Android yet", b_x, b_y, color=DIM)
+
+
 # -- the GNS unit screen - render.py's _gns_unit / _turn_advisory /
 # _cdi_strip / _bezel_labels ----------
 def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
-                   magvar: float) -> str:
+                   magvar: float, *, t: float = 0.0, baro_inhg: float = 29.92) -> str:
     """`gns` is `World.gns` (a `Gns530`/`Gns430` Variant); `nav`/`own`/
     `panel` are exactly `World.tick()`'s returned `Frame.nav`/`.own`/
     `.panel` - no new data plumbing needed, same objects render.py's
-    `_gns_unit` already consumes on desktop.
+    `_gns_unit` already consumes on desktop. `t`/`baro_inhg` are
+    `World.t`/`World.baro_inhg` - only the AUX Utility/Setup pages need
+    them, everything else ignores the extra data.
 
-    **Four pages render**: the default NAV page, Flight Plan, VNAV, and
-    NAV/COM (the ones a pilot actually flies with second-to-second plus the
-    two simplest remaining pages). Map, Flight Plan Catalog, WPT, NRST,
-    AUX, and every modal dialog (PROC, DTO, confirms, message page) are a
-    deliberately separate, later pass (see docs/ANDROID_PORT_PLAN.md §3.6 /
-    §7). `route_event` already dispatches real FMS bezel-key input into
-    `GpsNav.handle_event` correctly (proven by the Phase 1 core-loop
-    milestone), so turning the FMS knob does move `gns.cursor.page_name`
-    server-side - any page without a body here just falls back to the
-    default NAV page's content rather than showing nothing.
+    **Ported pages**: default NAV, Flight Plan, VNAV, NAV/COM, Flight Plan
+    Catalog, the WPT search pages (Airport/Airport Runway/Airport Freq/
+    Intersection/NDB/VOR), every NRST page (APT/INT/NDB/VOR/User/ARTCC/
+    FSS/Airspace), and AUX's Nav Data/Trip Planning/Utility/Setup tabs.
+    **Not ported**: Map (a moving-map canvas, not a text page - its own,
+    later slice), AUX Weather/Charts (need a live `datasrc.wx` cache read /
+    PDF rendering - out of scope, same carve-out as the six-pack decision),
+    and every modal dialog (PROC, DTO, confirms, message page) - see
+    docs/ANDROID_PORT_PLAN.md §3.6 / §7. `route_event` already dispatches
+    real FMS bezel-key input into `GpsNav.handle_event` correctly (proven
+    by the Phase 1 core-loop milestone), so turning the FMS knob does move
+    `gns.cursor.page_name`/`group_name` server-side - a page without a body
+    here just falls back to the default NAV page's content rather than
+    showing nothing.
     """
     key_area = 58.0   # reserved below the screen box for the bezel key row + hint text
     screen_h = h - key_area
@@ -604,6 +947,14 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
         _vnav_body(c, b_x, b_y, b_w, b_h, gns, own)
     elif page == "NAV/COM":
         _navcom_body(c, b_x, b_y, b_w, b_h, gns)
+    elif page == "Flight Plan Catalog":
+        _fpl_catalog_body(c, b_x, b_y, b_w, b_h, gns)
+    elif group == "WPT":
+        _wpt_body(c, b_x, b_y, b_w, b_h, gns, own, magvar, page)
+    elif group == "NRST":
+        _nrst_body(c, b_x, b_y, b_w, b_h, gns, own, magvar, page)
+    elif group == "AUX":
+        _aux_body(c, b_x, b_y, b_w, b_h, gns, nav, own, t, baro_inhg, page)
     else:
         _nav_default_body(c, b_x, b_y, b_w, b_h, gns, nav, own, magvar)
 

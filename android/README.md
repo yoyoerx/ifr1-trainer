@@ -115,11 +115,14 @@ Two real on-device bugs found and fixed getting this far:
   right now: a self-test screen, not a trainer UI.
 - `render/DrawCommand.kt` + `render/InstrumentCanvas.kt` — the §3.6
   draw-command-list contract and Kotlin-side replay mechanism. **The HSI
-  head, AP panel, and four GNS pages (default NAV, Flight Plan, VNAV,
-  NAV/COM) are real now (2026-09-24/25)**, confirmed on real hardware:
-  repo-root `render_commands.py` (a new pure module, no pygame) ports
-  `draw_hsi_head`/`draw_ap_panel`/`_gns_unit`'s chrome/`_draw_nav_default`/
-  `_draw_fpl`/`_draw_vnav_page`/`_draw_navcom_page`/`_draw_freq_rows`/
+  head, AP panel, and ten GNS pages are real now (2026-09-24/25)**,
+  confirmed on real hardware: repo-root `render_commands.py` (a new pure
+  module, no pygame) ports `draw_hsi_head`/`draw_ap_panel`/`_gns_unit`'s
+  chrome/`_draw_nav_default`/`_draw_fpl`/`_draw_vnav_page`/
+  `_draw_navcom_page`/`_draw_fpl_catalog`/`_draw_wpt_page`/
+  `_draw_nrst_page`/`_draw_nrst_airports`/`_draw_nrst_facility`/
+  `_draw_nrst_airspace`/`_draw_aux_navdata`/`_draw_aux_trip`/
+  `_draw_aux_utility`/`_draw_aux_setup`/`_draw_freq_rows`/
   `_turn_advisory`/`_cdi_strip`/`_bezel_labels` and their helpers from
   `render.py`, same trig/layout math, and `InstrumentCanvas`'s `Text` case
   (formerly a TODO) is implemented via `nativeCanvas.drawText` +
@@ -128,19 +131,24 @@ Two real on-device bugs found and fixed getting this far:
   than a list/`PyObject` - see the `List`-marshaling bug noted below, which
   applies to this direction too.
 
-  **The GNS screen renders four pages: default NAV, Flight Plan, VNAV, and
-  NAV/COM.** `gns_commands` dispatches its body by `cursor.page_name`,
-  falling back to the default page for anything else. `_gns_unit` is a
-  ~15-page router (Map, Flight Plan Catalog, WPT, NRST, AUX + 5 sub-tabs,
-  plus 8 modal dialogs) - porting all of it at once wasn't realistic, same
-  reasoning as doing HSI then AP panel separately. `route_event` already
-  dispatches real FMS bezel-key input correctly (proven by the core-loop
-  milestone), so `gns.cursor.page_name` does change server-side when the
-  FMS knob turns - pages without a body here just fall back to the
-  default-NAV layout until they get their own pass. Not a bug; documented
-  scope. The Flight Plan page is also **read-only** - the in-place
-  ident-edit buffer (live typing while adding/editing a waypoint) doesn't
-  render yet, though real bezel input still edits the plan server-side.
+  **The GNS screen renders ten pages**: default NAV, Flight Plan, VNAV,
+  NAV/COM, Flight Plan Catalog, all six WPT search pages (Airport/Airport
+  Runway/Airport Freq/Intersection/NDB/VOR), all eight NRST pages
+  (APT/INT/NDB/VOR/User/ARTCC/FSS/Airspace), and AUX's Nav Data/Trip
+  Planning/Utility/Setup tabs. `gns_commands` dispatches by
+  `cursor.page_name`/`group_name`, falling back to the default NAV page
+  for anything else. **Still not ported**: the Map page (a moving-map
+  canvas, not a text page - its own later slice), AUX Weather/Charts (need
+  a live `datasrc.wx` cache read / PDF rendering - out of scope, same
+  carve-out as the six-pack decision), and the 8 modal dialogs (PROC, DTO,
+  confirms, message page). `route_event` already dispatches real FMS
+  bezel-key input correctly (proven by the core-loop milestone), so
+  `gns.cursor.page_name`/`group_name` do change server-side when the FMS
+  knob turns - pages without a body here just fall back to the default-NAV
+  layout. Not a bug; documented scope. The Flight Plan page is also
+  **read-only** - the in-place ident-edit buffer (live typing while
+  adding/editing a waypoint) doesn't render yet, though real bezel input
+  still edits the plan server-side.
 
   The AP panel slice found and fixed a systemic text-positioning bug the
   HSI slice's looser spacing had hidden: `nativeCanvas.drawText` positions
@@ -269,9 +277,17 @@ Two real on-device bugs found and fixed getting this far:
     plan") since the synthetic demo db has neither an armed VNAV profile
     nor any airports; the fully-populated branches are unit-tested but not
     yet confirmed on-device.
-11. **Do next**: more of §3.6 - Map or Flight Plan Catalog next, then
-    WPT/NRST/AUX and the modal dialogs, then the moving map - one
-    instrument/page at a time, same pattern as the prior slices. Touch/
-    rotary-gesture controls (§3.2) are also still pending. (The six-pack
-    gauge cluster is not planned for Android at all - decision, 2026-09-24,
-    `ANDROID_PORT_PLAN.md` §7.)
+11. ~~§3.6 draw-command-list instrument rendering, sixth slice~~ **Done
+    (2026-09-25)**: Flight Plan Catalog, all six WPT search pages, all
+    eight NRST pages, and AUX's Nav Data/Trip Planning/Utility/Setup tabs
+    are real instrument graphics now too, confirmed on the real Pixel 9 -
+    Flight Plan Catalog's 9 empty slots, WPT Airport's empty char-cell
+    entry, NRST Nearest APT's "none within range", and all four AUX tabs'
+    correct field values all render correctly. AUX Weather/Charts stay
+    unported (need live `datasrc.wx`/PDF data, out of scope like the
+    six-pack decision).
+12. **Do next**: only the moving map (a canvas, not a text page) and the 8
+    modal dialogs (PROC, DTO, confirms, message page) are left of §3.6.
+    Touch/rotary-gesture controls (§3.2) are also still pending. (The
+    six-pack gauge cluster is not planned for Android at all - decision,
+    2026-09-24, `ANDROID_PORT_PLAN.md` §7.)
