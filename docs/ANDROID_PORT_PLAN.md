@@ -539,6 +539,68 @@ synthetic demo db (no airports, so no procedures) doesn't support well;
 worth revisiting once §3.5's real FAA nav data lands on-device. **What's
 left of §3.6 now**: only the moving map.
 
+**Eighth and final slice confirmed on real hardware (2026-09-25): the
+moving map.** New `render_commands.map_commands` ports render.py's `_map`
+(the track-up moving map) plus its helper functions -
+`_ownship_symbol`, `_hold_track_points`, `_pt_symbol_points`,
+`_draw_vor_symbol`, `_draw_ndb_symbol`, `_draw_airport_symbol` - and
+main.py's `_nearby` (the enroute nearest-fixes declutter helper, folded
+into `render_commands.py` as `_map_nearby` since it's the map's own
+data-prep step, not shared with anything else desktop's loop does).
+Ported: track-up rotation, own-ship-offset-toward-bottom-third
+projection, range rings + range/TRK UP labels, flight-plan legs (magenta
+active leg, DME-arc curves via `navmath.arc_points`) and their waypoint
+symbols (MAP amber X, hold racetrack via `_hold_track_points_pt`,
+procedure-turn chevron via `_pt_symbol_points_pt`, filled FAF dot, plain
+waypoint circle), the DTO course line, nearby airport/VOR/NDB symbols
+(size-class-aware airport rings, VOR hexagon with optional DME box, NDB
+ring-with-dot), and the ownship triangle. **Deliberately deferred**: Class
+B/C/D airspace polygon overlays (`_map`'s own airspace block - a bigger
+follow-on given real geometry/prefiltering work) and label-overlap
+declutter (`_map`'s `place()` needs real font-metrics text-width
+measurement this pygame-free module doesn't have - every label draws
+unconditionally instead, so a busy screen may show overlapping text
+rather than desktop's decluttered subset). New
+`TrainerSession.render_map()` / `demo_session.render_map()` /
+`BrainBridge.renderMap()` / a fourth `InstrumentCanvas` box in
+`Phase1LoopScreen.kt`, the same wiring pattern as every prior slice.
+`TrainerSession` gained a `map_range_nm` field (desktop's `ui["map_range"]`
+is UI-loop-only state, not part of `World` - Android has no range-control
+input yet, §3.2, so this is a fixed 20nm default for now).
+
+A real on-device rendering bug was found and fixed getting this slice
+working: Compose's `Canvas` does **not** clip its own drawing to its
+layout bounds by default, unlike `render.py`'s explicit
+`pygame.set_clip(rect)` for the map. The map's outer range-ring circle is
+sized against the box's height with the own-ship center offset toward the
+bottom third, so it legitimately extends past the box's top and bottom
+edges - on the first build this bled the ring (and part of a flight-plan
+leg line) into the debug-panel text below the map. Every earlier
+instrument's geometry happened to stay within its own box by construction,
+so this had never surfaced before. Fixed at the root in
+`InstrumentCanvas.kt` by applying `Modifier.clipToBounds()`
+unconditionally to every `InstrumentCanvas`, not just the map's - relying
+on "this instrument's geometry happens to stay in-bounds" as an
+per-instrument invariant is exactly the kind of thing a future draw
+command could silently violate again.
+
+Verified on the real Pixel 9 after the clip fix: range rings correctly
+clipped to the map box, the ownship triangle centered and pointing up
+(track-up), the demo flight plan's ALFA waypoint (own start position)
+shown with its dot and label, and the active-leg course line in magenta
+all render correctly and stay inside the panel. The synthetic demo db has
+no airports and only one VOR very close to the start position, so the
+nearby-fixes layer wasn't meaningfully exercised on-device beyond that -
+worth revisiting once §3.5's real FAA nav data lands.
+
+**§3.6 is now complete**: every GNS text page, every modal dialog, and the
+moving map are real instrument graphics, confirmed on real hardware.
+What's left before Android has a self-contained trainer UI is §3.2 (touch/
+rotary controls - real IFR-1 input already works, but there's no on-screen
+alternative yet) and §3.5 (real FAA nav data on-device, which would also
+unlock on-device confirmation of the pages/dialogs the synthetic demo db
+can't exercise).
+
 ### 3.7 Loop, threading, and Android lifecycle
 
 The desktop loop is single-threaded except optional UDP/weather-refresh

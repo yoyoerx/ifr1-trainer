@@ -246,9 +246,43 @@ landscape then portrait. First target device: Pixel 9.
       on-device (PROC/DTO need an approach or a loaded plan the synthetic
       demo db doesn't support well). Full writeup: `ANDROID_PORT_PLAN.md`
       §3.6.
-- [ ] **Do next**: only the moving map is left of §3.6 (a canvas, not a
-      text page - its own slice, real coordinate-transform work). Touch/
-      rotary controls (§3.2) also still pending.
+- [x] **§3.6 rendering, eighth and final slice — the moving map confirmed
+      on real hardware (2026-09-25)**: new `render_commands.map_commands`
+      ports render.py's `_map`/`_ownship_symbol`/`_hold_track_points`/
+      `_pt_symbol_points`/`_draw_vor_symbol`/`_draw_ndb_symbol`/
+      `_draw_airport_symbol` plus main.py's `_nearby` helper (folded in,
+      not shared elsewhere) - track-up, own-ship-offset-toward-bottom-third
+      projection, range rings, flight-plan legs + waypoint symbols (MAP X,
+      hold racetrack, procedure-turn chevron, FAF/plain dots), the DTO
+      course line, nearby airport/VOR/NDB symbols, and the ownship
+      triangle. Deliberately deferred: Class B/C/D airspace polygon
+      overlays and label-overlap declutter (needs real font-metrics text
+      width this module doesn't have without pygame - every label just
+      draws unconditionally instead). New `TrainerSession.render_map()` /
+      `demo_session.render_map()` / `BrainBridge.renderMap()` / a fourth
+      `InstrumentCanvas` box in `Phase1LoopScreen.kt`, same wiring pattern
+      as every other slice. Found and fixed a real on-device rendering bug
+      getting there: Compose's `Canvas` does **not** clip its drawing to
+      its own layout bounds by default (unlike `render.py`'s explicit
+      `pygame.set_clip`) - the map's outer range-ring circle, sized against
+      the box height, legitimately extends past the box's top/bottom edges
+      and bled into the debug text underneath on first build. Fixed at the
+      root in `InstrumentCanvas.kt` with `Modifier.clipToBounds()`, applied
+      unconditionally to every instrument (not just the map), rather than
+      relying on the invariant that every other instrument's geometry
+      happens to stay in-bounds. Verified on the real Pixel 9 after the
+      fix: range rings correctly clipped, ownship triangle, ALFA waypoint
+      dot + label, and the active-leg magenta line all render correctly
+      inside the panel. **§3.6 is now complete** - every GNS page/dialog
+      and the moving map are real instrument graphics. Full writeup:
+      `ANDROID_PORT_PLAN.md` §3.6.
+- [ ] **Do next**: touch/rotary controls (§3.2) - the last major piece
+      before Android has a real, self-contained trainer UI (real IFR-1
+      input already works; touch input to replace/supplement it doesn't
+      yet). §3.5 (real FAA nav data on-device) would also unlock on-device
+      confirmation of the pages/dialogs that need real airports/procedures
+      (PROC, WPT/NRST with matches, NAV/COM, VNAV armed) which the
+      synthetic demo db can't exercise.
 
 ---
 

@@ -68,6 +68,8 @@ class TrainerSession:
 
         self._last_frame = None   # set by tick(); render_hsi() reads it
         self._last_messages: list[str] = []   # set by tick(); render_gns()'s Message dialog reads it
+        self.map_range_nm = 20.0   # render_map()'s pilot-set range - desktop's ui["map_range"];
+                                    # no range-control input on Android yet (§3.2), fixed default for now
 
     # -- flight plan / commands (thin pass-throughs) --------------------
     def load_flight_plan(self, idents: list[str]) -> list[str]:
@@ -199,6 +201,19 @@ class TrainerSession:
         `render_hsi`), but still call after `tick()` for a consistent `t`."""
         return render_commands.ap_panel_commands(
             x, y, w, h, self.world.ap, self.world.t, ias_bug=self.world.ias_target,
+        )
+
+    def render_map(self, x: float, y: float, w: float, h: float) -> str:
+        """Draw-command-list string for the track-up moving map - see
+        render_commands.map_commands's docstring for what's ported and
+        what's deliberately deferred (airspace overlays, label declutter).
+        Uses `self.world.gns`, `.gns.db`, and this frame's `Frame.own`."""
+        frame = self._last_frame
+        if frame is None:
+            return ""
+        return render_commands.map_commands(
+            x, y, w, h, self.world.gns, frame.own, self.world.gns.db,
+            map_range_nm=self.map_range_nm, t=self.world.t,
         )
 
     def render_gns(self, x: float, y: float, w: float, h: float) -> str:

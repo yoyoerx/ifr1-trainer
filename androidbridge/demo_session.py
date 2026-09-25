@@ -67,10 +67,19 @@ def render_gns(session: TrainerSession, x: float, y: float, w: float, h: float) 
     docstring and render_commands.gns_commands's docstring for exactly
     which pages render. FMS-mode bezel input already moves
     gns.cursor.page_name/group_name correctly (proven by the core-loop
-    milestone), the screen just doesn't have a body for a few remaining
-    pages (Map, AUX Weather/Charts, modal dialogs) yet - it falls back to
-    the default NAV page's content instead."""
+    milestone), the screen just doesn't have a body for AUX Weather/Charts
+    yet (needs live datasrc.wx/PDF data) - it falls back to the default
+    NAV page's content instead. The Map page has its own render_map()
+    call, not this one - see render_commands.gns_commands's docstring."""
     return session.render_gns(x, y, w, h)
+
+
+def render_map(session: TrainerSession, x: float, y: float, w: float, h: float) -> str:
+    """Call after tick_line() each frame - see TrainerSession.render_map's
+    docstring. The demo flight plan (ALFA->BRAVO->CHAR) and the synthetic
+    "OOO" VOR are there to exercise this: the flight-plan legs, waypoint
+    dots, and the OOO VOR's hexagon symbol should all be visible."""
+    return session.render_map(x, y, w, h)
 
 
 def tick_line(session: TrainerSession, dt_s: float) -> str:

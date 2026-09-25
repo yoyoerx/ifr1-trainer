@@ -1249,3 +1249,213 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
     # render.py's `_gns_unit` (over the page body/turn-advisory/CDI/bezel) --
     _gns_dialog(c, x, y, w, screen_h, gns, own, magvar, messages or [], show_messages)
     return encode(c)
+
+
+# -- the moving map - render.py's _map / _ownship_symbol / _hold_track_points
+# / _pt_symbol_points / _draw_vor_symbol / _draw_ndb_symbol /
+# _draw_airport_symbol, plus main.py's `_nearby` helper (folded in here
+# since it's the map's own data-prep step, not shared with anything else
+# desktop's loop does). Track-up, own-ship-centered (offset toward the
+# bottom third, same as desktop), range rings, flight-plan legs +
+# waypoint symbols, the DTO course line, nearby airport/VOR/NDB symbols,
+# and the ownship triangle. **Not ported**: Class B/C/D airspace polygon
+# overlays (`_map`'s own airspace block) and label-overlap declutter
+# (`_map`'s `place()` - needs real font-metrics text-width measurement
+# this module doesn't have without pygame) - every label is drawn
+# unconditionally instead, so a busy screen may show overlapping text
+# rather than the desktop version's decluttered subset. Both are
+# deliberately deferred, same "later pass" framing as every other
+# §3.6 carve-out. ---------------------------------------------------------
+def _hold_track_points_pt(fix, inbound_true: float, turn: str, leg_nm: float, arc_steps: int = 8) -> list:
+    from navmath import destination
+
+    outbound = (inbound_true + 180.0) % 360.0
+    side = 90.0 if turn == "R" else -90.0
+    across = (inbound_true + side) % 360.0
+    sign = -1.0 if turn == "R" else 1.0
+    r = 1.0   # _HOLD_TURN_RADIUS_NM - render.py's stylized (not true-scale) hold radius
+
+    def off(along_nm: float, across_nm: float):
+        p = destination(fix, outbound, along_nm) if along_nm else fix
+        return destination(p, across, across_nm) if across_nm else p
+
+    far = off(leg_nm, 0.0)
+    far_off = off(leg_nm, 2.0 * r)
+    near_off = off(0.0, 2.0 * r)
+    center_far = off(leg_nm, r)
+    center_near = off(0.0, r)
+
+    def arc(center, start_bearing: float) -> list:
+        return [destination(center, (start_bearing + sign * 180.0 * i / arc_steps) % 360.0, r)
+                for i in range(1, arc_steps)]
+
+    pts = [fix, far]
+    pts += arc(center_far, (across + 180.0) % 360.0)
+    pts.append(far_off)
+    pts.append(near_off)
+    pts += arc(center_near, across)
+    pts.append(fix)
+    return pts
+
+
+def _pt_symbol_points_pt(tip, inbound_true: float, half_nm: float = 0.35) -> list:
+    from navmath import destination
+
+    back = (inbound_true + 180.0) % 360.0
+    left = destination(tip, (back + 35.0) % 360.0, half_nm)
+    right = destination(tip, (back - 35.0) % 360.0, half_nm)
+    return [left, tip, right]
+
+
+def _vor_symbol(c: _Cmds, x: float, y: float, color: int, *, dme: bool = False, r: float = 5.0) -> None:
+    pts = [(x + r * math.cos(math.radians(60 * i - 90)), y + r * math.sin(math.radians(60 * i - 90)))
+           for i in range(6)]
+    c.polygon(pts, color=color, filled=False)
+    if dme:
+        s = max(2.0, round(r * 0.5))
+        c.rect(x - s, y - s, s * 2, s * 2, color=color, filled=False)
+
+
+def _ndb_symbol(c: _Cmds, x: float, y: float, color: int, *, r: float = 4.0) -> None:
+    c.circle(x, y, r, color=color, filled=False)
+    c.circle(x, y, 1, color=color, filled=True)
+
+
+def _airport_symbol(c: _Cmds, x: float, y: float, color: int, size_class: str) -> None:
+    r = {"large": 6.0, "medium": 4.0}.get(size_class, 2.0)
+    c.circle(x, y, r, color=color, filled=False)
+    if size_class in ("large", "medium"):
+        c.circle(x, y, 1, color=color, filled=True)
+
+
+# main.py's `_MAP_APT_RANGE_NM` / `_nearby` - enroute declutter for the map's
+# nearby-fixes layer (Large airports always shown, Medium/Small capped to
+# their own range so a route between two majors doesn't fill with dinky
+# private strips at any reasonable map scale).
+_MAP_APT_RANGE_NM = {"Large": None, "Medium": 60.0, "Small": 15.0}
+
+
+def _map_nearby(db, pos, rng: float) -> list:
+    from navmath import great_circle_nm
+
+    out = []
+    if db is None:
+        return out
+    for a in db.nearest_airports(pos, 20, max_nm=rng * 1.4):
+        cap = _MAP_APT_RANGE_NM[a.size_class]
+        if cap is not None and great_circle_nm(a.pos, pos) > cap:
+            continue
+        out.append((a.ident, a.pos, f"apt_{a.size_class.lower()}"))
+        if len(out) >= 6:
+            break
+    for n in db.nearest_navaids(pos, 8, max_nm=rng * 1.4, ndb=True):
+        kind = "ndb" if hasattr(n, "freq_khz") else ("vordme" if getattr(n, "has_dme", False) else "vor")
+        out.append((n.ident, n.pos, kind))
+    return out
+
+
+def map_commands(x: float, y: float, w: float, h: float, gns, own, db,
+                   *, map_range_nm: float = 10.0, t: float = 0.0) -> str:
+    """Draw-command-list string for the track-up moving map. `gns` is
+    `World.gns`, `own` is `Frame.own` (same objects `render_hsi`/
+    `render_gns` already consume), `db` is `World.gns.db` (or pass `None`
+    for no nearby-fixes layer - matches desktop's own `sc.db is None`
+    guard). `map_range_nm` is the pilot-set map range (desktop's
+    `Scene.map_range_nm`, a UI setting `main.py` owns - not yet exposed on
+    Android, so callers pass a fixed default until §3.2 touch controls add
+    a range control)."""
+    from navmath import arc_points, great_circle_nm, initial_bearing
+
+    c = _Cmds()
+    c.rect(x, y, w, h, color=0xFF04060A, filled=True)   # (4, 6, 8) - render.py's map background
+    c.rect(x, y, w, h, color=EDGE, filled=False)
+
+    cx, cy = x + w / 2, y + h - h * 0.32
+    rng = max(2.0, map_range_nm)
+    px_per_nm = (h * 0.62) / rng
+    track_up = getattr(own, "track_deg", 0.0)
+
+    for frac in (0.5, 1.0):
+        c.circle(cx, cy, rng * frac * px_per_nm, color=0xFF1A2026, filled=False)   # (26, 32, 38)
+    c.text(f"{rng:.0f}nm", x + w - 6, y + 4, color=DIM, align=2)
+    c.text("TRK UP", x + 6, y + 4, color=DIM)
+
+    def project(p):
+        d = great_circle_nm(own.pos, p)
+        rel = math.radians((initial_bearing(own.pos, p) - track_up) % 360.0)
+        return (cx + d * px_per_nm * math.sin(rel), cy - d * px_per_nm * math.cos(rel))
+
+    def on_screen(sx: float, sy: float) -> bool:
+        return x <= sx <= x + w and y <= sy <= y + h
+
+    # -- flight-plan legs + waypoint symbols -----------------------------
+    wps = getattr(gns.fpl, "waypoints", [])
+    active = getattr(gns.fpl, "active", 1)
+    dto_on = getattr(gns, "dto", None) is not None
+    pts = [project(w.pos) for w in wps]
+    for i in range(1, len(pts)):
+        is_active = i == active and not dto_on
+        col = MAGENTA if is_active else 0xFF96989C   # (150, 155, 160)
+        wpi = wps[i]
+        if getattr(wpi, "arc_centre", None) is not None:
+            curve = [project(p) for p in arc_points(wpi.arc_centre, wps[i - 1].pos, wpi.pos, wpi.arc_turn)]
+            for j in range(len(curve) - 1):
+                c.line(curve[j][0], curve[j][1], curve[j + 1][0], curve[j + 1][1],
+                       width=2.0 if is_active else 1.0, color=col)
+        else:
+            c.line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1],
+                   width=2.0 if is_active else 1.0, color=col)
+
+    gs_kt = getattr(own, "gs_kt", 0.0) or 0.0
+    for wp, sp in zip(wps, pts):
+        sx, sy = sp
+        if getattr(wp, "is_map", False):
+            c.line(sx - 4, sy - 4, sx + 4, sy + 4, width=2.0, color=AMBER)
+            c.line(sx - 4, sy + 4, sx + 4, sy - 4, width=2.0, color=AMBER)
+        elif getattr(wp, "hold", False):
+            inbound = wp.hold_inbound_true if wp.hold_inbound_true is not None else 0.0
+            leg_nm = wp.hold_leg_nm or max(
+                0.5, (gs_kt if gs_kt > 20.0 else 90.0) / 60.0 * (wp.hold_leg_min if wp.hold_leg_min is not None else 1.0))
+            track = [project(p) for p in _hold_track_points_pt(wp.pos, inbound, wp.hold_turn or "R", leg_nm)]
+            for j in range(len(track) - 1):
+                c.line(track[j][0], track[j][1], track[j + 1][0], track[j + 1][1], width=1.0, color=AMBER)
+            c.circle(sx, sy, 2, color=AMBER, filled=True)
+        elif wp.ident == "PT" and getattr(wp, "synthetic", False) and wp.hold_inbound_true is not None:
+            chevron = [project(p) for p in _pt_symbol_points_pt(wp.pos, wp.hold_inbound_true)]
+            for j in range(len(chevron) - 1):
+                c.line(chevron[j][0], chevron[j][1], chevron[j + 1][0], chevron[j + 1][1], width=2.0, color=AMBER)
+        elif getattr(wp, "is_faf", False):
+            c.circle(sx, sy, 3, color=WHITE, filled=True)
+        else:
+            c.circle(sx, sy, 3, color=WHITE, filled=False)
+        if on_screen(sx, sy):
+            c.text(wp.ident, sx + 5, sy - 10, color=DIM)
+
+    # -- DTO course -------------------------------------------------------
+    dto = getattr(gns, "dto", None)
+    if dto is not None:
+        dsx, dsy = project(dto.target.pos)
+        c.line(cx, cy, dsx, dsy, width=2.0, color=MAGENTA)
+
+    # -- nearby fixes (airports/VOR/NDB) ----------------------------------
+    for ident, p, kind in _map_nearby(db, own.pos, rng):
+        sx, sy = project(p)
+        if not on_screen(sx, sy):
+            continue
+        if kind.startswith("apt_"):
+            col = GPS_GREEN
+            _airport_symbol(c, sx, sy, col, kind[4:])
+        elif kind in ("vor", "vordme"):
+            col = CYAN
+            _vor_symbol(c, sx, sy, col, dme=kind == "vordme")
+        elif kind == "ndb":
+            col = CYAN
+            _ndb_symbol(c, sx, sy, col)
+        else:
+            col = DIM
+            c.circle(sx, sy, 2, color=col, filled=True)
+        c.text(ident, sx + 4, sy - 10, color=col)
+
+    # -- ownship ------------------------------------------------------------
+    c.polygon([(cx, cy - 9), (cx - 7, cy + 7), (cx, cy + 3), (cx + 7, cy + 7)], color=WHITE, filled=True)
+    return encode(c)

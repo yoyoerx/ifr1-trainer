@@ -114,25 +114,28 @@ Two real on-device bugs found and fixed getting this far:
   .selfTest()` on launch and displays the result. This is the whole app
   right now: a self-test screen, not a trainer UI.
 - `render/DrawCommand.kt` + `render/InstrumentCanvas.kt` — the §3.6
-  draw-command-list contract and Kotlin-side replay mechanism. **The HSI
-  head, AP panel, all ten GNS text pages, and all 8 modal dialogs are real
-  now (2026-09-24/25)**, confirmed on real hardware: repo-root
-  `render_commands.py` (a new pure module, no pygame) ports
-  `draw_hsi_head`/`draw_ap_panel`/`_gns_unit`'s chrome/`_draw_nav_default`/
-  `_draw_fpl`/`_draw_vnav_page`/`_draw_navcom_page`/`_draw_fpl_catalog`/
-  `_draw_wpt_page`/`_draw_nrst_page`/`_draw_nrst_airports`/
-  `_draw_nrst_facility`/`_draw_nrst_airspace`/`_draw_aux_navdata`/
-  `_draw_aux_trip`/`_draw_aux_utility`/`_draw_aux_setup`/`_draw_freq_rows`/
+  draw-command-list contract and Kotlin-side replay mechanism. **§3.6 is
+  now complete (2026-09-24/25)**: the HSI head, AP panel, all ten GNS text
+  pages, all 8 modal dialogs, and the moving map are all real instrument
+  graphics, confirmed on real hardware. Repo-root `render_commands.py` (a
+  new pure module, no pygame) ports `draw_hsi_head`/`draw_ap_panel`/
+  `_gns_unit`'s chrome/`_draw_nav_default`/`_draw_fpl`/`_draw_vnav_page`/
+  `_draw_navcom_page`/`_draw_fpl_catalog`/`_draw_wpt_page`/
+  `_draw_nrst_page`/`_draw_nrst_airports`/`_draw_nrst_facility`/
+  `_draw_nrst_airspace`/`_draw_aux_navdata`/`_draw_aux_trip`/
+  `_draw_aux_utility`/`_draw_aux_setup`/`_draw_freq_rows`/
   `_turn_advisory`/`_cdi_strip`/`_bezel_labels`/`_proc_page`/
   `_activate_leg_page`/`_remove_confirm_page`/`_restart_confirm_page`/
   `_dto_menu_page`/`_direct_to_page`/`_message_page`/`_fpl_menu_page`/
-  `_airspace_info_page` and their helpers from `render.py`, same
-  trig/layout math, and `InstrumentCanvas`'s `Text` case (formerly a TODO)
-  is implemented via `nativeCanvas.drawText` + `android.graphics.Paint`.
-  The draw-command list crosses to Kotlin as a newline/pipe-delimited
-  **string** (`parseDrawCommands` decodes it) rather than a list/`PyObject`
-  - see the `List`-marshaling bug noted below, which applies to this
-  direction too.
+  `_airspace_info_page`/`_map`/`_ownship_symbol`/`_hold_track_points`/
+  `_pt_symbol_points`/`_draw_vor_symbol`/`_draw_ndb_symbol`/
+  `_draw_airport_symbol` (plus main.py's `_nearby` helper) and their
+  helpers from `render.py`, same trig/layout math, and
+  `InstrumentCanvas`'s `Text` case (formerly a TODO) is implemented via
+  `nativeCanvas.drawText` + `android.graphics.Paint`. The draw-command
+  list crosses to Kotlin as a newline/pipe-delimited **string**
+  (`parseDrawCommands` decodes it) rather than a list/`PyObject` - see the
+  `List`-marshaling bug noted below, which applies to this direction too.
 
   **The GNS screen renders ten pages plus all 8 modal dialogs**: default
   NAV, Flight Plan, VNAV, NAV/COM, Flight Plan Catalog, all six WPT search
@@ -144,17 +147,28 @@ Two real on-device bugs found and fixed getting this far:
   already rendered, in the same priority order `_gns_unit` checks them
   in). `gns_commands` dispatches by `cursor.page_name`/`group_name`,
   falling back to the default NAV page for anything else. **Still not
-  ported**: the Map page (a moving-map canvas, not a text page - its own
-  later slice) and AUX Weather/Charts (need a live `datasrc.wx` cache read
-  / PDF rendering - out of scope, same carve-out as the six-pack
-  decision). `route_event` already dispatches real FMS bezel-key input
-  correctly (proven by the core-loop milestone), so
-  `gns.cursor.page_name`/`group_name` do change server-side when the FMS
-  knob turns - pages without a body here just fall back to the default-NAV
-  layout. Not a bug; documented scope. The Flight Plan page is also
-  **read-only** - the in-place ident-edit buffer (live typing while
-  adding/editing a waypoint) doesn't render yet, though real bezel input
-  still edits the plan server-side.
+  ported**: AUX Weather/Charts (need a live `datasrc.wx` cache read / PDF
+  rendering - out of scope, same carve-out as the six-pack decision).
+  `route_event` already dispatches real FMS bezel-key input correctly
+  (proven by the core-loop milestone), so `gns.cursor.page_name`/
+  `group_name` do change server-side when the FMS knob turns - pages
+  without a body here just fall back to the default-NAV layout. Not a
+  bug; documented scope. The Flight Plan page is also **read-only** - the
+  in-place ident-edit buffer (live typing while adding/editing a waypoint)
+  doesn't render yet, though real bezel input still edits the plan
+  server-side.
+
+  **The moving map** (`map_commands`) is track-up, own-ship-offset toward
+  the bottom third, with range rings, flight-plan legs + waypoint symbols
+  (MAP X, hold racetrack, procedure-turn chevron, FAF/plain dots), the DTO
+  course line, nearby airport/VOR/NDB symbols, and the ownship triangle.
+  **Deliberately not ported**: Class B/C/D airspace polygon overlays and
+  label-overlap declutter (needs real font-metrics text-width measurement
+  this pygame-free module doesn't have - labels always draw, so a busy
+  screen may overlap rather than declutter like desktop does).
+  `TrainerSession` gained a `map_range_nm` field (a fixed 20nm default -
+  desktop's range is UI-loop-only state, and Android has no range-control
+  input yet, §3.2).
 
   Wiring the Message dialog surfaced a real design conflict:
   `TrainerSession.tick()` already drains `World.gns.messages` for the
@@ -176,10 +190,25 @@ Two real on-device bugs found and fixed getting this far:
   (a `_centered_y()` helper covers the few `center=True` call sites, which
   need both axes centered on a point, not just top-anchored).
 
-  Everything else (moving map, GNS softkey/page UI) is still not ported -
-  one instrument at a time. The six-pack gauge cluster is **not planned
-  for Android at all** (decision, 2026-09-24 — see `ANDROID_PORT_PLAN.md`
-  §7): IFR training is the point, not a round-gauge steam-panel trainer.
+  The map slice found and fixed another systemic bug the same way:
+  Compose's `Canvas` does **not** clip its own drawing to its layout
+  bounds by default, unlike `render.py`'s explicit `pygame.set_clip(rect)`
+  for the map. The map's outer range-ring circle, sized against the box's
+  height with the own-ship center offset toward the bottom third,
+  legitimately extends past the box's top/bottom edges - on first build it
+  bled into the debug text below the map. Every earlier instrument's
+  geometry happened to stay in-bounds by construction, so this had never
+  surfaced. Fixed at the root with `Modifier.clipToBounds()`, applied
+  unconditionally to every `InstrumentCanvas` (not just the map's), rather
+  than relying on "this instrument's geometry happens to stay in-bounds"
+  as a per-instrument invariant a future draw command could silently
+  violate again.
+
+  §3.6 is done. What's left before Android has a self-contained trainer UI
+  is §3.2 (touch/rotary controls) and §3.5 (real FAA nav data on-device).
+  The six-pack gauge cluster is **not planned for Android at all**
+  (decision, 2026-09-24 — see `ANDROID_PORT_PLAN.md` §7): IFR training is
+  the point, not a round-gauge steam-panel trainer.
 - `input/UsbHidInput.kt` — real implementation now, written against the
   §3.1 spike's confirmed hardware topology and `ifr1.py`'s own
   hardware-confirmed byte layout (see `ANDROID_PORT_PLAN.md` §3.1 "Spike
@@ -313,8 +342,23 @@ Two real on-device bugs found and fixed getting this far:
     flight-plan row the synthetic demo db doesn't support well). Found and
     fixed a real `TrainerSession.tick()`/Message-page ordering conflict
     getting there - see `ANDROID_PORT_PLAN.md` §3.6 for the detail.
-13. **Do next**: only the moving map is left of §3.6 (a canvas, not a text
-    page - its own slice, real coordinate-transform work). Touch/
-    rotary-gesture controls (§3.2) are also still pending. (The six-pack
-    gauge cluster is not planned for Android at all - decision,
-    2026-09-24, `ANDROID_PORT_PLAN.md` §7.)
+13. ~~§3.6 draw-command-list instrument rendering, eighth and final
+    slice~~ **Done (2026-09-25)**: the track-up moving map is real
+    instrument graphics now too - flight-plan legs/waypoint symbols, DTO
+    course, nearby airport/VOR/NDB symbols, ownship triangle (Class B/C/D
+    airspace overlays and label declutter deliberately deferred). Found
+    and fixed a real Compose bug getting there: `Canvas` doesn't clip to
+    its own bounds by default, so the range-ring circle bled into the
+    debug text below the map on first build - fixed at the root with
+    `Modifier.clipToBounds()` in `InstrumentCanvas.kt`, applied to every
+    instrument. Confirmed on the real Pixel 9 after the fix: range rings
+    correctly clipped, ownship triangle, ALFA waypoint, and the
+    active-leg magenta line all render correctly. **§3.6 is complete.**
+14. **Do next**: touch/rotary controls (§3.2) - the last major piece
+    before Android has a self-contained trainer UI (real IFR-1 input
+    already works, but there's no on-screen alternative yet). §3.5 (real
+    FAA nav data on-device) would also unlock on-device confirmation of
+    the pages/dialogs the synthetic demo db can't exercise (PROC, WPT/NRST
+    with matches, NAV/COM, VNAV armed). (The six-pack gauge cluster is not
+    planned for Android at all - decision, 2026-09-24,
+    `ANDROID_PORT_PLAN.md` §7.)

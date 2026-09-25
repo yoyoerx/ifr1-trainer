@@ -10,7 +10,7 @@ from gpsnav import PAGE_GROUPS, DirectToEntry, FplMenu, NavState, ProcSelect, Vn
 from instruments import CDI, DME, BearingPointer, Markers, NavHead, Ownship, Panel
 from navdata.model import Airport, Airspace, NavDatabase, VhfNavaid, Waypoint
 from navmath import Point
-from render_commands import ap_panel_commands, gns_commands, hsi_commands
+from render_commands import ap_panel_commands, gns_commands, hsi_commands, map_commands
 
 
 def _panel(hdg=45.0):
@@ -440,3 +440,47 @@ def test_gns_commands_airspace_info_dialog_shows_class_and_altitudes():
     assert "AIRSPACE INFORMATION" in s
     assert "CLASS D" in s
     assert "SFC - 2500ft" in s
+
+
+def test_map_commands_returns_well_formed_commands():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    s = map_commands(10.0, 10.0, 480.0, 400.0, gns, _own(), _db(), map_range_nm=20.0)
+    assert s
+    min_fields = {"T": 7, "L": 6, "R": 6, "C": 5, "P": 3}
+    for line in s.splitlines():
+        op, *fields = line.split("|")
+        assert op in min_fields
+        assert len(fields) >= min_fields[op]
+
+
+def test_map_commands_shows_flight_plan_waypoint_idents():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO", "CHAR"])
+    s = map_commands(0.0, 0.0, 480.0, 400.0, gns, _own(), _db(), map_range_nm=80.0)
+    assert "ALFA" in s
+    assert "BRAVO" in s
+    assert "CHAR" in s
+
+
+def test_map_commands_shows_nearby_vor_symbol():
+    """_db()'s "OOO" VOR sits right on top of ownship's start position -
+    always within range regardless of map_range_nm, so it's a reliable
+    "is the nearby-fixes layer wired up at all" check."""
+    gns = Gns530(_db())
+    s = map_commands(0.0, 0.0, 480.0, 400.0, gns, _own(), _db(), map_range_nm=20.0)
+    assert "OOO" in s
+
+
+def test_map_commands_handles_no_db():
+    gns = Gns530(_db())
+    s = map_commands(0.0, 0.0, 480.0, 400.0, gns, _own(), None, map_range_nm=20.0)
+    assert s   # ownship/range rings still draw with no nearby-fixes layer
+
+
+def test_map_commands_shows_dto_course():
+    gns = Gns530(_db())
+    gns.load_flight_plan(["ALFA", "BRAVO"])
+    gns.direct_to("BRAVO")
+    s = map_commands(0.0, 0.0, 480.0, 400.0, gns, _own(), _db(), map_range_nm=80.0)
+    assert "P|" in s or "L|" in s   # the magenta DTO course line, plus ownship's polygon

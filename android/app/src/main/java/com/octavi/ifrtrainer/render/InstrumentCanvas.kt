@@ -6,6 +6,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -33,6 +34,17 @@ import androidx.compose.ui.graphics.nativeCanvas
  * so non-square instruments (the AP panel strip, unlike the square HSI)
  * scale correctly too - the caller should size its `Modifier` box with the
  * same aspect ratio as `sourceWidth`:`sourceHeight` to avoid stretching.
+ *
+ * `Modifier.clipToBounds()` is applied unconditionally: Compose's `Canvas`
+ * does NOT clip its own drawing to its layout bounds by default (a real
+ * on-device bug, found 2026-09-25 on the moving map - render.py's `_map`
+ * explicitly clips to its rect with `pygame.set_clip`, and the range-ring
+ * circle, sized against the map box's height, legitimately extends past
+ * the box's top/bottom edges before that clip is applied; without it here
+ * the ring bled into the debug text below the map). Every other
+ * instrument's geometry happens to stay inside its own box, but relying on
+ * that per-instrument invariant instead of clipping once, here, is exactly
+ * the kind of thing a future draw command could silently violate again.
  */
 @Composable
 fun InstrumentCanvas(
@@ -45,7 +57,7 @@ fun InstrumentCanvas(
     val sevenPaint = remember {
         Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE; isFakeBoldText = true }
     }
-    Canvas(modifier = modifier) {
+    Canvas(modifier = modifier.clipToBounds()) {
         val factorX = if (sourceWidth > 0f) size.width / sourceWidth else 1f
         val factorY = if (sourceHeight > 0f) size.height / sourceHeight else 1f
         scale(scaleX = factorX, scaleY = factorY, pivot = Offset.Zero) {

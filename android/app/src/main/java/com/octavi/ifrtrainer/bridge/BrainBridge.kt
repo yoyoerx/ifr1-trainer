@@ -104,16 +104,32 @@ object BrainBridge {
     }
 
     /**
-     * §3.6 third slice: the GNS unit screen's draw-command list - **default
-     * NAV page only**, see `render_commands.gns_commands`'s docstring for
-     * what's deliberately not ported yet (Map/FPL/VNAV/NAV-COM/WPT/NRST/
-     * AUX pages, all modal dialogs). Same encoding/decoder/
-     * call-after-tickWorld convention as [renderHsi]/[renderApPanel].
+     * §3.6: the GNS unit screen's draw-command list - see
+     * `render_commands.gns_commands`'s docstring for exactly which pages/
+     * dialogs render (all ten text pages plus all 8 modal dialogs, as of
+     * 2026-09-25) and what's still deliberately not ported (AUX
+     * Weather/Charts). The Map page has its own [renderMap] call, not this
+     * one. Same encoding/decoder/call-after-tickWorld convention as
+     * [renderHsi]/[renderApPanel].
      */
     fun renderGns(x: Float, y: Float, w: Float, h: Float): String {
         val session = sessionObj ?: return ""
         val module = Python.getInstance().getModule("androidbridge.demo_session")
         return module.callAttr("render_gns", session, x, y, w, h).toString()
+    }
+
+    /**
+     * §3.6 final slice: the track-up moving map's draw-command list - see
+     * `render_commands.map_commands`'s docstring for what's ported
+     * (flight-plan legs/waypoint symbols, DTO course, nearby airport/VOR/
+     * NDB symbols, ownship) and deferred (Class B/C/D airspace overlays,
+     * label-overlap declutter). Same encoding/decoder/
+     * call-after-tickWorld convention as [renderHsi]/[renderApPanel].
+     */
+    fun renderMap(x: Float, y: Float, w: Float, h: Float): String {
+        val session = sessionObj ?: return ""
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        return module.callAttr("render_map", session, x, y, w, h).toString()
     }
 
     /**

@@ -42,16 +42,21 @@ private const val AP_PANEL_H_DP = 90f
 // reserves its own bottom slice of h for that key row (see its docstring).
 private const val GNS_W_DP = 520f
 private const val GNS_H_DP = 300f
+// Square-ish, like the desktop layout's map pane - wide enough to show a
+// few flight-plan legs and nearby fixes without feeling cramped.
+private const val MAP_W_DP = 520f
+private const val MAP_H_DP = 360f
 
 /**
  * Phase 1 core-loop + real-instrument screen (docs/ANDROID_PORT_PLAN.md
  * §6/§3.6): real IFR-1 events -> [BrainBridge.dispatchEvent] ->
  * `main.route_event` -> a real `World`, ticked ~30 Hz in the background by
  * [TrainerLoop] and surviving Android lifecycle events. The HSI head, AP
- * panel, and GNS screen (default NAV page only - see
- * `render_commands.gns_commands`'s docstring) are real instrument graphics
- * now ([BrainBridge.renderHsi]/[BrainBridge.renderApPanel]/
- * [BrainBridge.renderGns] + [InstrumentCanvas]); everything else stays the
+ * panel, GNS screen (all ten text pages + all 8 modal dialogs - see
+ * `render_commands.gns_commands`'s docstring), and the moving map are real
+ * instrument graphics now ([BrainBridge.renderHsi]/
+ * [BrainBridge.renderApPanel]/[BrainBridge.renderGns]/
+ * [BrainBridge.renderMap] + [InstrumentCanvas]); everything else stays the
  * plain-text readout until its own rendering pass.
  */
 @Composable
@@ -62,6 +67,7 @@ fun Phase1LoopScreen() {
     var hsiCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var apCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var gnsCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
+    var mapCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var usbStatus by remember { mutableStateOf(UsbHidInput.Status.STOPPED) }
     val loop = remember { TrainerLoop(context) }
     val usbInput = remember { UsbHidInput(context) }
@@ -74,6 +80,7 @@ fun Phase1LoopScreen() {
                 BrainBridge.renderApPanel(0f, 0f, AP_PANEL_W_DP, AP_PANEL_H_DP),
             )
             gnsCommands = parseDrawCommands(BrainBridge.renderGns(0f, 0f, GNS_W_DP, GNS_H_DP))
+            mapCommands = parseDrawCommands(BrainBridge.renderMap(0f, 0f, MAP_W_DP, MAP_H_DP))
         }
         lifecycleOwner.lifecycle.addObserver(loop)
 
@@ -140,6 +147,14 @@ fun Phase1LoopScreen() {
                     modifier = Modifier.fillMaxSize(),
                     sourceWidth = GNS_W_DP,
                     sourceHeight = GNS_H_DP,
+                )
+            }
+            Box(modifier = Modifier.width(MAP_W_DP.dp).height(MAP_H_DP.dp).padding(top = 8.dp)) {
+                InstrumentCanvas(
+                    commands = mapCommands,
+                    modifier = Modifier.fillMaxSize(),
+                    sourceWidth = MAP_W_DP,
+                    sourceHeight = MAP_H_DP,
                 )
             }
             Text(
