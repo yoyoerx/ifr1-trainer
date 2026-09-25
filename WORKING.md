@@ -128,9 +128,11 @@ landscape then portrait. First target device: Pixel 9.
       `nativeCanvas.drawText`. Verified on the real Pixel 9 + real IFR-1:
       HSI dial/compass card/heading readout render correctly, and NAV1's
       shift-latched knob live-rotates the course pointer on screen.
-      AP panel graphics, six-pack, moving map, and GNS softkey/page UI are
-      still plain text / not yet ported — deliberately one instrument at a
-      time. Full writeup: `ANDROID_PORT_PLAN.md` §3.6.
+      AP panel graphics, moving map, and GNS softkey/page UI are still
+      plain text / not yet ported — deliberately one instrument at a time.
+      (The six-pack gauge cluster is not planned for Android at all — see
+      the 2026-09-24 decision below.) Full writeup:
+      `ANDROID_PORT_PLAN.md` §3.6.
 - [x] **§3.6 rendering, second slice — AP panel confirmed on real hardware
       (2026-09-24)**: `render_commands.py` ports `draw_ap_panel` (S-TEC 55X:
       RDY lamp, HDG/NAV/APR/REV/ALT/VS mode row, VS window, HDG BUG/ALT
@@ -146,8 +148,14 @@ landscape then portrait. First target device: Pixel 9.
       VS readout, and info box render correctly with no overlap, matching
       the plain-text debug panel's values exactly. Full writeup:
       `ANDROID_PORT_PLAN.md` §3.6.
-- [ ] **Do next**: more of §3.6 (GNS softkey/page UI next, then six-pack,
-      moving map). Touch/rotary controls (§3.2) also still pending.
+- [x] **Decision (2026-09-24): the six-pack gauge cluster is out of scope
+      for Android, not just deferred.** IFR training is the point
+      (GPS/HSI-primary panel), not a round-gauge steam-panel trainer;
+      Android v1's instrument set is HSI + AP panel + GNS pages + moving
+      map. §3.6 rendering passes should not budget time toward it. Full
+      writeup: `ANDROID_PORT_PLAN.md` §7.
+- [ ] **Do next**: more of §3.6 (GNS softkey/page UI next, then moving
+      map). Touch/rotary controls (§3.2) also still pending.
 
 ---
 

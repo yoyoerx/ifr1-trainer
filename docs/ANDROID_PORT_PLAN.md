@@ -363,9 +363,10 @@ primitive or a string, consistently. `InstrumentCanvas.kt`'s `Text` case
 primitive). Verified on the real Pixel 9 + real IFR-1: the HSI dial,
 rotating compass card, heading digital readout, and course pointer all
 render correctly, and turning NAV1's shift-latched knob live-rotates the
-course pointer on screen. AP panel graphics, six-pack, moving map, and GNS
+course pointer on screen. AP panel graphics, moving map, and GNS
 softkey/page UI are still plain text / not yet ported - this slice is
-deliberately just the one instrument.
+deliberately just the one instrument. (The six-pack gauge cluster is not
+planned for Android at all - see §7's 2026-09-24 decision.)
 
 **Second slice confirmed on real hardware (2026-09-24): the AP panel.**
 `render_commands.py` ports `draw_ap_panel` (S-TEC 55X programmer: RDY lamp,
@@ -545,6 +546,17 @@ Resolved 2026-09-23:
   Phase 0), not a nice-to-have-resolved-eventually item.
 - **Both orientations supported** — landscape (built first, §6 Phase 1) and
   portrait (separate composition, §6 Phase 2), not landscape-only.
+
+Resolved 2026-09-24:
+
+- **The six-pack gauge cluster (`draw_six_pack`/`_hdg_card`, desktop's
+  `steam` layout) is explicitly not a goal for this Android port.** IFR
+  training is the point (GPS/HSI-primary panel, matching the `gps`/`stack`
+  layouts' philosophy already), not a round-gauge steam-panel trainer; the
+  Android v1 instrument set is HSI + AP panel + GNS pages + moving map,
+  not a fifth layout choice. §3.6's rendering passes should not budget time
+  toward it, and it should not be inferred as implicit scope from "port the
+  remaining desktop instruments."
 
 Still open, to be settled at Phase 3/5 rather than now (not currently
 blocking any near-term work):

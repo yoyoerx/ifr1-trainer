@@ -136,8 +136,10 @@ Two real on-device bugs found and fixed getting this far:
   (a `_centered_y()` helper covers the few `center=True` call sites, which
   need both axes centered on a point, not just top-anchored).
 
-  Everything else (six-pack, moving map, GNS softkey/page UI) is still not
-  ported - one instrument at a time.
+  Everything else (moving map, GNS softkey/page UI) is still not ported -
+  one instrument at a time. The six-pack gauge cluster is **not planned
+  for Android at all** (decision, 2026-09-24 — see `ANDROID_PORT_PLAN.md`
+  §7): IFR training is the point, not a round-gauge steam-panel trainer.
 - `input/UsbHidInput.kt` — real implementation now, written against the
   §3.1 spike's confirmed hardware topology and `ifr1.py`'s own
   hardware-confirmed byte layout (see `ANDROID_PORT_PLAN.md` §3.1 "Spike
@@ -232,6 +234,8 @@ Two real on-device bugs found and fixed getting this far:
    info box) is real instrument graphics now too, confirmed on the real
    Pixel 9 - see "Status" above for the baseline-vs-top-left text-position
    bug found and fixed getting there.
-8. **Do next**: more of §3.6 - GNS softkey/page UI next, then six-pack,
-   moving map - one instrument at a time, same pattern as the HSI/AP
-   slices. Touch/rotary-gesture controls (§3.2) are also still pending.
+8. **Do next**: more of §3.6 - GNS softkey/page UI next, then moving map -
+   one instrument at a time, same pattern as the HSI/AP slices.
+   Touch/rotary-gesture controls (§3.2) are also still pending. (The
+   six-pack gauge cluster is not planned for Android at all - decision,
+   2026-09-24, `ANDROID_PORT_PLAN.md` §7.)
