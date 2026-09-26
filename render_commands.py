@@ -884,8 +884,81 @@ def _aux_setup_body(c: _Cmds, b_x: float, b_y: float, gns, baro_inhg: float) -> 
     c.text("NAV UNITS  nm / kt / ft", b_x, y, color=DIM)
 
 
+def _dtpp_charts_for(gns, ident: str, charts_root: str | None):
+    """Charts for one airport from the cached d-TPP index
+    (`androidbridge/charts.py` fetches it; nothing here touches the
+    network) - render.py's `Renderer._dtpp_charts_for` memoizes this on
+    the (desktop-only, one-per-process) `Renderer` instance; there's no
+    render_commands.py equivalent of that object, so this memoizes on
+    `gns` instead (already a stateful, one-per-session object every other
+    piece of cursor/selection state already lives on)."""
+    from pathlib import Path
+
+    from datasrc import dtpp
+    from datasrc.airac import current_cycle
+
+    cache = getattr(gns, "_android_dtpp_index", None)
+    if cache is None:
+        try:
+            root = Path(charts_root) if charts_root else dtpp.default_data_root()
+            cache = dtpp.load_index(root, current_cycle()) or []
+        except Exception:                        # noqa: BLE001 - display is best-effort
+            cache = []
+        gns._android_dtpp_index = cache
+    if not cache:
+        return []
+    return dtpp.charts_for_airport(cache, ident)
+
+
+# -- AUX Charts page body - render.py's _draw_aux_charts --------------------
+def _aux_charts_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
+                       gns, charts_root: str | None) -> None:
+    b_right = b_x + b_w
+    b_bottom = b_y + b_h
+    idents = gns.wx_station_idents()
+    on = getattr(gns.cursor, "cursor_on", False)
+    y = b_y
+    if not idents:
+        c.text("CHARTS", b_x, y, color=DIM)
+        y += 18
+        c.text("no flight-plan airports", b_x, y, color=DIM)
+        return
+
+    ai = max(0, min(len(idents) - 1, getattr(gns, "chart_airport_sel", 0)))
+    x = b_x
+    for i, ident in enumerate(idents):
+        picked = on and i == ai
+        col = AMBER if picked else (GPS_GREEN if i == ai else DIM)
+        label = f">{ident}<" if picked else f" {ident} "
+        c.text(label, x, y, color=col)
+        x += len(label) * 7 + 2   # approximate monospace width, same caveat as hsi_commands' ident label
+    y += 18
+
+    ident = idents[ai]
+    charts = _dtpp_charts_for(gns, ident, charts_root)
+    if not charts:
+        c.text(f"no charts cached for {ident}", b_x, y, color=DIM)
+        y += 14
+        c.text("fetch the chart index first", b_x, y, color=DIM)
+        return
+
+    ci = max(0, min(len(charts) - 1, getattr(gns, "chart_sel", 0)))
+    room = max(1, int((b_bottom - y) // 14))
+    start = max(0, min(ci - room // 2, max(0, len(charts) - room)))
+    for row, chart in enumerate(charts[start:start + room], start=start):
+        picked = on and row == ci
+        col = AMBER if picked else TEXT
+        mk = ">" if picked else " "
+        flag = f" [{chart.useraction}]" if chart.useraction and chart.useraction.upper() != "N" else ""
+        c.text(f"{mk}{chart.chart_code:<4} {chart.chart_name}{flag}", b_x, y, color=col)
+        y += 14
+    if on:
+        c.text("ENT=open", b_right - 4, b_bottom - 14, color=DIM, align=2)
+
+
 def _aux_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
-               gns, nav, own, t: float, baro_inhg: float, sub: str) -> None:
+               gns, nav, own, t: float, baro_inhg: float, sub: str,
+               charts_root: str | None = None) -> None:
     if sub == "Nav Data":
         _aux_navdata_body(c, b_x, b_y, gns)
     elif sub == "Trip Planning":
@@ -894,6 +967,8 @@ def _aux_body(c: _Cmds, b_x: float, b_y: float, b_w: float, b_h: float,
         _aux_utility_body(c, b_x, b_y, own, t)
     elif sub == "Setup":
         _aux_setup_body(c, b_x, b_y, gns, baro_inhg)
+    elif sub == "Charts":
+        _aux_charts_body(c, b_x, b_y, b_w, b_h, gns, charts_root)
     else:
         c.text(f"{sub} not available on Android yet", b_x, b_y, color=DIM)
 
@@ -1131,7 +1206,8 @@ def _gns_dialog(c: _Cmds, scr_x: float, scr_y: float, scr_w: float, scr_h: float
 # _cdi_strip / _bezel_labels ----------
 def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
                    magvar: float, *, t: float = 0.0, baro_inhg: float = 29.92,
-                   messages: list[str] | None = None, show_messages: bool = False) -> str:
+                   messages: list[str] | None = None, show_messages: bool = False,
+                   charts_root: str | None = None) -> str:
     """`gns` is `World.gns` (a `Gns530`/`Gns430` Variant); `nav`/`own`/
     `panel` are exactly `World.tick()`'s returned `Frame.nav`/`.own`/
     `.panel` - no new data plumbing needed, same objects render.py's
@@ -1140,23 +1216,28 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
     them. `messages`/`show_messages` are `World.gns.peek_messages()`/
     `World.show_msg` - only the Message dialog needs them (the MSG key
     toggle is desktop-identical: `route_event` already flips `show_msg` on
-    the same `World` this session wraps).
+    the same `World` this session wraps). `charts_root` is the same root
+    `androidbridge.charts.fetch_chart_path` was given (Android's
+    `BrainBridge.chartsRoot`) - only the AUX Charts page needs it, to read
+    the same on-disk chart index/cache that fetch wrote; `None` falls back
+    to `datasrc.dtpp.default_data_root()`, matching desktop's own
+    behavior.
 
     **Ported pages**: default NAV, Flight Plan, VNAV, NAV/COM, Flight Plan
     Catalog, the WPT search pages (Airport/Airport Runway/Airport Freq/
     Intersection/NDB/VOR), every NRST page (APT/INT/NDB/VOR/User/ARTCC/
-    FSS/Airspace), AUX's Nav Data/Trip Planning/Utility/Setup tabs, and
-    every modal dialog (PROC, Activate Leg?, Remove/Restart confirm, DTO
-    menu, Direct-To, Message page, FPL menu, Airspace info).
+    FSS/Airspace), AUX's Nav Data/Trip Planning/Utility/Setup/Charts tabs,
+    and every modal dialog (PROC, Activate Leg?, Remove/Restart confirm,
+    DTO menu, Direct-To, Message page, FPL menu, Airspace info).
     **Not ported**: Map (a moving-map canvas, not a text page - its own,
-    later slice) and AUX Weather/Charts (need a live `datasrc.wx` cache
-    read / PDF rendering - out of scope, same carve-out as the six-pack
-    decision) - see docs/ANDROID_PORT_PLAN.md §3.6 / §7. `route_event`
-    already dispatches real FMS bezel-key input into `GpsNav.handle_event`
-    correctly (proven by the Phase 1 core-loop milestone), so turning the
-    FMS knob does move `gns.cursor.page_name`/`group_name` server-side - a
-    page without a body here just falls back to the default NAV page's
-    content rather than showing nothing.
+    later slice) and AUX Weather (needs a live `datasrc.wx` cache read -
+    out of scope, same carve-out as the six-pack decision) - see
+    docs/ANDROID_PORT_PLAN.md §3.6 / §7. `route_event` already dispatches
+    real FMS bezel-key input into `GpsNav.handle_event` correctly (proven
+    by the Phase 1 core-loop milestone), so turning the FMS knob does move
+    `gns.cursor.page_name`/`group_name` server-side - a page without a
+    body here just falls back to the default NAV page's content rather
+    than showing nothing.
     """
     key_area = 78.0   # reserved below the screen box for the two bezel key rows + hint text
     screen_h = h - key_area
@@ -1188,7 +1269,7 @@ def gns_commands(x: float, y: float, w: float, h: float, gns, nav, own, panel,
     elif group == "NRST":
         _nrst_body(c, b_x, b_y, b_w, b_h, gns, own, magvar, page)
     elif group == "AUX":
-        _aux_body(c, b_x, b_y, b_w, b_h, gns, nav, own, t, baro_inhg, page)
+        _aux_body(c, b_x, b_y, b_w, b_h, gns, nav, own, t, baro_inhg, page, charts_root)
     else:
         _nav_default_body(c, b_x, b_y, b_w, b_h, gns, nav, own, magvar)
 

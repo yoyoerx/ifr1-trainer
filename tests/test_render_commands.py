@@ -484,3 +484,21 @@ def test_map_commands_shows_dto_course():
     gns.direct_to("BRAVO")
     s = map_commands(0.0, 0.0, 480.0, 400.0, gns, _own(), _db(), map_range_nm=80.0)
     assert "P|" in s or "L|" in s   # the magenta DTO course line, plus ownship's polygon
+
+
+def _to_aux_charts_page(gns) -> None:
+    gns.cursor.group = list(PAGE_GROUPS).index("AUX")
+    gns.cursor.page = PAGE_GROUPS["AUX"].index("Charts")
+
+
+def test_gns_commands_aux_charts_page_no_flight_plan_shows_message():
+    """No flight-plan airports means _aux_charts_body returns before ever
+    touching datasrc.dtpp's on-disk index/cache - the one AUX Charts case
+    this pure-stdlib test can exercise without a real chart index fetched
+    (androidbridge/charts.py, §3.4/§3.5) on disk somewhere."""
+    gns = Gns530(_db())
+    _to_aux_charts_page(gns)
+    nav = NavState(valid=False, mode="NOWPT")
+    s = gns_commands(0, 0, 480, 280, gns, nav, _own(), _empty_panel(), 0.0)
+    assert "CHARTS" in s
+    assert "no flight-plan airports" in s

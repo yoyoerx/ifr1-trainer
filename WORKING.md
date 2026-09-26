@@ -383,19 +383,61 @@ landscape then portrait. First target device: Pixel 9.
       Pixel 9: index fetch, chart list for a real airport, and tapping a
       chart opens it in the device's PDF viewer via the system chooser.
       Full writeup: `ANDROID_PORT_PLAN.md` §3.4.
+- [x] **AUX>Charts wired into the real GNS page + a pilot-facing flight
+      setup screen, confirmed on real hardware (2026-09-25)**: two related
+      pieces landed together.
+      **AUX>Charts rendering**: new `render_commands._aux_charts_body`
+      ports `render.py`'s `_draw_aux_charts` (flight-plan airport row,
+      chart list, "ENT=open" hint) - `gns_commands` gained a `charts_root`
+      parameter (threaded from `BrainBridge.chartsRoot` via a new
+      `TrainerSession.charts_root` field / `demo_session.set_charts_root`,
+      set once right after session creation) so the page reads the same
+      on-disk chart index/cache `androidbridge.charts` (§3.4/§3.5) writes.
+      The GNS bezel's ENT key gets a real special case in
+      `Phase1LoopScreen.kt` mirroring desktop's `main.route_event`
+      (`"ENT" in pressed and cursor.page_name == "Charts"` ->
+      `_open_selected_chart`): a new `demo_session.chart_selection`/
+      `BrainBridge.chartSelection` cheaply (no I/O) reports the
+      currently-highlighted chart, and if non-empty, ENT fetches + opens
+      it (`BrainBridge.fetchChartPath`/`openPdf`) instead of dispatching a
+      normal FMS-mode ENT - desktop's own `_open_selected_chart` can't be
+      reused as-is since its last step is desktop-only I/O.
+      **Flight setup screen** (`nav/FlightSetupScreen.kt`): type a flight
+      plan / wind / winds-aloft profile before entering the Phase 1 loop -
+      the Android equivalent of desktop's `--plan`/`--wind`/`--winds-aloft`
+      launch flags, which Android has no command line for. New
+      `androidbridge/demo_session.py:configure_flight` applies these to an
+      already-built session (`TrainerSession.load_flight_plan` +
+      `SimModel.set_wind`/`set_winds_aloft`) rather than threading them
+      through `Config`/`World`'s own startup path, so a bad ident is
+      reported back on-screen instead of only ever printed to a desktop
+      stdout nobody's watching on a phone.
+      **A real bug found via on-device testing**: typing a flight plan
+      always started the flight at KBOS regardless of what was entered.
+      Root cause: `TrainerSession` never threads a plan into `Config`, so
+      `World.__init__`'s own `_initial_position(db, gns)` call - which
+      reads whatever's *already* in `gns.fpl.waypoints` at that exact
+      point in construction - always saw an empty plan and fell back to
+      its "no plan" default (hardcoded `KBOS`), and nothing repositioned
+      ownship afterward when `configure_flight` loaded the *real* plan
+      post-construction. Fixed by re-running that same `_initial_position`
+      logic right after the plan actually loads, mirroring exactly what
+      `World.__init__` would have done had the plan been present from the
+      start; verified against real cached nav data before redeploying.
+      Confirmed end-to-end on the real Pixel 9: a typed plan (e.g. "EMI
+      KGAI") correctly starts the flight there, and the GNS's own
+      AUX>Charts page + ENT key fetch and open a real chart PDF via the
+      system viewer.
 - [ ] **Do next**: touch control ergonomics need real design/UX work
       (acknowledged as "good enough for now, fix later," 2026-09-25 - knob
       feel, hit-target sizing, visual affordance are all first-draft).
       §3.5 follow-ups: an explicit opt-in for the "airspace" kind (not
       fetched by default), a first-run wizard that runs automatically
-      rather than a manual test-screen button, deciding whether to
-      auto-refresh near AIRAC expiry, and loading/dispatching a real
-      flight plan on the real-nav-data session (currently starts with
-      none) so the pages/dialogs that need real airports/procedures (PROC,
-      WPT/NRST with matches, NAV/COM, VNAV armed) can be confirmed
-      on-device. §3.4/§3.5 follow-up: wire the Charts flow into the GNS's
-      own AUX>Charts page once that page is rendered, instead of the
-      standalone verification screen.
+      rather than a manual test-screen button, and deciding whether to
+      auto-refresh near AIRAC expiry. Flight setup follow-ups: wind/winds-
+      aloft aren't yet shown anywhere read-back on the AUX Setup/Trip
+      Planning pages for pilot confirmation, and there's no way to re-plan
+      mid-flight from touch (Flight Setup only applies at "Start flight").
 
 ---
 

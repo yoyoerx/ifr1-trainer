@@ -17,6 +17,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,6 +36,17 @@ import com.octavi.ifrtrainer.input.UsbHidInput
 import com.octavi.ifrtrainer.render.DrawCommand
 import com.octavi.ifrtrainer.render.InstrumentCanvas
 import com.octavi.ifrtrainer.render.parseDrawCommands
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+// androidbridge.charts's error strings - anything else BrainBridge
+// .fetchChartPath returns is a real local path, ready for BrainBridge
+// .openPdf. Mirrors nav/ChartsScreen.kt's own copy of this same check.
+private val CHART_FETCH_ERRORS = setOf("no index", "no charts", "bad index")
+
+private fun isChartFetchError(result: String): Boolean =
+    result in CHART_FETCH_ERRORS || result.startsWith("unavailable:") || result.startsWith("error:")
 
 private const val HSI_SIZE_DP = 260f
 // 400dp was too narrow: render_commands.ap_panel_commands's 6-button mode
@@ -74,11 +86,21 @@ private const val MAP_H_DP = 360f
  * [BrainBridge.dispatchEvent] call real IFR-1 events use - a second,
  * independent event source for development/testing without the hardware
  * attached, not a separate code path through the brain.
+ *
+ * The GNS bezel's ENT key gets one more special case, mirroring desktop's
+ * `main.route_event` (`"ENT" in pressed and fms_gns.cursor.page_name ==
+ * "Charts"` -> `_open_selected_chart`): when [BrainBridge.chartSelection]
+ * says the cursor's on the AUX Charts page with a chart highlighted, ENT
+ * fetches + opens that chart ([BrainBridge.fetchChartPath]/[BrainBridge
+ * .openPdf]) instead of dispatching a normal FMS-mode ENT - desktop's own
+ * `_open_selected_chart` can't be reused as-is here since its last step,
+ * `datasrc.dtpp.open_with_os_default`, is desktop-only I/O.
  */
 @Composable
 fun Phase1LoopScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
     var line by remember { mutableStateOf("starting...") }
     var hsiCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var apCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
@@ -86,6 +108,7 @@ fun Phase1LoopScreen() {
     var mapCommands by remember { mutableStateOf<List<DrawCommand>>(emptyList()) }
     var usbStatus by remember { mutableStateOf(UsbHidInput.Status.STOPPED) }
     var radioMode by remember { mutableStateOf(Ifr1Mode.COM1) }
+    var chartStatus by remember { mutableStateOf<String?>(null) }
     val loop = remember { TrainerLoop(context) }
     val usbInput = remember { UsbHidInput(context) }
 
@@ -98,6 +121,25 @@ fun Phase1LoopScreen() {
         longPress: List<String>,
     ) {
         BrainBridge.dispatchEvent(mode.name, pressed, emptyList(), outer, inner, modeChanged, longPress)
+    }
+
+    fun onGnsButton(name: String) {
+        val selection = if (name == "ENT") BrainBridge.chartSelection(context) else null
+        if (selection == null) {
+            dispatch(Ifr1Mode.FMS1, listOf(name), 0, 0, true, emptyList())
+            return
+        }
+        val (ident, index) = selection
+        chartStatus = "fetching chart for $ident..."
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { BrainBridge.fetchChartPath(context, ident, index) }
+            if (isChartFetchError(result)) {
+                chartStatus = "chart open failed: $result"
+            } else {
+                chartStatus = null
+                BrainBridge.openPdf(context, result)
+            }
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -200,7 +242,7 @@ fun Phase1LoopScreen() {
                     GnsBezelOverlay(
                         widthDp = GNS_W_DP,
                         heightDp = GNS_H_DP,
-                        onButton = { name -> dispatch(Ifr1Mode.FMS1, listOf(name), 0, 0, true, emptyList()) },
+                        onButton = { name -> onGnsButton(name) },
                         onRangeIn = { BrainBridge.adjustMapRange(1f / 1.5f) },
                         onRangeOut = { BrainBridge.adjustMapRange(1.5f) },
                     )
@@ -211,6 +253,9 @@ fun Phase1LoopScreen() {
                         dispatch(Ifr1Mode.FMS1, pressed, outer, inner, true, emptyList())
                     },
                 )
+                chartStatus?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                }
             }
             Box(modifier = Modifier.width(MAP_W_DP.dp).height(MAP_H_DP.dp).padding(top = 8.dp)) {
                 InstrumentCanvas(

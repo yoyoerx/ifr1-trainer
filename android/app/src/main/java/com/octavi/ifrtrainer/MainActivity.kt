@@ -21,13 +21,14 @@ import androidx.compose.ui.unit.dp
 import com.octavi.ifrtrainer.bridge.BrainBridge
 import com.octavi.ifrtrainer.input.UsbHidTestScreen
 import com.octavi.ifrtrainer.nav.ChartsScreen
+import com.octavi.ifrtrainer.nav.FlightSetupScreen
 import com.octavi.ifrtrainer.nav.NavDataScreen
 import com.octavi.ifrtrainer.world.Phase1LoopScreen
 
-private enum class Screen { SELF_TEST, USB_TEST, PHASE1_LOOP, NAV_DATA, CHARTS }
+private enum class Screen { SELF_TEST, USB_TEST, PHASE1_LOOP, NAV_DATA, CHARTS, FLIGHT_SETUP }
 
 /**
- * Entry point. Hosts five verification screens, not the real trainer UI
+ * Entry point. Hosts six verification screens, not the real trainer UI
  * yet (that's §3.6's draw-command-list rendering, mostly done - see
  * `android/README.md`):
  *  1. [Phase0SelfTestScreen] — Chaquopy starts and the brain modules
@@ -42,6 +43,9 @@ private enum class Screen { SELF_TEST, USB_TEST, PHASE1_LOOP, NAV_DATA, CHARTS }
  *     switch from the synthetic demo database to a real one.
  *  5. [ChartsScreen] — the §3.4/§3.5 approach-plate PDF fetch + "click to
  *     load" hand-off to the system PDF viewer.
+ *  6. [FlightSetupScreen] — pilot-typed flight plan/wind/winds-aloft
+ *     before entering the Phase 1 loop, the Android equivalent of
+ *     desktop's `--plan`/`--wind`/`--winds-aloft` launch flags.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -56,6 +60,7 @@ class MainActivity : ComponentActivity() {
                             onOpenPhase1Loop = { screen = Screen.PHASE1_LOOP },
                             onOpenNavData = { screen = Screen.NAV_DATA },
                             onOpenCharts = { screen = Screen.CHARTS },
+                            onOpenFlightSetup = { screen = Screen.FLIGHT_SETUP },
                         )
                         Screen.USB_TEST -> Column(modifier = Modifier.fillMaxSize()) {
                             Button(onClick = { screen = Screen.SELF_TEST }, modifier = Modifier.padding(8.dp)) {
@@ -81,6 +86,12 @@ class MainActivity : ComponentActivity() {
                             }
                             ChartsScreen()
                         }
+                        Screen.FLIGHT_SETUP -> Column(modifier = Modifier.fillMaxSize()) {
+                            Button(onClick = { screen = Screen.SELF_TEST }, modifier = Modifier.padding(8.dp)) {
+                                Text("Back to self-test")
+                            }
+                            FlightSetupScreen(onStart = { screen = Screen.PHASE1_LOOP })
+                        }
                     }
                 }
             }
@@ -94,6 +105,7 @@ private fun Phase0SelfTestScreen(
     onOpenPhase1Loop: () -> Unit,
     onOpenNavData: () -> Unit,
     onOpenCharts: () -> Unit,
+    onOpenFlightSetup: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var result by remember { mutableStateOf("running self-test...") }
@@ -123,6 +135,9 @@ private fun Phase0SelfTestScreen(
         }
         Button(onClick = onOpenCharts, modifier = Modifier.padding(top = 8.dp)) {
             Text("Approach plates (§3.4/§3.5)")
+        }
+        Button(onClick = onOpenFlightSetup, modifier = Modifier.padding(top = 8.dp)) {
+            Text("Flight setup (plan / wind / winds aloft)")
         }
     }
 }

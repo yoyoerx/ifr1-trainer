@@ -113,6 +113,95 @@ def adjust_ias_target(session: TrainerSession, detents: int) -> None:
     session.adjust_ias_target(detents)
 
 
+def configure_flight(session: TrainerSession, plan: str, wind: str, winds_aloft: str) -> str:
+    """A new pre-flight setup screen (`nav/FlightSetupScreen.kt`) - the
+    same three knobs desktop's `--plan`/`--wind`/`--winds-aloft` CLI flags
+    cover (`main.py`'s own module docstring), applied to an already-built
+    session rather than threaded through `Config`/`World`'s own startup
+    path: `TrainerSession.load_flight_plan` already returns which idents
+    failed to resolve, which `World.__init__`'s own `cfg.plan` loading only
+    ever prints to stdout on desktop - not useful for an on-screen result
+    here. `SimModel.set_wind`/`set_winds_aloft` (`sim_model.py`) are the
+    same "change it after construction" methods `main.py`'s own keyboard
+    bindings use, not new API. Each argument is a no-op if blank (after
+    stripping); `winds_aloft`, if given, is applied after `wind` since
+    `set_wind` clears any previously-set winds-aloft profile - same
+    "the richer profile overrides the simple one when both are set"
+    precedence `config.py`'s own `winds_aloft` key documents. Returns a
+    one-line human-readable summary of what was applied/what failed -
+    never raises.
+
+    A real bug found via on-device testing (2026-09-25): loading a plan
+    here didn't move ownship - ``TrainerSession``'s construction never
+    threads a plan into ``Config`` (`cfg.plan` stays empty), so
+    `World.__init__`'s own `_initial_position(db, gns)` call - which reads
+    whatever's *already* in `gns.fpl.waypoints` at that point - always saw
+    an empty plan and fell back to its "no plan" default (`KBOS`,
+    regardless of what's typed here afterward). Fixed by re-running that
+    same positioning logic after the plan actually loads, exactly mirroring
+    what `World.__init__` itself would have done had the plan been present
+    from the start."""
+    from main import _initial_position, _parse_wind
+    import windsaloft
+
+    parts: list[str] = []
+    plan = plan.strip()
+    if plan:
+        missing = session.load_flight_plan(plan.split())
+        if session.world.gns.fpl.waypoints:
+            start, hdg = _initial_position(session.world.db, session.world.gns)
+            session.world.sim.pos = start
+            session.world.sim.heading = hdg
+        parts.append("plan: not resolved: " + ", ".join(missing) if missing else "plan ok")
+    wind = wind.strip()
+    if wind:
+        wind_from, wind_kt = _parse_wind(wind)
+        session.world.sim.set_wind(wind_from, wind_kt)
+        parts.append(f"wind {wind_from:03.0f}/{wind_kt:.0f}kt")
+    winds_aloft = winds_aloft.strip()
+    if winds_aloft:
+        try:
+            profile = windsaloft.parse_cli(winds_aloft)
+            session.world.sim.set_winds_aloft(profile)
+            parts.append("winds aloft set")
+        except ValueError as exc:
+            parts.append(f"winds aloft: {exc}")
+    return "; ".join(parts) if parts else "no changes (all fields blank)"
+
+
+def set_charts_root(session: TrainerSession, root: str) -> None:
+    """Call once (e.g. right after `new_session`/`new_real_session`) with
+    `BrainBridge.chartsRoot` - the AUX Charts page (`render_gns`) can't
+    read the chart index/cache `androidbridge.charts` writes without
+    knowing where it is, and there's no other route for that one string to
+    reach `render_commands.gns_commands` short of passing it on every
+    single `render_gns` call from Kotlin."""
+    session.charts_root = root
+
+
+def chart_selection(session: TrainerSession) -> str:
+    """"" if the GNS isn't currently on the AUX Charts page with the
+    cursor on (nothing to open), else `f"{ident}\\x1f{chart_index}"` - the
+    airport ident and 0-based chart index the ENT key would open right
+    now, in the same terms `androidbridge.charts.fetch_chart_path` takes.
+    `BrainBridge`'s touch layer calls this before dispatching an ENT press
+    on the GNS bezel: a non-empty result means "open this chart" (call
+    `fetchChartPath`/`openPdf` instead of `dispatchEvent`), matching
+    desktop's own `main.route_event` special-case (`"ENT" in pressed and
+    fms_gns.cursor.page_name == "Charts"` -> `_open_selected_chart`, which
+    Android can't reuse as-is since its final step,
+    `datasrc.dtpp.open_with_os_default`, is desktop-only I/O)."""
+    gns = session.world.gns
+    cursor = gns.cursor
+    if getattr(cursor, "page_name", "") != "Charts" or not getattr(cursor, "cursor_on", False):
+        return ""
+    idents = gns.wx_station_idents()
+    if not idents:
+        return ""
+    ai = max(0, min(len(idents) - 1, getattr(gns, "chart_airport_sel", 0)))
+    return f"{idents[ai]}\x1f{getattr(gns, 'chart_sel', 0)}"
+
+
 def render_map(session: TrainerSession, x: float, y: float, w: float, h: float) -> str:
     """Call after tick_line() each frame - see TrainerSession.render_map's
     docstring. The demo flight plan (ALFA->BRAVO->CHAR) and the synthetic

@@ -62,7 +62,18 @@ object BrainBridge {
         if (sessionObj == null) {
             val module = Python.getInstance().getModule("androidbridge.demo_session")
             sessionObj = module.callAttr("new_session")
+            applyChartsRoot(context, module)
         }
+    }
+
+    /** Sets the just-created [sessionObj]'s `charts_root` (see
+     * [androidbridge.demo_session.set_charts_root]'s docstring) so
+     * `render_gns`'s AUX Charts page can find the chart index/cache
+     * [fetchChartPath] writes - called once right after every session
+     * creation ([startWorld]/[startRealWorld]), not per-frame. */
+    private fun applyChartsRoot(context: Context, demoSessionModule: PyObject) {
+        val session = sessionObj ?: return
+        demoSessionModule.callAttr("set_charts_root", session, chartsRoot(context))
     }
 
     /**
@@ -117,10 +128,31 @@ object BrainBridge {
         val module = Python.getInstance().getModule("androidbridge.demo_session")
         return try {
             sessionObj = module.callAttr("new_real_session", navDataRoot(context))
+            applyChartsRoot(context, module)
             "ok"
         } catch (t: Throwable) {
             "error: ${t.message}"
         }
+    }
+
+    /**
+     * The pre-flight setup screen's ([com.octavi.ifrtrainer.nav
+     * .FlightSetupScreen]) "Start flight" action: applies a pilot-typed
+     * flight plan / wind / winds-aloft to the current session, the same
+     * three knobs desktop's `--plan`/`--wind`/`--winds-aloft` CLI flags
+     * cover - see [androidbridge.demo_session.configure_flight]'s
+     * docstring. Call [startWorld]/[startRealWorld] first so there's a
+     * session to configure. **Blocking** (flight-plan resolution walks the
+     * nav database) - call from a background thread/coroutine, never the
+     * main thread. Each argument is a no-op if blank. Returns a one-line
+     * summary of what was applied/what failed, or "no session" if
+     * [startWorld]/[startRealWorld] hasn't been called yet.
+     */
+    fun configureFlight(context: Context, plan: String, wind: String, windsAloft: String): String {
+        val session = sessionObj ?: return "no session"
+        ensureStarted(context)
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        return module.callAttr("configure_flight", session, plan, wind, windsAloft).toString()
     }
 
     /**
@@ -323,6 +355,27 @@ object BrainBridge {
         ensureStarted(context)
         val module = Python.getInstance().getModule("androidbridge.charts")
         return module.callAttr("fetch_chart_path", chartsRoot(context), ident, index).toString()
+    }
+
+    /**
+     * Whether the GNS's bezel ENT key, right now, would open a chart
+     * instead of doing its normal FMS-mode thing - see
+     * [androidbridge.demo_session.chart_selection]'s docstring. `null` if
+     * not (dispatch ENT normally); otherwise the airport ident and 0-based
+     * chart index to pass to [fetchChartPath]. Cheap/synchronous (just
+     * reads `GpsNav` cursor state, no I/O) - safe to call on the main
+     * thread before every GNS ENT tap.
+     */
+    fun chartSelection(context: Context): Pair<String, Int>? {
+        val session = sessionObj ?: return null
+        ensureStarted(context)
+        val module = Python.getInstance().getModule("androidbridge.demo_session")
+        val raw = module.callAttr("chart_selection", session).toString()
+        if (raw.isEmpty()) return null
+        val i = raw.indexOf('\u001F')
+        if (i < 0) return null
+        val index = raw.substring(i + 1).toIntOrNull() ?: return null
+        return raw.substring(0, i) to index
     }
 
     /**

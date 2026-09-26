@@ -70,6 +70,9 @@ class TrainerSession:
         self._last_messages: list[str] = []   # set by tick(); render_gns()'s Message dialog reads it
         self.map_range_nm = 20.0   # render_map()'s pilot-set range - desktop's ui["map_range"];
                                     # no range-control input on Android yet (§3.2), fixed default for now
+        self.charts_root: str | None = None   # render_gns()'s AUX Charts page reads this -
+                                               # BrainBridge.chartsRoot, same root androidbridge.charts
+                                               # writes into; unset until Kotlin calls set_charts_root
 
     # -- flight plan / commands (thin pass-throughs) --------------------
     def load_flight_plan(self, idents: list[str]) -> list[str]:
@@ -261,4 +264,5 @@ class TrainerSession:
             x, y, w, h, self.world.gns, frame.nav, frame.own, frame.panel, self.world.magvar,
             t=self.world.t, baro_inhg=self.world.baro_inhg,
             messages=self._last_messages, show_messages=self.world.show_msg,
+            charts_root=self.charts_root,
         )

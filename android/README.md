@@ -322,13 +322,37 @@ Two real on-device bugs found and fixed getting this far:
   equivalent of desktop's `main._open_selected_chart` (every non-`stack`
   layout's AUX>Charts ENT key), not the `stack` layout's separate inline
   `pypdfium2` rasterization (still desktop-only, its native-wheel-on-Android
-  question is still open). Not yet wired into the GNS's own AUX>Charts
-  page - that page isn't rendered on Android at all (§3.6 deferred it,
-  same "needs live data this module doesn't have" reasoning as AUX
-  Weather) - this is a standalone verification screen. Confirmed
-  end-to-end on the real Pixel 9: index fetch, chart list for a real
-  airport, tap opens the PDF in the device's own viewer via the system
-  chooser.
+  question is still open). `nav/ChartsScreen.kt` proved the pipeline first
+  as a standalone verification screen; **now wired into the real GNS
+  AUX>Charts page too, confirmed on real hardware (2026-09-25)**:
+  `render_commands._aux_charts_body` ports `_draw_aux_charts` (`gns
+  _commands` gained a `charts_root` param, set once via `TrainerSession
+  .charts_root`/`demo_session.set_charts_root`), and the GNS bezel's ENT
+  key gets a real special case in `Phase1LoopScreen.kt` mirroring
+  desktop's `main.route_event` (`chart_selection`/`BrainBridge
+  .chartSelection` cheaply reports whether the cursor's on a highlighted
+  chart; if so, ENT fetches+opens it instead of dispatching normally).
+  Confirmed end-to-end: the real AUX>Charts page shows a real flight-plan
+  airport's chart list, and ENT on a highlighted chart opens it via the
+  system PDF viewer - not just the standalone screen.
+- `nav/FlightSetupScreen.kt` — a pre-flight setup screen, confirmed on
+  real hardware (2026-09-25): type a flight plan / wind / winds-aloft
+  profile before entering the Phase 1 loop, the Android equivalent of
+  desktop's `--plan`/`--wind`/`--winds-aloft` launch flags (no command
+  line on Android to pass them). New `androidbridge/demo_session
+  .configure_flight` applies these to an already-built session
+  (`TrainerSession.load_flight_plan` + `SimModel.set_wind`/
+  `set_winds_aloft`) rather than threading them through `Config`/`World`'s
+  own startup path, so a bad ident is reported back on-screen. **A real
+  positioning bug found via on-device testing**: a typed plan always
+  started the flight at KBOS regardless of what was entered -
+  `TrainerSession` never threads a plan into `Config`, so `World
+  .__init__`'s own `_initial_position` call saw an empty plan at
+  construction time and fell back to its hardcoded `KBOS` default, and
+  nothing repositioned ownship afterward when the real plan loaded
+  post-construction. Fixed by re-running that same positioning logic right
+  after the plan loads - see `ANDROID_PORT_PLAN.md` §3.5 for the full
+  detail. Confirmed end-to-end on the real Pixel 9.
 - `AndroidManifest.xml` — landscape-locked (§6 Phase 1 builds landscape
   first); now declares `android.hardware.usb.host` (`required="true"`, IFR-1
   is required for v1) and a `USB_DEVICE_ATTACHED` intent-filter (+
@@ -461,14 +485,25 @@ Two real on-device bugs found and fixed getting this far:
     Confirmed end-to-end: chart index fetch, chart list for a real
     airport, tap opens the PDF in the device's own viewer via the system
     chooser.
-17. **Do next**: touch control ergonomics (knob feel, hit-target sizing,
-    visual press feedback) need a real design pass. §3.5 follow-ups:
-    loading a real flight plan on the real-nav-data session (currently
-    starts with none) so the pages/dialogs that need real airports/
-    procedures can be confirmed on-device (PROC, WPT/NRST with matches,
-    NAV/COM, VNAV armed), an automatic first-run wizard instead of a
-    manual test-screen button, and an explicit "airspace" opt-in control.
-    §3.4/§3.5 follow-up: wire the Charts flow into the GNS's own
-    AUX>Charts page once that page is rendered, instead of the standalone
-    verification screen. (The six-pack gauge cluster is not planned for
-    Android at all - decision, 2026-09-24, `ANDROID_PORT_PLAN.md` §7.)
+17. ~~AUX>Charts wired into the real GNS page + a flight setup screen~~
+    **Done (2026-09-25)**, confirmed on the real Pixel 9: the GNS's own
+    AUX>Charts page (`render_commands._aux_charts_body`) and its ENT key
+    (`Phase1LoopScreen.kt`'s `chart_selection` special case) now drive the
+    same fetch+open pipeline `ChartsScreen.kt` proved standalone, and a
+    new `nav/FlightSetupScreen.kt` lets a pilot type a flight plan/wind/
+    winds-aloft profile (the Android equivalent of desktop's `--plan`/
+    `--wind`/`--winds-aloft` launch flags) before entering the Phase 1
+    loop - `androidbridge/demo_session.configure_flight` applies them to
+    an already-built session. Found and fixed a real positioning bug via
+    on-device testing (a typed plan always started the flight at KBOS,
+    regardless of what was entered - see `ANDROID_PORT_PLAN.md` §3.5 for
+    the root cause and fix). See `nav/ChartsScreen.kt`/
+    `nav/FlightSetupScreen.kt`'s entries above for the full detail.
+18. **Do next**: touch control ergonomics (knob feel, hit-target sizing,
+    visual press feedback) need a real design pass. §3.5 follow-ups: an
+    automatic first-run wizard instead of a manual test-screen button, and
+    an explicit "airspace" opt-in control. Flight setup follow-ups: no
+    read-back of the applied wind/winds-aloft on an AUX page for pilot
+    confirmation, and no way to re-plan mid-flight from touch. (The
+    six-pack gauge cluster is not planned for Android at all - decision,
+    2026-09-24, `ANDROID_PORT_PLAN.md` §7.)

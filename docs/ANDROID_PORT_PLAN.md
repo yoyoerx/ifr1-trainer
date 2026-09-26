@@ -398,13 +398,37 @@ exercised — Phase 0's self-test doesn't touch it).
   `res/xml/file_paths.xml` - a raw `file://` URI is blocked crossing into
   another app since Android 7 / targetSdk 24+) fed into
   `Intent.ACTION_VIEW`. A new `nav/ChartsScreen.kt` (fetch the chart
-  index, list an airport's charts, tap one to fetch + open) proves the
-  pipeline, same "spike before the real UI" pattern as `NavDataScreen` -
-  not wired into the GNS's own AUX>Charts page yet, since that page isn't
-  rendered on Android at all (§3.6 deferred it, same "needs live data this
-  module doesn't have" reasoning as AUX Weather). Confirmed end-to-end on
-  the real Pixel 9: index fetch, chart list for a real airport, tap opens
-  the PDF in the device's own viewer via the system chooser.
+  index, list an airport's charts, tap one to fetch + open) proved the
+  pipeline first, same "spike before the real UI" pattern as
+  `NavDataScreen`. Confirmed end-to-end on the real Pixel 9: index fetch,
+  chart list for a real airport, tap opens the PDF in the device's own
+  viewer via the system chooser.
+
+  **Wired into the real GNS AUX>Charts page, confirmed on real hardware
+  (2026-09-25)**, closing the "not wired into the GNS's own page yet" gap
+  the paragraph above used to describe. New `render_commands
+  ._aux_charts_body` ports render.py's `_draw_aux_charts` (flight-plan
+  airport row browsed by outer knob, chart list browsed by inner knob,
+  "ENT=open" hint) - `gns_commands` gained a `charts_root` keyword
+  parameter, threaded from `TrainerSession.charts_root` (set once via
+  `demo_session.set_charts_root`, called right after every session
+  creation with `BrainBridge.chartsRoot`) so the page reads the exact same
+  on-disk chart index/cache `androidbridge.charts` writes - `None` falls
+  back to `datasrc.dtpp.default_data_root()`, matching desktop's own
+  behavior. The GNS bezel's ENT key gets a real special case in
+  `Phase1LoopScreen.kt`, mirroring desktop's `main.route_event` exactly
+  (`"ENT" in pressed and fms_gns.cursor.page_name == "Charts"` ->
+  `_open_selected_chart`): a new `demo_session.chart_selection`/
+  `BrainBridge.chartSelection` cheaply reports (no I/O, just reads
+  `GpsNav` cursor state) whether the cursor is currently on a highlighted
+  chart, and if so, ENT calls `fetchChartPath`/`openPdf` instead of
+  dispatching a normal FMS-mode ENT press - desktop's own
+  `_open_selected_chart` can't be reused as-is here since its final step,
+  `dtpp.open_with_os_default`, is desktop-only I/O. Confirmed end-to-end
+  on the real Pixel 9: the AUX>Charts page shows the real flight-plan
+  airport and chart list, and pressing ENT on a highlighted chart fetches
+  and opens it via the system PDF viewer, all through the GNS's own bezel
+  - not the standalone `ChartsScreen.kt` verification screen.
 - `hidapi` (desktop's `[device]` extra) is dropped entirely — replaced by
   the native Kotlin USB/input path from §3.1.
 - Everything else the brain imports is stdlib (`dataclasses`, `enum`, `math`,
@@ -519,13 +543,51 @@ now runs against real FAA data with no flight plan loaded, no crash.
 
 Confirmed end-to-end on the real Pixel 9: download (cifp+nasr+artcc),
 status line, switch to real data, and the core loop running cleanly.
-**Not yet done**: loading/dispatching a real flight plan on the
-real-nav-data session (it starts with none, same as a freshly-opened
-desktop session with no `--plan` flag) - needed before the pages/dialogs
-that require real airports/procedures (PROC, WPT/NRST with matches,
-NAV/COM, VNAV armed) can be confirmed on-device; an automatic first-run
-wizard rather than a manual test-screen button; an explicit "airspace"
-opt-in control; and a decision on auto-refresh behavior near AIRAC expiry.
+Still not yet done: an automatic first-run wizard rather than a manual
+test-screen button; an explicit "airspace" opt-in control; and a decision
+on auto-refresh behavior near AIRAC expiry.
+
+**Pilot-typed flight plan/wind/winds-aloft, confirmed on real hardware
+(2026-09-25)** - closing the "starts with no flight plan" gap the
+paragraph above used to flag. A new pre-flight setup screen,
+`nav/FlightSetupScreen.kt`, is the Android equivalent of desktop's
+`--plan`/`--wind`/`--winds-aloft` launch flags, which Android has no
+command line to pass: type a route (e.g. "KBOS PVD KJFK"), a wind
+("DIR/SPD"), and an optional winds-aloft profile ("ALT:DIR/SPD[/TEMPC]
+..."), then "Start flight" builds the session and applies them before
+entering the Phase 1 loop. New `androidbridge/demo_session
+.configure_flight(session, plan, wind, winds_aloft)`: `TrainerSession
+.load_flight_plan` (already returns which idents failed to resolve) plus
+`SimModel.set_wind`/`set_winds_aloft` (the same "change it after
+construction" methods `main.py`'s own keyboard bindings use, not new
+API) - applied to an already-built session rather than threaded through
+`Config`/`World`'s own startup path, specifically so a bad ident is
+reported back on-screen instead of only ever printed to a desktop stdout
+nobody's watching on a phone. New `BrainBridge.configureFlight`, wired to
+a "Start flight" button that calls `startWorld`/`startRealWorld`
+(depending on a real-vs-demo-data toggle - a plan only resolves
+meaningfully against real data) then `configureFlight`, showing the
+result before a second button continues into `Phase1LoopScreen`.
+
+**A real positioning bug found via on-device testing**: typing a flight
+plan always started the flight at KBOS, regardless of what was entered.
+Root cause: `TrainerSession`'s construction never threads a plan into
+`Config` (`cfg.plan` stays `[]`), so `World.__init__`'s own
+`_initial_position(db, gns)` call - which reads whatever's *already* in
+`gns.fpl.waypoints` at that exact point during construction - always saw
+an empty flight plan and fell back to its own "no plan given" default
+(`db.airport("KBOS")`, hardcoded), and nothing repositioned ownship
+afterward when `configure_flight` loaded the *real* plan post-
+construction - the position `SimModel` was built with just stuck. Fixed
+by having `configure_flight` re-run that exact same `_initial_position`
+logic immediately after the plan successfully loads, reproducing exactly
+what `World.__init__` would have computed had the plan been present from
+the start; verified against real cached nav data from desktop CPython
+(a plan to "EMI KGAI" correctly repositions away from KBOS) before
+redeploying. Confirmed clean on the real Pixel 9. **Not yet done**: any
+read-back of the applied wind/winds-aloft on an AUX page for pilot
+confirmation, and no way to re-plan mid-flight from touch (Flight Setup
+only applies once, at "Start flight").
 
 ### 3.6 Rendering bridge design (Chaquopy path)
 
