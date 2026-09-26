@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+FileProvider path spec for the §3.5/PDF-chart FileProvider (see
+AndroidManifest.xml and BrainBridge.openPdf) - grants read-only access to
+the chart cache under files/charts (androidbridge.charts.fetch_chart_path's
+root, resolved via BrainBridge.chartsRoot) to whatever app the system
+picks to view a PDF (Intent.ACTION_VIEW), via a content:// URI instead of
+handing out a raw file:// path (blocked since Android 7 / targetSdk 24+).
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="charts" path="charts/" />
+</paths>

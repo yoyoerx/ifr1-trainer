@@ -1,9 +1,12 @@
 package com.octavi.ifrtrainer.bridge
 
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.FileProvider
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import java.io.File
 
 /**
  * Thin Kotlin-side wrapper around the `androidbridge` Python package
@@ -261,5 +264,87 @@ object BrainBridge {
             modeChanged,
             longPress.joinToString(","),
         )
+    }
+
+    /**
+     * §3.4/§3.5: where [androidbridge.charts] reads and writes cached
+     * approach-plate PDFs + the chart index - a separate subdirectory from
+     * [navDataRoot] (different data, different lifecycle: plates are
+     * fetched lazily per-airport on demand, not as part of the up-front
+     * nav data sync) under the app's private storage. Must stay under
+     * `filesDir` and match `res/xml/file_paths.xml`'s `<files-path>` entry
+     * - [openPdf]'s `FileProvider.getUriForFile` call fails otherwise.
+     */
+    fun chartsRoot(context: Context): String =
+        context.applicationContext.filesDir.resolve("charts").absolutePath
+
+    /**
+     * §3.4/§3.5: fetches + caches the current AIRAC cycle's chart index
+     * (`d-TPP_Metafile.xml`, ~16MB, one-time per cycle) into [chartsRoot] -
+     * must succeed before [listCharts]/[fetchChartPath] can find anything.
+     * **Blocking, does real network I/O** - call from a background
+     * thread/coroutine, never the main thread. Returns "ok" or a message
+     * describing what went wrong.
+     */
+    fun updateChartIndex(context: Context): String {
+        ensureStarted(context)
+        val module = Python.getInstance().getModule("androidbridge.charts")
+        return module.callAttr("update_index", chartsRoot(context)).toString()
+    }
+
+    /**
+     * §3.4/§3.5: charts available for `ident` (FAA LID or ICAO), as a list
+     * of "chart_code / chart_name" pairs in the same order [fetchChartPath]
+     * indexes by - see [androidbridge.charts.list_charts]'s docstring for
+     * the "no index"/"no charts" cases. Requires [updateChartIndex] to have
+     * succeeded at least once.
+     */
+    fun listCharts(context: Context, ident: String): List<Pair<String, String>> {
+        ensureStarted(context)
+        val module = Python.getInstance().getModule("androidbridge.charts")
+        val raw = module.callAttr("list_charts", chartsRoot(context), ident).toString()
+        if (raw == "no index" || raw == "no charts" || raw.isEmpty()) return emptyList()
+        return raw.split("\n").mapNotNull { line ->
+            val i = line.indexOf('\u001F')
+            if (i < 0) null else line.substring(0, i) to line.substring(i + 1)
+        }
+    }
+
+    /**
+     * §3.4/§3.5: fetches (if not already cached) chart `index` (0-based,
+     * into [listCharts]'s own order) for `ident`, and returns its local
+     * path - see [openPdf] for what to do with it. **Blocking, does real
+     * network I/O** on a cache miss - call from a background
+     * thread/coroutine, never the main thread. Returns the path, or a
+     * "no index"/"no charts"/"bad index"/"unavailable: ..."/"error: ..."
+     * message on failure (never a path in that case).
+     */
+    fun fetchChartPath(context: Context, ident: String, index: Int): String {
+        ensureStarted(context)
+        val module = Python.getInstance().getModule("androidbridge.charts")
+        return module.callAttr("fetch_chart_path", chartsRoot(context), ident, index).toString()
+    }
+
+    /**
+     * Hands a cached chart PDF (a [fetchChartPath] result) to the system's
+     * PDF viewer - the Android-native equivalent of desktop's
+     * `datasrc.dtpp.open_with_os_default` (`os.startfile`/`subprocess
+     * .Popen(["open"/"xdg-open", ...])`, both meaningless here). Wraps the
+     * raw file path in a `content://` URI via the `FileProvider` declared
+     * in `AndroidManifest.xml` (a raw `file://` URI is blocked crossing
+     * into another app since Android 7 / targetSdk 24+), and grants that
+     * one URI read access to whatever app the `ACTION_VIEW` chooser picks.
+     * Call on the main thread (it's just launching an `Intent`, no I/O) -
+     * `path` should already be a confirmed-successful [fetchChartPath]
+     * result, not one of its error-message strings.
+     */
+    fun openPdf(context: Context, path: String) {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(path))
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/pdf")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
     }
 }

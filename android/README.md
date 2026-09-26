@@ -304,6 +304,31 @@ Two real on-device bugs found and fixed getting this far:
   see `docs/ANDROID_PORT_PLAN.md` §3.5 for the fix and full detail. Not
   yet done: loading a real flight plan on the real-nav-data session, an
   automatic first-run wizard, and an explicit "airspace" opt-in control.
+- `androidbridge/charts.py` (repo root) — §3.4/§3.5's approach-plate PDF
+  "click to load," confirmed on real hardware (2026-09-25):
+  `update_index(root)` / `list_charts(root, ident)` /
+  `fetch_chart_path(root, ident, index)`, thin wrappers around
+  `datasrc.dtpp` - same "turned out to already be stdlib-only" story as
+  `datasrc.faa` (`urllib`/`xml.etree`/`pickle`, no extra packaging), staged
+  automatically as part of the `datasrc` `brainPackages` entry §3.5 added.
+  `BrainBridge.openPdf` is the Android-native replacement for `dtpp
+  .open_with_os_default` (`os.startfile`/`subprocess.Popen`, meaningless
+  here): a `content://` URI via a new `FileProvider` (`AndroidManifest.xml`
+  + `res/xml/file_paths.xml` - required since a raw `file://` URI is
+  blocked crossing into another app since Android 7) fed into
+  `Intent.ACTION_VIEW`. New `nav/ChartsScreen.kt` (reachable from the
+  self-test screen): fetch the chart index (~16MB, once per AIRAC cycle),
+  list an airport's charts, tap one to fetch + open - the Android-native
+  equivalent of desktop's `main._open_selected_chart` (every non-`stack`
+  layout's AUX>Charts ENT key), not the `stack` layout's separate inline
+  `pypdfium2` rasterization (still desktop-only, its native-wheel-on-Android
+  question is still open). Not yet wired into the GNS's own AUX>Charts
+  page - that page isn't rendered on Android at all (§3.6 deferred it,
+  same "needs live data this module doesn't have" reasoning as AUX
+  Weather) - this is a standalone verification screen. Confirmed
+  end-to-end on the real Pixel 9: index fetch, chart list for a real
+  airport, tap opens the PDF in the device's own viewer via the system
+  chooser.
 - `AndroidManifest.xml` — landscape-locked (§6 Phase 1 builds landscape
   first); now declares `android.hardware.usb.host` (`required="true"`, IFR-1
   is required for v1) and a `USB_DEVICE_ATTACHED` intent-filter (+
@@ -426,12 +451,24 @@ Two real on-device bugs found and fixed getting this far:
     `NavState.xtk_nm` being `None`, found via on-device testing) - see
     `androidbridge/nav_update.py`'s entry above and
     `ANDROID_PORT_PLAN.md` §3.5 for the full detail.
-16. **Do next**: touch control ergonomics (knob feel, hit-target sizing,
+16. ~~§3.4/§3.5 approach-plate PDF "click to load"~~ **Done (2026-09-25)**,
+    confirmed on the real Pixel 9: the "hand plates off to an Android
+    Intent for the system PDF viewer" fallback §3.4 flagged (instead of
+    porting the `stack` layout's separate inline `pypdfium2`
+    rasterization, still an open question) is real now - the
+    Android-native equivalent of desktop's `main._open_selected_chart`.
+    See `androidbridge/charts.py`'s entry above for the full detail.
+    Confirmed end-to-end: chart index fetch, chart list for a real
+    airport, tap opens the PDF in the device's own viewer via the system
+    chooser.
+17. **Do next**: touch control ergonomics (knob feel, hit-target sizing,
     visual press feedback) need a real design pass. §3.5 follow-ups:
     loading a real flight plan on the real-nav-data session (currently
     starts with none) so the pages/dialogs that need real airports/
     procedures can be confirmed on-device (PROC, WPT/NRST with matches,
     NAV/COM, VNAV armed), an automatic first-run wizard instead of a
     manual test-screen button, and an explicit "airspace" opt-in control.
-    (The six-pack gauge cluster is not planned for Android at all -
-    decision, 2026-09-24, `ANDROID_PORT_PLAN.md` §7.)
+    §3.4/§3.5 follow-up: wire the Charts flow into the GNS's own
+    AUX>Charts page once that page is rendered, instead of the standalone
+    verification screen. (The six-pack gauge cluster is not planned for
+    Android at all - decision, 2026-09-24, `ANDROID_PORT_PLAN.md` §7.)

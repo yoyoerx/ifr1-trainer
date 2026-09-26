@@ -45,5 +45,20 @@ translation. `required="true"` because IFR-1 support is required for v1
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/usb_device_filter" />
         </activity>
+
+        <!-- §3.4/§3.5's "hand plates off to the system PDF viewer" fallback
+             (androidbridge/charts.py + BrainBridge.openPdf): grants a
+             content:// URI for a cached chart PDF to whichever app the
+             ACTION_VIEW chooser picks, without exposing this app's private
+             file:// paths directly (blocked since Android 7). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

@@ -357,17 +357,45 @@ landscape then portrait. First target device: Pixel 9.
       switch to real data, and the Phase 1 loop running cleanly against it
       with no flight plan loaded. Full writeup: `ANDROID_PORT_PLAN.md`
       §3.5.
+- [x] **§3.4/§3.5 approach-plate PDF "click to load," confirmed on real
+      hardware (2026-09-25)**: the "hand plates off to an Android Intent
+      for the system PDF viewer" fallback §3.4 had flagged as the
+      reasonable v1 (rather than porting the `stack` layout's separate
+      inline `pypdfium2` rasterization) is real now - the Android-native
+      equivalent of desktop's `main._open_selected_chart`. New
+      `androidbridge/charts.py` (`update_index`/`list_charts`/
+      `fetch_chart_path`), a thin wrapper around `datasrc.dtpp`, which
+      (like `datasrc.faa`) turned out to already be stdlib-only
+      (`urllib`/`xml.etree`/`pickle`) - no extra packaging risk, and
+      already staged now that `datasrc` is a `brainPackages` entry (§3.5).
+      The one genuinely desktop-only piece, `dtpp.open_with_os_default`
+      (`os.startfile`/`subprocess.Popen(["open"/"xdg-open"])`), is replaced
+      by `BrainBridge.openPdf`: a `content://` URI via a new `FileProvider`
+      declaration (`AndroidManifest.xml` + `res/xml/file_paths.xml`,
+      required since a raw `file://` URI is blocked crossing into another
+      app since Android 7) fed into `Intent.ACTION_VIEW`. New
+      `BrainBridge.chartsRoot`/`updateChartIndex`/`listCharts`/
+      `fetchChartPath`/`openPdf` and a new `nav/ChartsScreen.kt`
+      (fetch-index button, airport-ident field, a tappable chart list -
+      same "spike before the real UI" pattern as `NavDataScreen`, not
+      wired into the GNS's own AUX>Charts page yet since that page isn't
+      rendered on Android at all). Confirmed end-to-end on the real
+      Pixel 9: index fetch, chart list for a real airport, and tapping a
+      chart opens it in the device's PDF viewer via the system chooser.
+      Full writeup: `ANDROID_PORT_PLAN.md` §3.4.
 - [ ] **Do next**: touch control ergonomics need real design/UX work
       (acknowledged as "good enough for now, fix later," 2026-09-25 - knob
       feel, hit-target sizing, visual affordance are all first-draft).
       §3.5 follow-ups: an explicit opt-in for the "airspace" kind (not
-      fetched by default, see above), a first-run wizard that runs
-      automatically rather than a manual test-screen button, deciding
-      whether to auto-refresh near AIRAC expiry, and loading/dispatching a
-      real flight plan on the real-nav-data session (currently starts with
+      fetched by default), a first-run wizard that runs automatically
+      rather than a manual test-screen button, deciding whether to
+      auto-refresh near AIRAC expiry, and loading/dispatching a real
+      flight plan on the real-nav-data session (currently starts with
       none) so the pages/dialogs that need real airports/procedures (PROC,
       WPT/NRST with matches, NAV/COM, VNAV armed) can be confirmed
-      on-device.
+      on-device. §3.4/§3.5 follow-up: wire the Charts flow into the GNS's
+      own AUX>Charts page once that page is rendered, instead of the
+      standalone verification screen.
 
 ---
 

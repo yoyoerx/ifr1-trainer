@@ -383,12 +383,28 @@ exercised — Phase 0's self-test doesn't touch it).
   moves to Kotlin) — good, since it's the dependency least likely to have
   clean Android wheels.
 - `pypdfium2` (native C extension, used only for the `stack` layout's inline
-  PLATE-tab PDF rasterization) needs verification that Chaquopy can install
-  it for Android's ABI, or it gets deferred (v1 could hand approach plates
-  off to an Android `Intent` for the system PDF viewer instead, exactly what
-  the desktop did before the `stack` layout added inline rendering — a
-  reasonable v1 fallback, not a regression from where the desktop app
-  started).
+  PLATE-tab PDF rasterization) still needs verification that Chaquopy can
+  install it for Android's ABI - that question remains open. **The
+  fallback is done, though, confirmed on real hardware (2026-09-25)**:
+  approach plates hand off to an Android `Intent` for the system PDF
+  viewer, exactly what desktop did before the `stack` layout added inline
+  rendering. New `androidbridge/charts.py` wraps `datasrc.dtpp`, which
+  (like `datasrc.faa`, §3.5) turned out to already be stdlib-only
+  (`urllib`/`xml.etree`/`pickle`) and needed no extra packaging - now
+  staged automatically as part of the same `datasrc` `brainPackages` entry
+  §3.5 added. `BrainBridge.openPdf` replaces `dtpp.open_with_os_default`
+  (`os.startfile`/`subprocess.Popen`, meaningless on Android) with a
+  `content://` URI via a new `FileProvider` (`AndroidManifest.xml` +
+  `res/xml/file_paths.xml` - a raw `file://` URI is blocked crossing into
+  another app since Android 7 / targetSdk 24+) fed into
+  `Intent.ACTION_VIEW`. A new `nav/ChartsScreen.kt` (fetch the chart
+  index, list an airport's charts, tap one to fetch + open) proves the
+  pipeline, same "spike before the real UI" pattern as `NavDataScreen` -
+  not wired into the GNS's own AUX>Charts page yet, since that page isn't
+  rendered on Android at all (§3.6 deferred it, same "needs live data this
+  module doesn't have" reasoning as AUX Weather). Confirmed end-to-end on
+  the real Pixel 9: index fetch, chart list for a real airport, tap opens
+  the PDF in the device's own viewer via the system chooser.
 - `hidapi` (desktop's `[device]` extra) is dropped entirely — replaced by
   the native Kotlin USB/input path from §3.1.
 - Everything else the brain imports is stdlib (`dataclasses`, `enum`, `math`,
